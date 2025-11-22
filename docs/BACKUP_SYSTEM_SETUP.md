@@ -100,8 +100,8 @@ Add the following secrets:
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
 | `AWS_S3_REGION` | AWS S3 region | `us-east-1` |
 | `AWS_S3_BUCKET` | S3 bucket name | `my-backup-bucket` |
-| `SUPABASE_BUCKETS_TO_BACKUP` | Comma-separated bucket names | `uploads,documents,images` |
-| `GITHUB_TOKEN` | Personal Access Token (repo + workflow permissions) | `ghp_xxxxx` |
+| `SUPABASE_BUCKETS_TO_BACKUP` | Comma-separated bucket names | `profile-pictures,contracts,inventory,employees,branding,payroll,assets,custody` |
+| `BACKUP_GITHUB_TOKEN` | Personal Access Token (repo + workflow permissions) | `ghp_xxxxx` |
 | `GITHUB_OWNER` | GitHub username or organization | `your-username` |
 | `GITHUB_REPO` | Repository name | `your-repo-name` |
 | `BACKUP_API_KEY` | Same value as `VITE_BACKUP_API_KEY` | `your_secure_random_string` |
@@ -123,47 +123,301 @@ Add the following secrets:
 2. Generate new token with scopes:
    - `repo` (full control)
    - `workflow` (update GitHub Action workflows)
-3. Copy the token and add it as `GITHUB_TOKEN` secret
+3. **Expiration**: 
+   - **Recommended**: Set to **No expiration** or **1 year** for production backup systems
+   - **Why**: Backups run automatically and will fail if the token expires, potentially causing data loss
+   - **Security**: The token is stored securely in GitHub Secrets and only used by GitHub Actions, so the risk is minimal
+   - **Alternative**: If you prefer shorter expiration (30-90 days), set a calendar reminder to renew it before it expires
+4. Copy the token and add it as `BACKUP_GITHUB_TOKEN` secret (⚠️ Note: GitHub doesn't allow secret names starting with `GITHUB_`, so we use `BACKUP_GITHUB_TOKEN` instead)
 
 ### Step 4: Deploy Supabase Edge Functions
 
-Deploy all Edge Functions to Supabase:
+This step deploys the Edge Functions that control the backup system. Edge Functions run on Supabase's infrastructure and handle triggering backups, checking status, and managing settings.
+
+#### Prerequisites
+
+Before deploying, ensure you have:
+
+1. **Supabase CLI installed**
+   ```bash
+   # Check if Supabase CLI is installed
+   supabase --version
+   ```
+   
+   **If not installed, choose one of these methods:**
+   
+   **Windows (Recommended - using winget)**:
+   ```powershell
+   winget install --id=Supabase.CLI -e
+   ```
+   
+   **Windows (Alternative - using Scoop)**:
+   ```powershell
+   # First install Scoop if you don't have it:
+   # Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+   # irm get.scoop.sh | iex
+   
+   # Then install Supabase CLI:
+   scoop install supabase
+   ```
+   
+   **Windows (Alternative - Standalone Binary)**:
+   1. Download from: https://github.com/supabase/cli/releases/latest
+   2. Download `supabase_windows_amd64.zip` (or appropriate for your architecture)
+   3. Extract and add to your PATH
+   
+   **macOS**:
+   ```bash
+   brew install supabase/tap/supabase
+   ```
+   
+   **Linux**:
+   ```bash
+   # Using the install script
+   curl -fsSL https://supabase.com/install.sh | sh
+   ```
+   
+   ⚠️ **Note**: `npm install -g supabase` is **NOT supported** anymore. Use one of the methods above.
+
+2. **Node.js 18+ installed** (required for Supabase CLI)
+   ```bash
+   node --version  # Should be 18 or higher
+   ```
+
+3. **Access to your Supabase project** (you need to be a project owner or have deployment permissions)
+
+#### Step 4.1: Login to Supabase
+
+1. **Open PowerShell/Terminal** in your project directory
+
+2. **Login to Supabase**:
+   ```bash
+   supabase login
+   ```
+   
+3. **Follow the prompts**:
+   - A browser window will open automatically
+   - If it doesn't, copy the URL shown in the terminal and open it in your browser
+   - Sign in with your Supabase account
+   - Authorize the CLI to access your account
+   - You should see "Successfully logged in" message
+
+4. **Verify login**:
+   ```bash
+   supabase projects list
+   ```
+   This should show all your Supabase projects.
+
+#### Step 4.2: Find Your Project Reference ID
+
+You need your Supabase project reference ID to link the CLI to your project.
+
+**Method 1: From Supabase Dashboard**
+1. Go to your Supabase Dashboard: https://app.supabase.com
+2. Select your project
+3. Go to **Settings** → **General**
+4. Find **Reference ID** (it looks like: `abcdefghijklmnop`)
+5. Copy this ID
+
+**Method 2: From Project URL**
+- Your project URL is: `https://xxxxx.supabase.co`
+- The `xxxxx` part is your project reference ID
+
+#### Step 4.3: Link Your Project
+
+Link your local project to your Supabase project:
 
 ```bash
-# Login to Supabase (if not already)
-supabase login
-
-# Link your project
 supabase link --project-ref your-project-ref
+```
 
-# Deploy all functions
+**Example**:
+```bash
+supabase link --project-ref abcdefghijklmnop
+```
+
+**What happens**:
+- The CLI will ask you for your database password (the one you set when creating the project)
+- Enter your database password when prompted
+- You should see: "Linked to project abcdefghijklmnop"
+
+**Troubleshooting**:
+- If you forgot your database password, reset it in Supabase Dashboard → Settings → Database → Reset database password
+- If linking fails, make sure you're in the project root directory
+
+#### Step 4.4: Deploy Edge Functions
+
+Deploy each Edge Function one by one. Each function serves a specific purpose:
+
+**1. Deploy `trigger-backup` function** (triggers manual backups):
+```bash
 supabase functions deploy trigger-backup
+```
+
+**2. Deploy `backup-status` function** (checks backup status):
+```bash
 supabase functions deploy backup-status
+```
+
+**3. Deploy `generate-signed-url` function** (generates S3 download URLs):
+```bash
 supabase functions deploy generate-signed-url
+```
+
+**4. Deploy `settings-toggle` function** (enables/disables backups):
+```bash
 supabase functions deploy settings-toggle
+```
+
+**5. Deploy `backup-history` function** (retrieves backup history):
+```bash
 supabase functions deploy backup-history
 ```
 
-#### Set Edge Function Secrets
-
-For each Edge Function, set the required secrets:
-
-```bash
-# Set secrets for all functions
-supabase secrets set SUPABASE_URL=your_supabase_url
-supabase secrets set SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-supabase secrets set GITHUB_TOKEN=your_github_token
-supabase secrets set GITHUB_OWNER=your_github_owner
-supabase secrets set GITHUB_REPO=your_github_repo
-supabase secrets set GITHUB_WORKFLOW_ID=backup.yml
-supabase secrets set BACKUP_API_KEY=your_backup_api_key
-supabase secrets set AWS_ACCESS_KEY_ID=your_aws_access_key
-supabase secrets set AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-supabase secrets set AWS_S3_REGION=us-east-1
-supabase secrets set AWS_S3_BUCKET=your_bucket_name
+**Expected output for each deployment**:
+```
+Deploying function trigger-backup...
+Function trigger-backup deployed successfully.
+Function URL: https://xxxxx.supabase.co/functions/v1/trigger-backup
 ```
 
-**Note**: Secrets are shared across all Edge Functions in a project.
+**Deploy all at once** (alternative):
+```bash
+# Deploy all functions in one command
+supabase functions deploy trigger-backup backup-status generate-signed-url settings-toggle backup-history
+```
+
+**Verification**:
+After deployment, verify each function is accessible:
+```bash
+# Test each function URL in your browser or with curl
+curl https://your-project.supabase.co/functions/v1/trigger-backup
+# Should return an authentication error (which is expected - means the function is deployed)
+```
+
+#### Step 4.5: Set Edge Function Secrets
+
+Edge Functions need access to secrets (API keys, tokens, etc.) to function properly. Secrets are **shared across all Edge Functions** in your project, so you only need to set them once.
+
+**Important**: Replace all placeholder values with your actual values!
+
+```bash
+# 1. Supabase Configuration
+supabase secrets set SUPABASE_URL=https://your-project.supabase.co
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# 2. GitHub Configuration
+# Note: Use the same token value you used for BACKUP_GITHUB_TOKEN in GitHub Secrets
+supabase secrets set GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+supabase secrets set GITHUB_OWNER=ManaSmart
+supabase secrets set GITHUB_REPO=Mana_Smart_Scent
+supabase secrets set GITHUB_WORKFLOW_ID=backup.yml
+
+# 3. Backup API Key (must match VITE_BACKUP_API_KEY in frontend .env)
+supabase secrets set BACKUP_API_KEY=your_secure_random_string_here
+
+# 4. AWS S3 Configuration
+supabase secrets set AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+supabase secrets set AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+supabase secrets set AWS_S3_REGION=us-east-1
+supabase secrets set AWS_S3_BUCKET=your-backup-bucket-name
+```
+
+**Getting the values**:
+
+- **SUPABASE_URL**: From Supabase Dashboard → Settings → API → Project URL
+- **SUPABASE_SERVICE_ROLE_KEY**: From Supabase Dashboard → Settings → API → service_role key (⚠️ Keep secret!)
+- **GITHUB_TOKEN**: The Personal Access Token you created earlier
+- **GITHUB_OWNER**: Your GitHub username or organization (e.g., `ManaSmart`)
+- **GITHUB_REPO**: Your repository name (e.g., `Mana_Smart_Scent`)
+- **BACKUP_API_KEY**: Generate with `openssl rand -hex 32` or use any secure random string (must match frontend `.env.local`)
+- **AWS credentials**: From your AWS IAM user credentials
+- **AWS_S3_REGION**: Your S3 bucket region (e.g., `us-east-1`, `eu-west-1`)
+- **AWS_S3_BUCKET**: Your S3 bucket name
+
+**Verify secrets are set**:
+```bash
+supabase secrets list
+```
+
+This will show all your secrets (values are hidden for security).
+
+#### Step 4.6: Test Edge Functions
+
+Test that your functions are working correctly:
+
+**1. Test `settings-toggle`** (enable backups):
+```bash
+curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle \
+  -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"backup_enabled": true}'
+```
+
+**Expected response**:
+```json
+{"success": true, "message": "Backup enabled"}
+```
+
+**2. Test `trigger-backup`** (trigger a backup):
+```bash
+curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup \
+  -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
+  -H "Content-Type: application/json"
+```
+
+**Expected response**:
+```json
+{
+  "dispatch_id": "abc-123-def",
+  "status_url": "/functions/v1/backup-status?dispatch_id=abc-123-def",
+  "message": "Backup workflow triggered successfully"
+}
+```
+
+**3. Test `backup-status`**:
+```bash
+curl -X GET "https://your-project.supabase.co/functions/v1/backup-status?dispatch_id=abc-123-def" \
+  -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
+```
+
+#### Troubleshooting Deployment Issues
+
+**Issue: "Function not found"**
+- **Solution**: Make sure you're in the project root directory where `supabase/functions/` folder exists
+- Check that function folders exist: `supabase/functions/trigger-backup/`, etc.
+
+**Issue: "Authentication failed"**
+- **Solution**: Run `supabase login` again
+- Verify you have the correct permissions on the project
+
+**Issue: "Database password incorrect"**
+- **Solution**: Reset your database password in Supabase Dashboard → Settings → Database
+- Then run `supabase link` again
+
+**Issue: "Secret not found" errors in function logs**
+- **Solution**: Verify all secrets are set with `supabase secrets list`
+- Make sure you used the exact secret names (case-sensitive)
+- Re-deploy functions after setting secrets: `supabase functions deploy function-name`
+
+**Issue: "Function deployment timeout"**
+- **Solution**: Check your internet connection
+- Try deploying one function at a time
+- Check Supabase status page for service issues
+
+**Issue: Functions return 401/403 errors**
+- **Solution**: Verify `BACKUP_API_KEY` matches in:
+  - Supabase secrets
+  - Frontend `.env.local` file
+  - The Authorization header in your test requests
+
+#### Next Steps
+
+After successfully deploying all functions and setting secrets:
+1. ✅ All 5 Edge Functions deployed
+2. ✅ All secrets configured
+3. ✅ Functions tested and working
+4. → Proceed to **Step 5: Configure GitHub Actions Workflow**
 
 ### Step 5: Configure GitHub Actions Workflow
 
