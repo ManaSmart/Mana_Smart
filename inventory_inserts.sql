@@ -1,0 +1,202 @@
+-- SQL INSERT statements for 10 different inventory items
+-- Table: inventory
+-- Note: product_code is UUID type, using gen_random_uuid() for new entries
+
+INSERT INTO inventory (
+    product_code,
+    current_stock,
+    minimum_stock_alert,
+    prod_selling_price,
+    prod_cost_price,
+    prod_status,
+    prod_supplier,
+    measuring_unit,
+    prod_img,
+    prod_ar_description,
+    prod_en_description,
+    ar_prod_name,
+    en_prod_name,
+    category,
+    prod_margin
+) VALUES
+-- Item 1: Essential Oil - Lavender
+(
+    gen_random_uuid(),
+    150,
+    20,
+    89.99,
+    45.00,
+    'in-stock',
+    'Premium Oils Supplier',
+    'ml',
+    NULL,
+    'زيت اللافندر العطري النقي - 50 مل',
+    'Pure Lavender Essential Oil - 50ml',
+    'زيت اللافندر',
+    'Lavender Essential Oil',
+    'Essential Oils',
+    99.98
+),
+-- Item 2: Essential Oil - Rose
+(
+    gen_random_uuid(),
+    85,
+    15,
+    149.99,
+    75.00,
+    'in-stock',
+    'Premium Oils Supplier',
+    'ml',
+    NULL,
+    'زيت الورد الفاخر - 30 مل',
+    'Premium Rose Essential Oil - 30ml',
+    'زيت الورد',
+    'Rose Essential Oil',
+    'Essential Oils',
+    99.99
+),
+-- Item 3: Concentrate - Vanilla
+(
+    gen_random_uuid(),
+    200,
+    30,
+    45.50,
+    22.00,
+    'in-stock',
+    'Fragrance Concentrates Co.',
+    'ml',
+    NULL,
+    'عطر الفانيليا المركز - 100 مل',
+    'Vanilla Fragrance Concentrate - 100ml',
+    'عطر الفانيليا',
+    'Vanilla Concentrate',
+    'Concentrates',
+    106.82
+),
+-- Item 4: Diffuser - Wooden
+(
+    gen_random_uuid(),
+    45,
+    10,
+    199.99,
+    95.00,
+    'in-stock',
+    'Home Decor Suppliers',
+    'piece',
+    NULL,
+    'مبخر عطري خشبي فاخر',
+    'Premium Wooden Aromatherapy Diffuser',
+    'مبخر خشبي',
+    'Wooden Diffuser',
+    'Diffusers',
+    110.52
+),
+-- Item 5: Diffuser - Ceramic
+(
+    gen_random_uuid(),
+    60,
+    12,
+    129.99,
+    60.00,
+    'in-stock',
+    'Home Decor Suppliers',
+    'piece',
+    NULL,
+    'مبخر عطري خزفي أنيق',
+    'Elegant Ceramic Aromatherapy Diffuser',
+    'مبخر خزفي',
+    'Ceramic Diffuser',
+    'Diffusers',
+    116.65
+),
+-- Item 6: Accessory - Reed Sticks
+(
+    gen_random_uuid(),
+    300,
+    50,
+    24.99,
+    8.00,
+    'in-stock',
+    'Accessories Wholesale',
+    'pack',
+    NULL,
+    'عصي القصب للعطور - 20 قطعة',
+    'Reed Diffuser Sticks - 20 pieces',
+    'عصي القصب',
+    'Reed Sticks',
+    'Accessories',
+    212.38
+),
+-- Item 7: Bundle - Starter Kit
+(
+    gen_random_uuid(),
+    25,
+    5,
+    349.99,
+    180.00,
+    'in-stock',
+    'Bundle Packages Inc.',
+    'set',
+    NULL,
+    'مجموعة البداية: مبخر + 3 زيوت عطرية',
+    'Starter Kit: Diffuser + 3 Essential Oils',
+    'مجموعة البداية',
+    'Starter Bundle',
+    'Bundles',
+    94.44
+),
+-- Item 8: Raw Material - Jojoba Oil
+(
+    gen_random_uuid(),
+    500,
+    100,
+    35.00,
+    18.00,
+    'in-stock',
+    'Raw Materials Distributor',
+    'liter',
+    NULL,
+    'زيت الجوجوبا الخام - 1 لتر',
+    'Raw Jojoba Oil - 1 liter',
+    'زيت الجوجوبا',
+    'Jojoba Oil',
+    'Raw Materials',
+    94.44
+),
+-- Item 9: Essential Oil - Eucalyptus
+(
+    gen_random_uuid(),
+    120,
+    25,
+    65.99,
+    32.00,
+    'in-stock',
+    'Premium Oils Supplier',
+    'ml',
+    NULL,
+    'زيت الكافور العطري - 50 مل',
+    'Eucalyptus Essential Oil - 50ml',
+    'زيت الكافور',
+    'Eucalyptus Essential Oil',
+    'Essential Oils',
+    106.22
+),
+-- Item 10: Concentrate - Musk
+(
+    gen_random_uuid(),
+    180,
+    35,
+    79.99,
+    38.00,
+    'in-stock',
+    'Fragrance Concentrates Co.',
+    'ml',
+    NULL,
+    'عطر المسك المركز - 100 مل',
+    'Musk Fragrance Concentrate - 100ml',
+    'عطر المسك',
+    'Musk Concentrate',
+    'Concentrates',
+    110.50
+);
+

@@ -1,0 +1,226 @@
+// Supabase Edge Function: backup-status
+// Polls GitHub Actions workflow status and returns signed S3 URL when complete
+
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN") ?? "";
+const GITHUB_OWNER = Deno.env.get("GITHUB_OWNER") ?? "";
+const GITHUB_REPO = Deno.env.get("GITHUB_REPO") ?? "";
+const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
+
+serve(async (req) => {
+  // Handle CORS
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "authorization, content-type",
+      },
+    });
+  }
+
+  // Verify authentication
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return new Response(
+      JSON.stringify({ error: "Missing or invalid authorization header" }),
+      {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  if (token !== BACKUP_API_KEY) {
+    return new Response(JSON.stringify({ error: "Invalid API key" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (req.method !== "GET") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  try {
+    const url = new URL(req.url);
+    const dispatchId = url.searchParams.get("dispatch_id");
+
+    if (!dispatchId) {
+      return new Response(JSON.stringify({ error: "Missing dispatch_id parameter" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    // Get backup_history entry
+    const { data: backupEntry, error: backupError } = await supabase
+      .from("backup_history")
+      .select("*")
+      .eq("dispatch_id", dispatchId)
+      .single();
+
+    if (backupError || !backupEntry) {
+      return new Response(
+        JSON.stringify({
+          status: "pending",
+          error: "Backup entry not found",
+        }),
+        {
+          status: 404,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    }
+
+    // If backup is complete (success or failed), return status
+    if (backupEntry.status === "success" || backupEntry.status === "failed") {
+      // If successful and has S3 key, generate signed URL
+      if (backupEntry.status === "success" && backupEntry.s3_key) {
+        // Call generate-signed-url function internally
+        const signedUrlResponse = await fetch(
+          `${SUPABASE_URL}/functions/v1/generate-signed-url`,
+          {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${BACKUP_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ s3_key: backupEntry.s3_key }),
+          }
+        );
+
+        if (signedUrlResponse.ok) {
+          const { signed_url } = await signedUrlResponse.json();
+          return new Response(
+            JSON.stringify({
+              status: "success",
+              signed_url,
+              backup_id: backupEntry.id,
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+              },
+            }
+          );
+        }
+      }
+
+      // Return status without signed URL (failed or no S3 key)
+      return new Response(
+        JSON.stringify({
+          status: backupEntry.status,
+          error: backupEntry.error_text || undefined,
+          backup_id: backupEntry.id,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    }
+
+    // If still in progress, check GitHub Actions status
+    if (backupEntry.workflow_run_id) {
+      const workflowUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${backupEntry.workflow_run_id}`;
+
+      try {
+        const workflowResponse = await fetch(workflowUrl, {
+          headers: {
+            "Authorization": `token ${GITHUB_TOKEN}`,
+            "Accept": "application/vnd.github.v3+json",
+          },
+        });
+
+        if (workflowResponse.ok) {
+          const workflowData = await workflowResponse.json();
+          const workflowStatus = workflowData.status; // queued, in_progress, completed
+          const workflowConclusion = workflowData.conclusion; // success, failure, cancelled
+
+          if (workflowStatus === "completed") {
+            // Workflow finished, but backup_history might not be updated yet
+            // Return in_progress and let the frontend poll again
+            return new Response(
+              JSON.stringify({
+                status: "in_progress",
+                message: "Workflow completed, processing backup...",
+              }),
+              {
+                status: 200,
+                headers: {
+                  "Content-Type": "application/json",
+                  "Access-Control-Allow-Origin": "*",
+                },
+              }
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              status: workflowStatus === "in_progress" || workflowStatus === "queued" ? "in_progress" : "pending",
+              message: `Workflow status: ${workflowStatus}`,
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+                "Access-Control-Allow-Origin": "*",
+              },
+            }
+          );
+        }
+      } catch (error) {
+        console.error("Error checking GitHub workflow:", error);
+        // Continue to return backup_history status
+      }
+    }
+
+    // Return current status from backup_history
+    return new Response(
+      JSON.stringify({
+        status: backupEntry.status === "in_progress" ? "in_progress" : "pending",
+        message: "Backup in progress",
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
+      }
+    );
+  } catch (error) {
+    console.error("Error getting backup status:", error);
+    return new Response(
+      JSON.stringify({
+        error: "Internal server error",
+        message: error instanceof Error ? error.message : "Unknown error",
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  }
+});
+

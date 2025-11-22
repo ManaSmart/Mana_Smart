@@ -1,0 +1,437 @@
+name: Database and Storage Backup
+
+on:
+  schedule:
+    # Run daily at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: 'Dispatch ID for manual backups'
+        required: false
+        type: string
+      trigger_type:
+        description: 'Type of trigger (manual or scheduled)'
+        required: false
+        type: string
+        default: 'scheduled'
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_S3_REGION: ${{ secrets.AWS_S3_REGION }}
+  AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+  SUPABASE_BUCKETS_TO_BACKUP: ${{ secrets.SUPABASE_BUCKETS_TO_BACKUP }}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install @supabase/supabase-js
+
+      - name: Configure AWS CLI
+        run: |
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set region ${{ secrets.AWS_S3_REGION }}
+
+      - name: Check backup enabled status
+        id: check_backup_enabled
+        run: |
+          node -e "
+          const { createClient } = require('@supabase/supabase-js');
+          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+          
+          supabase
+            .from('system_settings_kv')
+            .select('value')
+            .eq('key', 'backup_enabled')
+            .single()
+            .then(({ data, error }) => {
+              if (error) {
+                console.error('Error checking backup status:', error);
+                process.exit(1);
+              }
+              const enabled = data?.value?.enabled ?? false;
+              console.log('Backup enabled:', enabled);
+              if (!enabled) {
+                console.log('Backup is disabled. Exiting.');
+                process.exit(0);
+              }
+              process.exit(0);
+            });
+          "
+
+      - name: Create backup directory
+        run: |
+          mkdir -p backup/{db,storage,auth}
+
+      - name: Dump PostgreSQL database
+        id: pg_dump
+        run: |
+          echo "Starting database dump..."
+          pg_dump "$DATABASE_URL" \
+            --no-owner \
+            --no-privileges \
+            --format=plain \
+            --blobs \
+            --verbose \
+            > backup/db/backup.sql 2>&1 || {
+            echo "Database dump failed"
+            exit 1
+          }
+          
+          DB_SIZE=$(du -b backup/db/backup.sql | cut -f1)
+          echo "Database dump size: $DB_SIZE bytes"
+          echo "db_size=$DB_SIZE" >> $GITHUB_OUTPUT
+
+      - name: Export auth users
+        id: export_auth
+        run: |
+          echo "Exporting auth users..."
+          node -e "
+          const { createClient } = require('@supabase/supabase-js');
+          const fs = require('fs');
+          
+          const supabase = createClient(
+            process.env.SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_ROLE_KEY
+          );
+          
+          // Query auth.users via service role
+          supabase.auth.admin.listUsers()
+            .then(({ data, error }) => {
+              if (error) {
+                console.error('Error fetching auth users:', error);
+                process.exit(1);
+              }
+              
+              const users = data.users.map(u => ({
+                id: u.id,
+                email: u.email,
+                created_at: u.created_at,
+                updated_at: u.updated_at,
+                email_confirmed_at: u.email_confirmed_at,
+                last_sign_in_at: u.last_sign_in_at,
+                user_metadata: u.user_metadata,
+                app_metadata: u.app_metadata
+              }));
+              
+              fs.writeFileSync(
+                'backup/auth/users.json',
+                JSON.stringify(users, null, 2)
+              );
+              
+              const size = fs.statSync('backup/auth/users.json').size;
+              console.log('Auth users exported:', users.length);
+              console.log('Auth file size:', size, 'bytes');
+              process.exit(0);
+            });
+          "
+
+      - name: Download Supabase Storage files
+        id: download_storage
+        run: |
+          echo "Downloading storage files..."
+          node -e "
+          const { createClient } = require('@supabase/supabase-js');
+          const fs = require('fs');
+          const path = require('path');
+          const https = require('https');
+          const http = require('http');
+          
+          const supabase = createClient(
+            process.env.SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_ROLE_KEY
+          );
+          
+          const buckets = (process.env.SUPABASE_BUCKETS_TO_BACKUP || '')
+            .split(',')
+            .map(b => b.trim())
+            .filter(b => b.length > 0);
+          
+          if (buckets.length === 0) {
+            console.log('No buckets specified for backup');
+            process.exit(0);
+          }
+          
+          async function downloadFile(bucket, filePath, localPath) {
+            const { data, error } = await supabase.storage
+              .from(bucket)
+              .download(filePath);
+            
+            if (error) {
+              console.error(\`Error downloading \${bucket}/\${filePath}:\`, error);
+              return false;
+            }
+            
+            const dir = path.dirname(localPath);
+            if (!fs.existsSync(dir)) {
+              fs.mkdirSync(dir, { recursive: true });
+            }
+            
+            const arrayBuffer = await data.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            fs.writeFileSync(localPath, buffer);
+            return true;
+          }
+          
+          async function listFiles(bucket) {
+            const { data, error } = await supabase.storage
+              .from(bucket)
+              .list('', { limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } });
+            
+            if (error) {
+              console.error(\`Error listing \${bucket}:\`, error);
+              return [];
+            }
+            
+            const files = [];
+            
+            async function listRecursive(folder = '') {
+              const { data: items, error } = await supabase.storage
+                .from(bucket)
+                .list(folder, { limit: 1000, offset: 0 });
+              
+              if (error) {
+                console.error(\`Error listing \${bucket}/\${folder}:\`, error);
+                return;
+              }
+              
+              for (const item of items || []) {
+                const fullPath = folder ? \`\${folder}/\${item.name}\` : item.name;
+                
+                if (item.id === null) {
+                  // It's a folder, recurse
+                  await listRecursive(fullPath);
+                } else {
+                  // It's a file
+                  files.push(fullPath);
+                }
+              }
+            }
+            
+            await listRecursive();
+            return files;
+          }
+          
+          (async () => {
+            let totalFiles = 0;
+            let totalSize = 0;
+            
+            for (const bucket of buckets) {
+              console.log(\`Processing bucket: \${bucket}\`);
+              const files = await listFiles(bucket);
+              console.log(\`Found \${files.length} files in \${bucket}\`);
+              
+              for (const filePath of files) {
+                const localPath = \`backup/storage/\${bucket}/\${filePath}\`;
+                const success = await downloadFile(bucket, filePath, localPath);
+                
+                if (success) {
+                  totalFiles++;
+                  const stats = fs.statSync(localPath);
+                  totalSize += stats.size;
+                }
+              }
+            }
+            
+            console.log(\`Downloaded \${totalFiles} files, total size: \${totalSize} bytes\`);
+          })().catch(err => {
+            console.error('Storage download error:', err);
+            process.exit(1);
+          });
+          "
+
+      - name: Create backup archive
+        id: create_archive
+        run: |
+          echo "Creating backup archive..."
+          TIMESTAMP=$(date -u +"%Y-%m-%d-%H-%M-UTC")
+          ARCHIVE_NAME="backup-$TIMESTAMP.zip"
+          
+          cd backup
+          zip -r "../$ARCHIVE_NAME" . -q
+          cd ..
+          
+          ARCHIVE_SIZE=$(du -b "$ARCHIVE_NAME" | cut -f1)
+          echo "Archive created: $ARCHIVE_NAME"
+          echo "Archive size: $ARCHIVE_SIZE bytes"
+          echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
+          echo "archive_size=$ARCHIVE_SIZE" >> $GITHUB_OUTPUT
+
+      - name: Upload to S3 (with retry)
+        id: upload_s3
+        run: |
+          ARCHIVE_NAME="${{ steps.create_archive.outputs.archive_name }}"
+          TIMESTAMP=$(date -u +"%Y-%m-%d")
+          S3_KEY="backups/$TIMESTAMP/$ARCHIVE_NAME"
+          
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          UPLOAD_SUCCESS=false
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$UPLOAD_SUCCESS" = false ]; do
+            echo "Upload attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES..."
+            
+            if aws s3 cp "$ARCHIVE_NAME" "s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY" --region ${{ secrets.AWS_S3_REGION }}; then
+              echo "Upload successful!"
+              UPLOAD_SUCCESS=true
+              
+              # Verify the upload
+              if aws s3 ls "s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY" --region ${{ secrets.AWS_S3_REGION }} > /dev/null 2>&1; then
+                echo "Upload verified successfully"
+                echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
+              else
+                echo "Upload verification failed"
+                UPLOAD_SUCCESS=false
+              fi
+            else
+              echo "Upload failed, retrying..."
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                sleep $((RETRY_COUNT * 5))
+              fi
+            fi
+          done
+          
+          if [ "$UPLOAD_SUCCESS" = false ]; then
+            echo "S3 upload failed after $MAX_RETRIES attempts"
+            exit 1
+          fi
+
+      - name: Update backup_history and system_settings
+        id: update_history
+        if: success()
+        run: |
+          ARCHIVE_SIZE="${{ steps.create_archive.outputs.archive_size }}"
+          S3_KEY="${{ steps.upload_s3.outputs.s3_key }}"
+          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
+          
+          node -e "
+          const { createClient } = require('@supabase/supabase-js');
+          
+          const supabase = createClient(
+            process.env.SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_ROLE_KEY
+          );
+          
+          const now = new Date().toISOString();
+          
+          // Update or insert backup_history
+          const { error: historyError } = await supabase
+            .from('backup_history')
+            .upsert({
+              dispatch_id: process.env.DISPATCH_ID || null,
+              workflow_run_id: process.env.WORKFLOW_RUN_ID,
+              s3_key: process.env.S3_KEY,
+              status: 'success',
+              size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
+              error_text: null,
+              created_at: now
+            }, {
+              onConflict: 'dispatch_id,workflow_run_id'
+            });
+          
+          if (historyError) {
+            console.error('Error updating backup_history:', historyError);
+            process.exit(1);
+          }
+          
+          // Update last_backup_at
+          const { error: settingsError } = await supabase
+            .from('system_settings_kv')
+            .upsert({
+              key: 'last_backup_at',
+              value: now
+            });
+          
+          if (settingsError) {
+            console.error('Error updating last_backup_at:', settingsError);
+            process.exit(1);
+          }
+          
+          console.log('Backup history updated successfully');
+          process.exit(0);
+          "
+        env:
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          S3_KEY: ${{ steps.upload_s3.outputs.s3_key }}
+          ARCHIVE_SIZE: ${{ steps.create_archive.outputs.archive_size }}
+
+      - name: Handle backup failure
+        if: failure()
+        run: |
+          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
+          ERROR_MSG="Backup workflow failed. Check GitHub Actions logs for details."
+          
+          node -e "
+          const { createClient } = require('@supabase/supabase-js');
+          
+          const supabase = createClient(
+            process.env.SUPABASE_URL,
+            process.env.SUPABASE_SERVICE_ROLE_KEY
+          );
+          
+          // Update backup_history with failure
+          const { error } = await supabase
+            .from('backup_history')
+            .upsert({
+              dispatch_id: process.env.DISPATCH_ID || null,
+              workflow_run_id: process.env.WORKFLOW_RUN_ID,
+              status: 'failed',
+              error_text: process.env.ERROR_MSG,
+              size_bytes: null,
+              s3_key: null
+            }, {
+              onConflict: 'dispatch_id,workflow_run_id'
+            });
+          
+          if (error) {
+            console.error('Error updating backup_history:', error);
+          } else {
+            console.log('Backup failure recorded');
+          }
+          "
+        env:
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          ERROR_MSG: "Backup workflow failed. Check GitHub Actions logs for details."
+
+      - name: Upload backup as GitHub artifact (optional)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ steps.create_archive.outputs.archive_name }}
+          path: ${{ steps.create_archive.outputs.archive_name }}
+          retention-days: 7
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf backup
+          rm -f backup-*.zip
+
