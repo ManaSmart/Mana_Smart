@@ -533,14 +533,14 @@ jobs:
           # Check if previous steps succeeded
           UPLOAD_OUTCOME="${{ steps.upload_s3.outcome }}"
           if [ "$UPLOAD_OUTCOME" = "success" ] && [ -n "$S3_KEY" ]; then
-            export STATUS="success"
-            export ERROR_TEXT=""
+            FINAL_STATUS="success"
+            FINAL_ERROR_TEXT=""
             echo "=========================================="
             echo "Updating backup history (SUCCESS)"
             echo "=========================================="
           else
-            export STATUS="failed"
-            export ERROR_TEXT="Backup workflow completed but S3 upload may have failed. Check GitHub Actions logs for details."
+            FINAL_STATUS="failed"
+            FINAL_ERROR_TEXT="Backup workflow completed but S3 upload may have failed. Check GitHub Actions logs for details."
             echo "=========================================="
             echo "Updating backup history (FAILURE/PARTIAL)"
             echo "=========================================="
@@ -550,11 +550,12 @@ jobs:
           echo "Workflow Run ID: $WORKFLOW_RUN_ID"
           echo "S3 Key: ${S3_KEY:-NOT UPLOADED}"
           echo "Archive Size: ${ARCHIVE_SIZE:-0} bytes"
-          echo "Status: $STATUS"
+          echo "Status: $FINAL_STATUS"
           echo ""
           
           # Use IIFE to properly handle async/await
-          node -e "
+          # Pass STATUS and ERROR_TEXT as environment variables to Node.js
+          STATUS="$FINAL_STATUS" ERROR_TEXT="$FINAL_ERROR_TEXT" node -e "
           (async () => {
             try {
               const { createClient } = require('@supabase/supabase-js');
