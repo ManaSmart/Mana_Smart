@@ -252,28 +252,30 @@ Deploy each Edge Function one by one. Each function serves a specific purpose:
 
 **1. Deploy `trigger-backup` function** (triggers manual backups):
 ```bash
-supabase functions deploy trigger-backup
+supabase functions deploy trigger-backup --no-verify-jwt
 ```
 
 **2. Deploy `backup-status` function** (checks backup status):
 ```bash
-supabase functions deploy backup-status
+supabase functions deploy backup-status --no-verify-jwt
 ```
 
 **3. Deploy `generate-signed-url` function** (generates S3 download URLs):
 ```bash
-supabase functions deploy generate-signed-url
+supabase functions deploy generate-signed-url --no-verify-jwt
 ```
 
 **4. Deploy `settings-toggle` function** (enables/disables backups):
 ```bash
-supabase functions deploy settings-toggle
+supabase functions deploy settings-toggle --no-verify-jwt
 ```
 
 **5. Deploy `backup-history` function** (retrieves backup history):
 ```bash
-supabase functions deploy backup-history
+supabase functions deploy backup-history --no-verify-jwt
 ```
+
+**⚠️ Important**: The `--no-verify-jwt` flag is required because these functions use custom API key authentication (`BACKUP_API_KEY`) instead of Supabase JWT tokens. Without this flag, Supabase will try to validate the Authorization header as a JWT and return "Invalid JWT" errors.
 
 **Expected output for each deployment**:
 ```
@@ -284,8 +286,8 @@ Function URL: https://xxxxx.supabase.co/functions/v1/trigger-backup
 
 **Deploy all at once** (alternative):
 ```bash
-# Deploy all functions in one command
-supabase functions deploy trigger-backup backup-status generate-signed-url settings-toggle backup-history
+# Deploy all functions in one command with JWT verification disabled
+supabase functions deploy trigger-backup backup-status generate-signed-url settings-toggle backup-history --no-verify-jwt
 ```
 
 **Verification**:
@@ -393,6 +395,8 @@ supabase secrets unset BACKUP_GITHUB_TOKEN --project-ref rqssjgiunwyjeyutgkkp
 ```bash
 supabase functions deploy function-name --no-verify-jwt --project-ref your-project-ref
 ```
+
+**⚠️ Always use `--no-verify-jwt`** when deploying these backup functions since they use custom API key authentication.
 
 #### Step 4.6: Test Edge Functions
 
@@ -738,6 +742,24 @@ curl -X POST https://your-project.supabase.co/functions/v1/generate-signed-url -
 - Check Authorization header format: `Bearer YOUR_KEY`
 
 ### GitHub Actions Workflow Fails
+
+**"Resource not accessible by personal access token" (403 error):**
+- **Cause**: Your GitHub Personal Access Token is missing the `workflow` scope
+- **Solution**: 
+  1. Go to GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+  2. Either edit your existing token (if it supports editing) or create a new one
+  3. **Required scopes**: 
+     - ✅ `repo` (full control) - **REQUIRED**
+     - ✅ `workflow` (update GitHub Action workflows) - **REQUIRED**
+  4. Copy the new token
+  5. Update the token in Supabase Edge Function secrets:
+     ```bash
+     supabase secrets set GITHUB_TOKEN=ghp_your_new_token_here --project-ref your-project-ref
+     ```
+  6. Also update it in GitHub Secrets (if you're using it there):
+     - Go to your repository → Settings → Secrets and variables → Actions
+     - Update `BACKUP_GITHUB_TOKEN` with the new token value
+  7. **Note**: The token value must be the same in both places, but the variable names are different (`GITHUB_TOKEN` in Supabase, `BACKUP_GITHUB_TOKEN` in GitHub)
 
 **Database connection error:**
 - Verify `DATABASE_URL` format: `postgresql://user:password@host:port/database`

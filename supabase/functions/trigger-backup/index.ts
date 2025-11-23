@@ -1,7 +1,16 @@
 // Supabase Edge Function: trigger-backup
 // Triggers a GitHub Actions workflow dispatch for manual backup
 
+// Deno types are provided at runtime - these declarations are for TypeScript IDE support
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
+
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -12,7 +21,7 @@ const GITHUB_REPO = Deno.env.get("GITHUB_REPO") ?? "";
 const GITHUB_WORKFLOW_ID = Deno.env.get("GITHUB_WORKFLOW_ID") ?? "backup.yml";
 const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // Handle CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -62,7 +71,7 @@ serve(async (req) => {
     const workflowResponse = await fetch(workflowUrl, {
       method: "POST",
       headers: {
-        "Authorization": `token ${GITHUB_TOKEN}`,
+        "Authorization": `Bearer ${GITHUB_TOKEN}`,
         "Accept": "application/vnd.github.v3+json",
         "Content-Type": "application/json",
       },

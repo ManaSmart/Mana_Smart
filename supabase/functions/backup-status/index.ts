@@ -1,7 +1,16 @@
 // Supabase Edge Function: backup-status
 // Polls GitHub Actions workflow status and returns signed S3 URL when complete
 
+// Deno types are provided at runtime - these declarations are for TypeScript IDE support
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
+
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -11,7 +20,7 @@ const GITHUB_OWNER = Deno.env.get("GITHUB_OWNER") ?? "";
 const GITHUB_REPO = Deno.env.get("GITHUB_REPO") ?? "";
 const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // Handle CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {

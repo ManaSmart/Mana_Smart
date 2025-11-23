@@ -1,8 +1,18 @@
 // Supabase Edge Function: generate-signed-url
 // Generates a pre-signed S3 URL for downloading backups
 
+// Deno types are provided at runtime - these declarations are for TypeScript IDE support
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
+
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { S3Client, GetObjectCommand } from "https://esm.sh/@aws-sdk/client-s3@3";
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { getSignedUrl } from "https://esm.sh/@aws-sdk/s3-request-presigner@3";
 
 const AWS_ACCESS_KEY_ID = Deno.env.get("AWS_ACCESS_KEY_ID") ?? "";
@@ -19,7 +29,7 @@ const s3Client = new S3Client({
   },
 });
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // Handle CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {

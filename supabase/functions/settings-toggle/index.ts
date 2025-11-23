@@ -1,14 +1,23 @@
 // Supabase Edge Function: settings-toggle
 // Manages backup settings (backup_enabled, last_backup_at)
 
+// Deno types are provided at runtime - these declarations are for TypeScript IDE support
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
+
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // Handle CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -86,12 +95,18 @@ serve(async (req) => {
       if (typeof backup_enabled !== "undefined") {
         const { error } = await supabase
           .from("system_settings_kv")
-          .upsert({
-            key: "backup_enabled",
-            value: { enabled: backup_enabled },
-          });
+          .upsert(
+            {
+              key: "backup_enabled",
+              value: { enabled: backup_enabled },
+            },
+            {
+              onConflict: "key",
+            }
+          );
 
         if (error) {
+          console.error("Error upserting backup_enabled:", error);
           throw error;
         }
       }
@@ -99,12 +114,18 @@ serve(async (req) => {
       if (typeof last_backup_at !== "undefined") {
         const { error } = await supabase
           .from("system_settings_kv")
-          .upsert({
-            key: "last_backup_at",
-            value: last_backup_at ? last_backup_at : null,
-          });
+          .upsert(
+            {
+              key: "last_backup_at",
+              value: last_backup_at ? last_backup_at : null,
+            },
+            {
+              onConflict: "key",
+            }
+          );
 
         if (error) {
+          console.error("Error upserting last_backup_at:", error);
           throw error;
         }
       }
@@ -127,10 +148,25 @@ serve(async (req) => {
     }
   } catch (error) {
     console.error("Error managing settings:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorDetails = error instanceof Error ? error.stack : String(error);
+    console.error("Error details:", errorDetails);
+    
+    // If it's a Supabase error, include more details
+    const supabaseError = error as any;
+    if (supabaseError?.code || supabaseError?.message) {
+      console.error("Supabase error code:", supabaseError.code);
+      console.error("Supabase error message:", supabaseError.message);
+      console.error("Supabase error details:", supabaseError.details);
+      console.error("Supabase error hint:", supabaseError.hint);
+    }
+    
     return new Response(
       JSON.stringify({
         error: "Internal server error",
-        message: error instanceof Error ? error.message : "Unknown error",
+        message: errorMessage,
+        details: process.env.DENO_ENV === "development" ? errorDetails : undefined,
+        code: supabaseError?.code,
       }),
       {
         status: 500,

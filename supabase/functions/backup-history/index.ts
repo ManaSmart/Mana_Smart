@@ -1,14 +1,23 @@
 // Supabase Edge Function: backup-history
 // Returns backup history entries
 
+// Deno types are provided at runtime - these declarations are for TypeScript IDE support
+declare const Deno: {
+  env: {
+    get(key: string): string | undefined;
+  };
+};
+
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// @ts-ignore - Deno handles URL-based imports at runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
 
-serve(async (req) => {
+serve(async (req: Request) => {
   // Handle CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
