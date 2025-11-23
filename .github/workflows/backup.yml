@@ -95,6 +95,19 @@ jobs:
           "
         env:
           TRIGGER_TYPE: ${{ github.event.inputs.trigger_type || 'scheduled' }}
+          
+      - name: Log workflow inputs
+        run: |
+          echo "=========================================="
+          echo "Workflow Inputs & Configuration"
+          echo "=========================================="
+          echo "Dispatch ID (input): ${{ github.event.inputs.dispatch_id }}"
+          echo "Dispatch ID (fallback): ${{ github.run_id }}"
+          echo "Final Dispatch ID: ${{ github.event.inputs.dispatch_id || github.run_id }}"
+          echo "Trigger Type: ${{ github.event.inputs.trigger_type || 'scheduled' }}"
+          echo "Workflow Run ID: ${{ github.run_id }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "=========================================="
 
       - name: Create backup directory
         run: |
@@ -401,104 +414,135 @@ jobs:
           DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
           WORKFLOW_RUN_ID="${{ github.run_id }}"
           
-          echo "Updating backup history..."
+          echo "=========================================="
+          echo "Updating backup history (SUCCESS)"
+          echo "=========================================="
           echo "Dispatch ID: $DISPATCH_ID"
           echo "Workflow Run ID: $WORKFLOW_RUN_ID"
           echo "S3 Key: $S3_KEY"
           echo "Archive Size: $ARCHIVE_SIZE bytes"
+          echo ""
           
+          # Use IIFE to properly handle async/await
           node -e "
-          const { createClient } = require('@supabase/supabase-js');
-          
-          const supabase = createClient(
-            process.env.SUPABASE_URL,
-            process.env.SUPABASE_SERVICE_ROLE_KEY
-          );
-          
-          const now = new Date().toISOString();
-          
-          console.log('Looking for existing backup entry with dispatch_id:', process.env.DISPATCH_ID);
-          
-          // Update or insert backup_history
-          // First try to find existing entry by dispatch_id
-          const { data: existingEntry, error: findError } = await supabase
-            .from('backup_history')
-            .select('id')
-            .eq('dispatch_id', process.env.DISPATCH_ID || '')
-            .maybeSingle();
-          
-          if (findError) {
-            console.error('Error finding existing entry:', findError);
-          }
-          
-          console.log('Existing entry found:', existingEntry ? 'Yes (ID: ' + existingEntry.id + ')' : 'No');
-          
-          let historyError = null;
-          if (existingEntry) {
-            // Update existing entry
-            console.log('Updating existing backup entry...');
-            const result = await supabase
-              .from('backup_history')
-              .update({
-                workflow_run_id: process.env.WORKFLOW_RUN_ID,
-                s3_key: process.env.S3_KEY,
-                status: 'success',
-                size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
-                error_text: null,
-              })
-              .eq('id', existingEntry.id);
-            historyError = result.error;
-            if (result.error) {
-              console.error('Update error:', result.error);
-            } else {
-              console.log('Backup entry updated successfully');
+          (async () => {
+            try {
+              const { createClient } = require('@supabase/supabase-js');
+              
+              const supabase = createClient(
+                process.env.SUPABASE_URL,
+                process.env.SUPABASE_SERVICE_ROLE_KEY
+              );
+              
+              const now = new Date().toISOString();
+              const dispatchId = process.env.DISPATCH_ID || '';
+              
+              console.log('[UPDATE] Looking for backup entry with dispatch_id:', dispatchId);
+              
+              // Find existing entry by dispatch_id
+              const { data: existingEntry, error: findError } = await supabase
+                .from('backup_history')
+                .select('id, dispatch_id, status')
+                .eq('dispatch_id', dispatchId)
+                .maybeSingle();
+              
+              if (findError) {
+                console.error('[UPDATE] Error finding entry:', JSON.stringify(findError, null, 2));
+                throw new Error('Failed to find backup entry: ' + findError.message);
+              }
+              
+              console.log('[UPDATE] Existing entry:', existingEntry ? 
+                'Found (ID: ' + existingEntry.id + ', Status: ' + existingEntry.status + ')' : 
+                'Not found - will create new');
+              
+              let updateResult;
+              if (existingEntry) {
+                // Update existing entry
+                console.log('[UPDATE] Updating existing entry...');
+                updateResult = await supabase
+                  .from('backup_history')
+                  .update({
+                    workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                    s3_key: process.env.S3_KEY,
+                    status: 'success',
+                    size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
+                    error_text: null,
+                  })
+                  .eq('id', existingEntry.id)
+                  .select();
+                
+                if (updateResult.error) {
+                  console.error('[UPDATE] Update error:', JSON.stringify(updateResult.error, null, 2));
+                  throw new Error('Failed to update backup entry: ' + updateResult.error.message);
+                }
+                
+                console.log('[UPDATE] ✓ Backup entry updated successfully');
+                console.log('[UPDATE] Updated entry:', JSON.stringify(updateResult.data, null, 2));
+              } else {
+                // Insert new entry
+                console.log('[UPDATE] Creating new backup entry...');
+                updateResult = await supabase
+                  .from('backup_history')
+                  .insert({
+                    dispatch_id: dispatchId || null,
+                    workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                    s3_key: process.env.S3_KEY,
+                    status: 'success',
+                    size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
+                    error_text: null,
+                    created_at: now
+                  })
+                  .select();
+                
+                if (updateResult.error) {
+                  console.error('[UPDATE] Insert error:', JSON.stringify(updateResult.error, null, 2));
+                  throw new Error('Failed to insert backup entry: ' + updateResult.error.message);
+                }
+                
+                console.log('[UPDATE] ✓ Backup entry created successfully');
+                console.log('[UPDATE] Created entry:', JSON.stringify(updateResult.data, null, 2));
+              }
+              
+              // Update last_backup_at
+              console.log('[UPDATE] Updating last_backup_at setting...');
+              const { error: settingsError, data: settingsData } = await supabase
+                .from('system_settings_kv')
+                .upsert({
+                  key: 'last_backup_at',
+                  value: { timestamp: now }
+                }, {
+                  onConflict: 'key'
+                })
+                .select();
+              
+              if (settingsError) {
+                console.error('[UPDATE] Settings update error:', JSON.stringify(settingsError, null, 2));
+                // Don't fail the whole step if settings update fails
+                console.warn('[UPDATE] Warning: Failed to update last_backup_at, but backup status was updated');
+              } else {
+                console.log('[UPDATE] ✓ last_backup_at updated successfully');
+              }
+              
+              console.log('');
+              console.log('==========================================');
+              console.log('✓ Backup history updated successfully');
+              console.log('✓ Backup stored at S3 key:', process.env.S3_KEY);
+              console.log('==========================================');
+              
+              process.exit(0);
+            } catch (error) {
+              console.error('');
+              console.error('==========================================');
+              console.error('✗ CRITICAL ERROR updating backup history');
+              console.error('==========================================');
+              console.error('Error:', error.message);
+              console.error('Stack:', error.stack);
+              console.error('');
+              console.error('This error means the backup completed but status was not updated.');
+              console.error('Check Supabase connection, RLS policies, and service role key.');
+              process.exit(1);
             }
-          } else {
-            // Insert new entry
-            console.log('Creating new backup entry...');
-            const result = await supabase
-              .from('backup_history')
-              .insert({
-                dispatch_id: process.env.DISPATCH_ID || null,
-                workflow_run_id: process.env.WORKFLOW_RUN_ID,
-                s3_key: process.env.S3_KEY,
-                status: 'success',
-                size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
-                error_text: null,
-                created_at: now
-              });
-            historyError = result.error;
-            if (result.error) {
-              console.error('Insert error:', result.error);
-            } else {
-              console.log('Backup entry created successfully');
-            }
-          }
-          
-          if (historyError) {
-            console.error('Error updating backup_history:', historyError);
-            process.exit(1);
-          }
-          
-          // Update last_backup_at
-          console.log('Updating last_backup_at setting...');
-          const { error: settingsError } = await supabase
-            .from('system_settings_kv')
-            .upsert({
-              key: 'last_backup_at',
-              value: { timestamp: now }
-            }, {
-              onConflict: 'key'
-            });
-          
-          if (settingsError) {
-            console.error('Error updating last_backup_at:', settingsError);
-            process.exit(1);
-          }
-          
-          console.log('Backup history updated successfully');
-          console.log('Backup stored at S3 key:', process.env.S3_KEY);
-          process.exit(0);
+          })();
           "
         env:
           DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
@@ -513,62 +557,112 @@ jobs:
           WORKFLOW_RUN_ID="${{ github.run_id }}"
           ERROR_MSG="Backup workflow failed. Check GitHub Actions logs for details."
           
+          echo "=========================================="
+          echo "Updating backup history (FAILURE)"
+          echo "=========================================="
+          echo "Dispatch ID: $DISPATCH_ID"
+          echo "Workflow Run ID: $WORKFLOW_RUN_ID"
+          echo "Error: $ERROR_MSG"
+          echo ""
+          
+          # Use IIFE to properly handle async/await
           node -e "
-          const { createClient } = require('@supabase/supabase-js');
-          
-          const supabase = createClient(
-            process.env.SUPABASE_URL,
-            process.env.SUPABASE_SERVICE_ROLE_KEY
-          );
-          
-          // Update backup_history with failure
-          // First try to find existing entry by dispatch_id
-          const { data: existingEntry } = await supabase
-            .from('backup_history')
-            .select('id')
-            .eq('dispatch_id', process.env.DISPATCH_ID || '')
-            .maybeSingle();
-          
-          let error = null;
-          if (existingEntry) {
-            // Update existing entry
-            const result = await supabase
-              .from('backup_history')
-              .update({
-                workflow_run_id: process.env.WORKFLOW_RUN_ID,
-                status: 'failed',
-                error_text: process.env.ERROR_MSG,
-                size_bytes: null,
-                s3_key: null
-              })
-              .eq('id', existingEntry.id);
-            error = result.error;
-          } else {
-            // Insert new entry
-            const result = await supabase
-              .from('backup_history')
-              .insert({
-                dispatch_id: process.env.DISPATCH_ID || null,
-                workflow_run_id: process.env.WORKFLOW_RUN_ID,
-                status: 'failed',
-                error_text: process.env.ERROR_MSG,
-                size_bytes: null,
-                s3_key: null
-              });
-            error = result.error;
-          }
-          
-          if (error) {
-            console.error('Error updating backup_history:', error);
-          } else {
-            console.log('Backup failure recorded');
-          }
-          
-          if (error) {
-            console.error('Error updating backup_history:', error);
-          } else {
-            console.log('Backup failure recorded');
-          }
+          (async () => {
+            try {
+              const { createClient } = require('@supabase/supabase-js');
+              
+              const supabase = createClient(
+                process.env.SUPABASE_URL,
+                process.env.SUPABASE_SERVICE_ROLE_KEY
+              );
+              
+              const dispatchId = process.env.DISPATCH_ID || '';
+              
+              console.log('[FAILURE] Looking for backup entry with dispatch_id:', dispatchId);
+              
+              // Find existing entry by dispatch_id
+              const { data: existingEntry, error: findError } = await supabase
+                .from('backup_history')
+                .select('id, dispatch_id, status')
+                .eq('dispatch_id', dispatchId)
+                .maybeSingle();
+              
+              if (findError) {
+                console.error('[FAILURE] Error finding entry:', JSON.stringify(findError, null, 2));
+                // Continue anyway - try to insert new entry
+              }
+              
+              console.log('[FAILURE] Existing entry:', existingEntry ? 
+                'Found (ID: ' + existingEntry.id + ', Status: ' + existingEntry.status + ')' : 
+                'Not found - will create new');
+              
+              let updateResult;
+              if (existingEntry) {
+                // Update existing entry
+                console.log('[FAILURE] Updating existing entry to failed status...');
+                updateResult = await supabase
+                  .from('backup_history')
+                  .update({
+                    workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                    status: 'failed',
+                    error_text: process.env.ERROR_MSG,
+                    size_bytes: null,
+                    s3_key: null
+                  })
+                  .eq('id', existingEntry.id)
+                  .select();
+                
+                if (updateResult.error) {
+                  console.error('[FAILURE] Update error:', JSON.stringify(updateResult.error, null, 2));
+                  throw new Error('Failed to update backup entry: ' + updateResult.error.message);
+                }
+                
+                console.log('[FAILURE] ✓ Backup failure recorded (updated)');
+                console.log('[FAILURE] Updated entry:', JSON.stringify(updateResult.data, null, 2));
+              } else {
+                // Insert new entry
+                console.log('[FAILURE] Creating new failed backup entry...');
+                updateResult = await supabase
+                  .from('backup_history')
+                  .insert({
+                    dispatch_id: dispatchId || null,
+                    workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                    status: 'failed',
+                    error_text: process.env.ERROR_MSG,
+                    size_bytes: null,
+                    s3_key: null
+                  })
+                  .select();
+                
+                if (updateResult.error) {
+                  console.error('[FAILURE] Insert error:', JSON.stringify(updateResult.error, null, 2));
+                  throw new Error('Failed to insert backup entry: ' + updateResult.error.message);
+                }
+                
+                console.log('[FAILURE] ✓ Backup failure recorded (created)');
+                console.log('[FAILURE] Created entry:', JSON.stringify(updateResult.data, null, 2));
+              }
+              
+              console.log('');
+              console.log('==========================================');
+              console.log('✓ Backup failure status updated');
+              console.log('==========================================');
+              
+              process.exit(0);
+            } catch (error) {
+              console.error('');
+              console.error('==========================================');
+              console.error('✗ CRITICAL ERROR updating failure status');
+              console.error('==========================================');
+              console.error('Error:', error.message);
+              console.error('Stack:', error.stack);
+              console.error('');
+              console.error('The backup failed AND we could not update the status.');
+              console.error('Check Supabase connection, RLS policies, and service role key.');
+              // Don't exit with error code - we've already failed
+              process.exit(0);
+            }
+          })();
           "
         env:
           DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
