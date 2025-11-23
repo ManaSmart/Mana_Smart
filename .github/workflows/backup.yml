@@ -62,6 +62,9 @@ jobs:
           const { createClient } = require('@supabase/supabase-js');
           const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
           
+          const triggerType = process.env.TRIGGER_TYPE || 'scheduled';
+          console.log('Trigger type:', triggerType);
+          
           supabase
             .from('system_settings_kv')
             .select('value')
@@ -70,17 +73,28 @@ jobs:
             .then(({ data, error }) => {
               if (error) {
                 console.error('Error checking backup status:', error);
+                // For manual triggers, continue even if check fails
+                if (triggerType === 'manual') {
+                  console.log('Manual trigger - continuing despite check error');
+                  process.exit(0);
+                }
                 process.exit(1);
               }
               const enabled = data?.value?.enabled ?? false;
               console.log('Backup enabled:', enabled);
-              if (!enabled) {
-                console.log('Backup is disabled. Exiting.');
+              // For manual triggers, always run regardless of enabled status
+              if (!enabled && triggerType !== 'manual') {
+                console.log('Backup is disabled and this is a scheduled run. Exiting.');
                 process.exit(0);
+              }
+              if (triggerType === 'manual') {
+                console.log('Manual trigger - proceeding with backup');
               }
               process.exit(0);
             });
           "
+        env:
+          TRIGGER_TYPE: ${{ github.event.inputs.trigger_type || 'scheduled' }}
 
       - name: Create backup directory
         run: |
@@ -157,8 +171,6 @@ jobs:
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = require('path');
-          const https = require('https');
-          const http = require('http');
           
           const supabase = createClient(
             process.env.SUPABASE_URL,
@@ -176,58 +188,58 @@ jobs:
           }
           
           async function downloadFile(bucket, filePath, localPath) {
-            const { data, error } = await supabase.storage
-              .from(bucket)
-              .download(filePath);
-            
-            if (error) {
-              console.error(\`Error downloading \${bucket}/\${filePath}:\`, error);
+            try {
+              const { data, error } = await supabase.storage
+                .from(bucket)
+                .download(filePath);
+              
+              if (error) {
+                console.error(\`Error downloading \${bucket}/\${filePath}:\`, error.message);
+                return false;
+              }
+              
+              const dir = path.dirname(localPath);
+              if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+              }
+              
+              const arrayBuffer = await data.arrayBuffer();
+              const buffer = Buffer.from(arrayBuffer);
+              fs.writeFileSync(localPath, buffer);
+              return true;
+            } catch (err) {
+              console.error(\`Exception downloading \${bucket}/\${filePath}:\`, err.message);
               return false;
             }
-            
-            const dir = path.dirname(localPath);
-            if (!fs.existsSync(dir)) {
-              fs.mkdirSync(dir, { recursive: true });
-            }
-            
-            const arrayBuffer = await data.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            fs.writeFileSync(localPath, buffer);
-            return true;
           }
           
           async function listFiles(bucket) {
-            const { data, error } = await supabase.storage
-              .from(bucket)
-              .list('', { limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } });
-            
-            if (error) {
-              console.error(\`Error listing \${bucket}:\`, error);
-              return [];
-            }
-            
             const files = [];
             
             async function listRecursive(folder = '') {
-              const { data: items, error } = await supabase.storage
-                .from(bucket)
-                .list(folder, { limit: 1000, offset: 0 });
-              
-              if (error) {
-                console.error(\`Error listing \${bucket}/\${folder}:\`, error);
-                return;
-              }
-              
-              for (const item of items || []) {
-                const fullPath = folder ? \`\${folder}/\${item.name}\` : item.name;
+              try {
+                const { data: items, error } = await supabase.storage
+                  .from(bucket)
+                  .list(folder, { limit: 1000, offset: 0 });
                 
-                if (item.id === null) {
-                  // It's a folder, recurse
-                  await listRecursive(fullPath);
-                } else {
-                  // It's a file
-                  files.push(fullPath);
+                if (error) {
+                  console.error(\`Error listing \${bucket}/\${folder}:\`, error.message);
+                  return;
                 }
+                
+                for (const item of items || []) {
+                  const fullPath = folder ? \`\${folder}/\${item.name}\` : item.name;
+                  
+                  if (item.id === null) {
+                    // It's a folder, recurse
+                    await listRecursive(fullPath);
+                  } else {
+                    // It's a file
+                    files.push(fullPath);
+                  }
+                }
+              } catch (err) {
+                console.error(\`Exception listing \${bucket}/\${folder}:\`, err.message);
               }
             }
             
@@ -236,27 +248,51 @@ jobs:
           }
           
           (async () => {
+            const startTime = Date.now();
             let totalFiles = 0;
             let totalSize = 0;
+            const MAX_CONCURRENT_DOWNLOADS = 10; // Download up to 10 files in parallel
             
             for (const bucket of buckets) {
               console.log(\`Processing bucket: \${bucket}\`);
+              const bucketStartTime = Date.now();
               const files = await listFiles(bucket);
               console.log(\`Found \${files.length} files in \${bucket}\`);
               
-              for (const filePath of files) {
-                const localPath = \`backup/storage/\${bucket}/\${filePath}\`;
-                const success = await downloadFile(bucket, filePath, localPath);
+              // Download files in parallel batches
+              for (let i = 0; i < files.length; i += MAX_CONCURRENT_DOWNLOADS) {
+                const batch = files.slice(i, i + MAX_CONCURRENT_DOWNLOADS);
+                const downloadPromises = batch.map(async (filePath) => {
+                  const localPath = \`backup/storage/\${bucket}/\${filePath}\`;
+                  const success = await downloadFile(bucket, filePath, localPath);
+                  
+                  if (success) {
+                    const stats = fs.statSync(localPath);
+                    return { success: true, size: stats.size };
+                  }
+                  return { success: false, size: 0 };
+                });
                 
-                if (success) {
-                  totalFiles++;
-                  const stats = fs.statSync(localPath);
-                  totalSize += stats.size;
+                const results = await Promise.all(downloadPromises);
+                results.forEach(result => {
+                  if (result.success) {
+                    totalFiles++;
+                    totalSize += result.size;
+                  }
+                });
+                
+                // Log progress every 10 files
+                if ((i + batch.length) % 10 === 0 || i + batch.length === files.length) {
+                  console.log(\`Progress: \${Math.min(i + batch.length, files.length)}/\${files.length} files processed\`);
                 }
               }
+              
+              const bucketTime = ((Date.now() - bucketStartTime) / 1000).toFixed(2);
+              console.log(\`Bucket \${bucket} completed in \${bucketTime}s: \${totalFiles} files, \${(totalSize / 1024 / 1024).toFixed(2)} MB\`);
             }
             
-            console.log(\`Downloaded \${totalFiles} files, total size: \${totalSize} bytes\`);
+            const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
+            console.log(\`Storage backup completed in \${totalTime}s: \${totalFiles} files, total size: \${(totalSize / 1024 / 1024).toFixed(2)} MB\`);
           })().catch(err => {
             console.error('Storage download error:', err);
             process.exit(1);
@@ -286,28 +322,59 @@ jobs:
           ARCHIVE_NAME="${{ steps.create_archive.outputs.archive_name }}"
           TIMESTAMP=$(date -u +"%Y-%m-%d")
           S3_KEY="backups/$TIMESTAMP/$ARCHIVE_NAME"
+          S3_BUCKET="${{ secrets.AWS_S3_BUCKET }}"
+          S3_REGION="${{ secrets.AWS_S3_REGION }}"
+          
+          echo "=========================================="
+          echo "Uploading backup to S3..."
+          echo "=========================================="
+          echo "Archive: $ARCHIVE_NAME"
+          echo "S3 Bucket: $S3_BUCKET"
+          echo "S3 Region: $S3_REGION"
+          echo "S3 Key: $S3_KEY"
+          echo "Full S3 Path: s3://$S3_BUCKET/$S3_KEY"
+          
+          if [ -z "$S3_BUCKET" ] || [ -z "$S3_REGION" ]; then
+            echo "ERROR: AWS S3 configuration is missing!"
+            echo "S3_BUCKET: ${S3_BUCKET:-NOT SET}"
+            echo "S3_REGION: ${S3_REGION:-NOT SET}"
+            exit 1
+          fi
+          
+          if [ ! -f "$ARCHIVE_NAME" ]; then
+            echo "ERROR: Archive file not found: $ARCHIVE_NAME"
+            exit 1
+          fi
+          
+          ARCHIVE_SIZE=$(du -h "$ARCHIVE_NAME" | cut -f1)
+          echo "Archive size: $ARCHIVE_SIZE"
           
           MAX_RETRIES=3
           RETRY_COUNT=0
           UPLOAD_SUCCESS=false
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$UPLOAD_SUCCESS" = false ]; do
+            echo ""
             echo "Upload attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES..."
             
-            if aws s3 cp "$ARCHIVE_NAME" "s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY" --region ${{ secrets.AWS_S3_REGION }}; then
-              echo "Upload successful!"
+            if aws s3 cp "$ARCHIVE_NAME" "s3://$S3_BUCKET/$S3_KEY" --region "$S3_REGION"; then
+              echo "✓ Upload completed!"
               UPLOAD_SUCCESS=true
               
               # Verify the upload
-              if aws s3 ls "s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY" --region ${{ secrets.AWS_S3_REGION }} > /dev/null 2>&1; then
-                echo "Upload verified successfully"
+              echo "Verifying upload..."
+              if aws s3 ls "s3://$S3_BUCKET/$S3_KEY" --region "$S3_REGION" > /dev/null 2>&1; then
+                echo "✓ Upload verified successfully"
                 echo "s3_key=$S3_KEY" >> $GITHUB_OUTPUT
+                echo ""
+                echo "Backup successfully stored at:"
+                echo "  s3://$S3_BUCKET/$S3_KEY"
               else
-                echo "Upload verification failed"
+                echo "✗ Upload verification failed"
                 UPLOAD_SUCCESS=false
               fi
             else
-              echo "Upload failed, retrying..."
+              echo "✗ Upload failed, retrying..."
               RETRY_COUNT=$((RETRY_COUNT + 1))
               if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                 sleep $((RETRY_COUNT * 5))
@@ -316,7 +383,12 @@ jobs:
           done
           
           if [ "$UPLOAD_SUCCESS" = false ]; then
-            echo "S3 upload failed after $MAX_RETRIES attempts"
+            echo ""
+            echo "ERROR: S3 upload failed after $MAX_RETRIES attempts"
+            echo "Please check:"
+            echo "  1. AWS credentials are correct"
+            echo "  2. S3 bucket exists: $S3_BUCKET"
+            echo "  3. IAM permissions allow upload to bucket"
             exit 1
           fi
 
@@ -329,6 +401,12 @@ jobs:
           DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
           WORKFLOW_RUN_ID="${{ github.run_id }}"
           
+          echo "Updating backup history..."
+          echo "Dispatch ID: $DISPATCH_ID"
+          echo "Workflow Run ID: $WORKFLOW_RUN_ID"
+          echo "S3 Key: $S3_KEY"
+          echo "Archive Size: $ARCHIVE_SIZE bytes"
+          
           node -e "
           const { createClient } = require('@supabase/supabase-js');
           
@@ -339,20 +417,63 @@ jobs:
           
           const now = new Date().toISOString();
           
+          console.log('Looking for existing backup entry with dispatch_id:', process.env.DISPATCH_ID);
+          
           // Update or insert backup_history
-          const { error: historyError } = await supabase
+          // First try to find existing entry by dispatch_id
+          const { data: existingEntry, error: findError } = await supabase
             .from('backup_history')
-            .upsert({
-              dispatch_id: process.env.DISPATCH_ID || null,
-              workflow_run_id: process.env.WORKFLOW_RUN_ID,
-              s3_key: process.env.S3_KEY,
-              status: 'success',
-              size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
-              error_text: null,
-              created_at: now
-            }, {
-              onConflict: 'dispatch_id,workflow_run_id'
-            });
+            .select('id')
+            .eq('dispatch_id', process.env.DISPATCH_ID || '')
+            .maybeSingle();
+          
+          if (findError) {
+            console.error('Error finding existing entry:', findError);
+          }
+          
+          console.log('Existing entry found:', existingEntry ? 'Yes (ID: ' + existingEntry.id + ')' : 'No');
+          
+          let historyError = null;
+          if (existingEntry) {
+            // Update existing entry
+            console.log('Updating existing backup entry...');
+            const result = await supabase
+              .from('backup_history')
+              .update({
+                workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                s3_key: process.env.S3_KEY,
+                status: 'success',
+                size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
+                error_text: null,
+              })
+              .eq('id', existingEntry.id);
+            historyError = result.error;
+            if (result.error) {
+              console.error('Update error:', result.error);
+            } else {
+              console.log('Backup entry updated successfully');
+            }
+          } else {
+            // Insert new entry
+            console.log('Creating new backup entry...');
+            const result = await supabase
+              .from('backup_history')
+              .insert({
+                dispatch_id: process.env.DISPATCH_ID || null,
+                workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                s3_key: process.env.S3_KEY,
+                status: 'success',
+                size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
+                error_text: null,
+                created_at: now
+              });
+            historyError = result.error;
+            if (result.error) {
+              console.error('Insert error:', result.error);
+            } else {
+              console.log('Backup entry created successfully');
+            }
+          }
           
           if (historyError) {
             console.error('Error updating backup_history:', historyError);
@@ -360,11 +481,14 @@ jobs:
           }
           
           // Update last_backup_at
+          console.log('Updating last_backup_at setting...');
           const { error: settingsError } = await supabase
             .from('system_settings_kv')
             .upsert({
               key: 'last_backup_at',
-              value: now
+              value: { timestamp: now }
+            }, {
+              onConflict: 'key'
             });
           
           if (settingsError) {
@@ -373,6 +497,7 @@ jobs:
           }
           
           console.log('Backup history updated successfully');
+          console.log('Backup stored at S3 key:', process.env.S3_KEY);
           process.exit(0);
           "
         env:
@@ -397,18 +522,47 @@ jobs:
           );
           
           // Update backup_history with failure
-          const { error } = await supabase
+          // First try to find existing entry by dispatch_id
+          const { data: existingEntry } = await supabase
             .from('backup_history')
-            .upsert({
-              dispatch_id: process.env.DISPATCH_ID || null,
-              workflow_run_id: process.env.WORKFLOW_RUN_ID,
-              status: 'failed',
-              error_text: process.env.ERROR_MSG,
-              size_bytes: null,
-              s3_key: null
-            }, {
-              onConflict: 'dispatch_id,workflow_run_id'
-            });
+            .select('id')
+            .eq('dispatch_id', process.env.DISPATCH_ID || '')
+            .maybeSingle();
+          
+          let error = null;
+          if (existingEntry) {
+            // Update existing entry
+            const result = await supabase
+              .from('backup_history')
+              .update({
+                workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                status: 'failed',
+                error_text: process.env.ERROR_MSG,
+                size_bytes: null,
+                s3_key: null
+              })
+              .eq('id', existingEntry.id);
+            error = result.error;
+          } else {
+            // Insert new entry
+            const result = await supabase
+              .from('backup_history')
+              .insert({
+                dispatch_id: process.env.DISPATCH_ID || null,
+                workflow_run_id: process.env.WORKFLOW_RUN_ID,
+                status: 'failed',
+                error_text: process.env.ERROR_MSG,
+                size_bytes: null,
+                s3_key: null
+              });
+            error = result.error;
+          }
+          
+          if (error) {
+            console.error('Error updating backup_history:', error);
+          } else {
+            console.log('Backup failure recorded');
+          }
           
           if (error) {
             console.error('Error updating backup_history:', error);

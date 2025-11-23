@@ -27,6 +27,7 @@ import {
   CheckSquare,
   Square,
   Loader2,
+  Database,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
@@ -45,6 +46,7 @@ import { validateFile } from "../lib/storage";
 import { ACCESS_AREAS, ACCESS_AREA_MAP } from "../config/access-areas";
 import type { AccessAction } from "../config/access-areas";
 import type { PageId } from "../config/page-map";
+import { BackupSettings } from "./BackupSettings";
 import {
   normalizePermissions,
   hasPermission,
@@ -1369,7 +1371,7 @@ export function Settings({
       </div>
 
       <Tabs defaultValue="branding" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5 lg:w-auto bg-gray-100/50 p-1 rounded-lg">
+        <TabsList className="grid w-full grid-cols-6 lg:w-auto bg-gray-100/50 p-1 rounded-lg">
           <TabsTrigger 
             value="branding" 
             className="gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=inactive]:bg-transparent"
@@ -1404,6 +1406,13 @@ export function Settings({
           >
             <SettingsIcon className="h-4 w-4" />
             <span className="hidden sm:inline">System</span>
+          </TabsTrigger>
+          <TabsTrigger 
+            value="backup" 
+            className="gap-2 data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=inactive]:bg-transparent"
+          >
+            <Database className="h-4 w-4" />
+            <span className="hidden sm:inline">Backup</span>
           </TabsTrigger>
         </TabsList>
 
@@ -2266,7 +2275,16 @@ export function Settings({
                     </div>
                     <Switch
                       checked={autoBackup}
-                      onCheckedChange={setAutoBackup}
+                      onCheckedChange={async (checked) => {
+                        setAutoBackup(checked);
+                        // Sync with BackupSettings
+                        try {
+                          const { updateBackupEnabled } = await import("../lib/backupApi");
+                          await updateBackupEnabled(checked);
+                        } catch (error) {
+                          console.error("Failed to sync backup setting:", error);
+                        }
+                      }}
                       disabled={systemSettingsSaving}
                     />
                   </div>
@@ -2308,6 +2326,14 @@ export function Settings({
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Backup Settings */}
+        <TabsContent value="backup" className="space-y-6">
+          <BackupSettings 
+            autoBackup={autoBackup}
+            onAutoBackupChange={setAutoBackup}
+          />
         </TabsContent>
       </Tabs>
     </div>

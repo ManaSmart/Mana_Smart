@@ -34,11 +34,22 @@ async function callEdgeFunction(
     requestHeaders['Authorization'] = `Bearer ${BACKUP_API_KEY}`;
   }
 
-  const response = await fetch(url, {
-    method,
-    headers: requestHeaders,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: requestHeaders,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (fetchError) {
+    // Handle network errors (function not deployed, CORS, etc.)
+    if (fetchError instanceof TypeError && fetchError.message.includes('Failed to fetch')) {
+      throw new Error(
+        `Edge Function '${functionName}' not found or not accessible. Please ensure it is deployed.`
+      );
+    }
+    throw fetchError;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -129,6 +140,7 @@ export async function getBackupHistory(limit: number = 5): Promise<
     status: 'success' | 'failed' | 'cancelled' | 'in_progress';
     size_bytes: number | null;
     error_text: string | null;
+    dispatch_id?: string | null;
   }>
 > {
   const url = `${SUPABASE_URL}/functions/v1/backup-history?limit=${limit}`;
@@ -147,6 +159,42 @@ export async function getBackupHistory(limit: number = 5): Promise<
   }
 
   return await historyResponse.json();
+}
+
+/**
+ * Cancel a stuck backup (or multiple backups)
+ * @param backupId Single backup ID to cancel
+ * @param backupIds Array of backup IDs to cancel
+ * @returns Success message and count of cancelled backups
+ */
+export async function cancelBackup(
+  backupId?: string,
+  backupIds?: string[]
+): Promise<{ success: boolean; message: string; cancelled_count: number }> {
+  const response = await callEdgeFunction('cancel-backup', {
+    method: 'POST',
+    body: backupIds 
+      ? { backup_ids: backupIds }
+      : { backup_id: backupId },
+  });
+
+  return await response.json();
+}
+
+/**
+ * Delete a backup history record
+ * @param backupId The backup ID to delete
+ * @returns Success message
+ */
+export async function deleteBackup(
+  backupId: string
+): Promise<{ success: boolean; message: string }> {
+  const response = await callEdgeFunction('delete-backup', {
+    method: 'POST',
+    body: { backup_id: backupId },
+  });
+
+  return await response.json();
 }
 
 /**

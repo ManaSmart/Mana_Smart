@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
 import { Switch } from "./ui/switch";
@@ -6,6 +6,7 @@ import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Progress } from "./ui/progress";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
 import {
   Download,
   RefreshCw,
@@ -15,6 +16,9 @@ import {
   Loader2,
   Database,
   HardDrive,
+  X,
+  Trash2,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -24,6 +28,8 @@ import {
   updateBackupEnabled,
   getBackupHistory,
   generateSignedUrl,
+  cancelBackup,
+  deleteBackup,
 } from "../lib/backupApi";
 
 interface BackupHistoryItem {
@@ -33,32 +39,151 @@ interface BackupHistoryItem {
   status: "success" | "failed" | "cancelled" | "in_progress";
   size_bytes: number | null;
   error_text: string | null;
+  dispatch_id?: string | null;
 }
 
 const POLL_INTERVAL_MS = 3000; // Poll every 3 seconds
-const MAX_POLL_ATTEMPTS = 120; // Max 6 minutes of polling
+const MAX_POLL_ATTEMPTS = 400; // Max 20 minutes of polling (400 * 3s = 1200s = 20min)
 
-export function BackupSettings() {
+interface BackupSettingsProps {
+  autoBackup?: boolean;
+  onAutoBackupChange?: (enabled: boolean) => void;
+}
+
+export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSettingsProps = {}) {
   const [backupEnabled, setBackupEnabled] = useState(false);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
   const [history, setHistory] = useState<BackupHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [inProgressProgress, setInProgressProgress] = useState<Record<string, number>>({});
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const hasStartedPollingRef = useRef(false);
   const [manualBackupProgress, setManualBackupProgress] = useState<{
     isRunning: boolean;
     progress: number;
     dispatchId: string | null;
+    backupId?: string | null;
+    isTimedOut?: boolean;
   }>({
     isRunning: false,
     progress: 0,
     dispatchId: null,
+    backupId: null,
+    isTimedOut: false,
   });
+  
+  // Ref to track cancellation
+  const cancelPollingRef = useRef(false);
+  
+  // Dialog state for cancel confirmation
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
+  const [cancelAllDialogOpen, setCancelAllDialogOpen] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  
+  // Dialog state for delete confirmation
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTargetDate, setDeleteTargetDate] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Load initial settings and history
   useEffect(() => {
     loadSettings();
     loadHistory();
+  }, []);
+
+  // Poll for in-progress backups in history (update progress only, don't refresh history)
+  useEffect(() => {
+    // Clean up any existing interval
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+
+    const inProgressItems = history.filter(item => item.status === "in_progress");
+    
+    if (inProgressItems.length === 0) {
+      hasStartedPollingRef.current = false;
+      return;
+    }
+
+    // Only log once when polling starts
+    if (!hasStartedPollingRef.current) {
+      console.log(`[Backup] Found ${inProgressItems.length} in-progress backup(s), starting progress updates...`);
+      hasStartedPollingRef.current = true;
+    }
+
+    const updateProgressForBackups = () => {
+      const currentInProgress = history.filter(item => item.status === "in_progress");
+      
+      for (const item of currentInProgress) {
+        // Estimate progress based on time elapsed
+        const createdAt = new Date(item.created_at).getTime();
+        const now = Date.now();
+        const elapsedMinutes = (now - createdAt) / (1000 * 60);
+        
+        // Estimate progress: assume backup takes ~15 minutes max
+        // Start at 10%, reach 95% at 15 minutes
+        const estimatedProgress = Math.min(10 + Math.floor((elapsedMinutes / 15) * 85), 95);
+        
+        setInProgressProgress(prev => {
+          // Only update if progress changed significantly (avoid unnecessary re-renders)
+          const currentProgress = prev[item.id] || 10;
+          if (Math.abs(currentProgress - estimatedProgress) >= 1) {
+            return {
+              ...prev,
+              [item.id]: estimatedProgress,
+            };
+          }
+          return prev;
+        });
+      }
+
+      // If no more in-progress items, stop polling and clear progress
+      if (currentInProgress.length === 0) {
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+          hasStartedPollingRef.current = false;
+        }
+        // Clear progress for items that are no longer in progress
+        setInProgressProgress(prev => {
+          const updated = { ...prev };
+          const inProgressIds = new Set(currentInProgress.map(item => item.id));
+          Object.keys(updated).forEach(id => {
+            if (!inProgressIds.has(id)) {
+              delete updated[id];
+            }
+          });
+          return updated;
+        });
+      }
+    };
+
+    // Update progress immediately
+    updateProgressForBackups();
+    
+    // Then update progress every 5 seconds (without refreshing history)
+    pollingIntervalRef.current = setInterval(() => {
+      updateProgressForBackups();
+    }, 5000);
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [history]);
+
+  // Cleanup: reset cancellation flag when component unmounts
+  useEffect(() => {
+    return () => {
+      cancelPollingRef.current = false;
+    };
   }, []);
 
   const loadSettings = async () => {
@@ -85,11 +210,123 @@ export function BackupSettings() {
     }
   };
 
+  // Background monitoring for timed-out backups
+  const startBackgroundMonitoring = (dispatchId: string, backupId?: string | null) => {
+    console.log(`[Backup] Starting background monitoring for dispatch_id: ${dispatchId}, backup_id: ${backupId || 'not available'}`);
+    
+    let checkCount = 0;
+    const MAX_BACKGROUND_CHECKS = 120; // 1 hour (120 * 30s = 3600s)
+    
+    const checkInterval = setInterval(async () => {
+      checkCount++;
+      console.log(`[Backup] Background check ${checkCount}/${MAX_BACKGROUND_CHECKS}...`);
+      
+      try {
+        // First, try to check via backup_id in history (faster and more reliable)
+        if (backupId) {
+          const history = await getBackupHistory(10);
+          const backup = history.find(b => b.id === backupId);
+          
+          if (backup) {
+            if (backup.status === "success" && backup.s3_key) {
+              // Backup completed!
+              clearInterval(checkInterval);
+              setManualBackupProgress((prev) => ({
+                ...prev,
+                progress: 100,
+                isTimedOut: false,
+              }));
+              try {
+                const { signed_url } = await generateSignedUrl(backup.s3_key);
+                toast.success("Backup completed! Opening download...");
+                window.open(signed_url, "_blank");
+              } catch (downloadError) {
+                console.error("[Backup] Failed to generate download URL:", downloadError);
+                toast.success("Backup completed! Check the backup history to download.");
+              }
+              await loadHistory();
+              return;
+            } else if (backup.status === "failed") {
+              // Backup failed
+              clearInterval(checkInterval);
+              setManualBackupProgress((prev) => ({
+                ...prev,
+                isRunning: false,
+                isTimedOut: false,
+              }));
+              toast.error(`Backup failed: ${backup.error_text || "Unknown error"}`);
+              await loadHistory();
+              return;
+            } else if (backup.status === "cancelled") {
+              // Backup was cancelled
+              clearInterval(checkInterval);
+              setManualBackupProgress((prev) => ({
+                ...prev,
+                isRunning: false,
+                isTimedOut: false,
+              }));
+              await loadHistory();
+              return;
+            }
+            // Still in progress, continue monitoring
+            console.log(`[Backup] Background check: backup still ${backup.status}`);
+          }
+        }
+        
+        // Also check via status API as fallback
+        const status = await getBackupStatus(dispatchId);
+        
+        if (status.status === "success" && status.signed_url) {
+          // Backup completed!
+          clearInterval(checkInterval);
+          setManualBackupProgress((prev) => ({
+            ...prev,
+            progress: 100,
+            isTimedOut: false,
+          }));
+          toast.success("Backup completed! Opening download...");
+          window.open(status.signed_url, "_blank");
+          await loadHistory();
+        } else if (status.status === "failed") {
+          // Backup failed
+          clearInterval(checkInterval);
+          setManualBackupProgress((prev) => ({
+            ...prev,
+            isRunning: false,
+            isTimedOut: false,
+          }));
+          toast.error(`Backup failed: ${status.error || "Unknown error"}`);
+          await loadHistory();
+        } else {
+          // Still in progress, continue monitoring
+          console.log(`[Backup] Background check: still ${status.status}`);
+        }
+      } catch (error) {
+        console.warn("[Backup] Background monitoring error:", error);
+        // Continue monitoring on error
+      }
+    }, 30000); // Check every 30 seconds
+    
+    // Stop monitoring after 1 hour (120 checks)
+    setTimeout(() => {
+      clearInterval(checkInterval);
+      console.log("[Backup] Background monitoring stopped after 1 hour");
+      setManualBackupProgress((prev) => ({
+        ...prev,
+        isTimedOut: false,
+      }));
+    }, 60 * 60 * 1000); // 1 hour
+  };
+
   const handleToggleBackup = async (enabled: boolean) => {
     setIsToggling(true);
     try {
       await updateBackupEnabled(enabled);
       setBackupEnabled(enabled);
+      // Sync with Settings.tsx auto backup setting
+      if (onAutoBackupChange) {
+        onAutoBackupChange(enabled);
+      }
       toast.success(`Backup ${enabled ? "enabled" : "disabled"}`);
     } catch (error) {
       console.error("Failed to update backup setting:", error);
@@ -101,69 +338,257 @@ export function BackupSettings() {
     }
   };
 
+  // Sync backupEnabled with autoBackup prop from Settings
+  useEffect(() => {
+    if (autoBackup !== undefined && autoBackup !== backupEnabled) {
+      setBackupEnabled(autoBackup);
+    }
+  }, [autoBackup]);
+
+  const handleCancelBackup = async () => {
+    cancelPollingRef.current = true;
+    
+    // If we have a backup_id, cancel it in the database
+    if (manualBackupProgress.backupId) {
+      try {
+        console.log("[Backup] Cancelling backup in database:", manualBackupProgress.backupId);
+        await cancelBackup(manualBackupProgress.backupId);
+        toast.success("Backup cancelled successfully");
+      } catch (error) {
+        console.error("[Backup] Failed to cancel backup:", error);
+        toast.error("Failed to cancel backup in database. It may still be running.");
+      }
+    } else if (manualBackupProgress.dispatchId) {
+      // If we don't have backup_id yet, try to find it from history
+      try {
+        const history = await getBackupHistory(10);
+        const matchingBackup = history.find(b => b.dispatch_id === manualBackupProgress.dispatchId);
+        if (matchingBackup && matchingBackup.status === "in_progress") {
+          console.log("[Backup] Found matching backup, cancelling:", matchingBackup.id);
+          await cancelBackup(matchingBackup.id);
+          toast.success("Backup cancelled successfully");
+        } else {
+          toast.info("Backup polling cancelled. The backup may still be running in the background.");
+        }
+      } catch (error) {
+        console.error("[Backup] Failed to find and cancel backup:", error);
+        toast.info("Backup polling cancelled. The backup may still be running in the background.");
+      }
+    } else {
+      toast.info("Backup polling cancelled. The backup may still be running in the background.");
+    }
+    
+    setIsLoading(false);
+    setManualBackupProgress({
+      isRunning: false,
+      progress: 0,
+      dispatchId: null,
+      backupId: null,
+      isTimedOut: false,
+    });
+    
+    // Refresh history to see updated status
+    await loadHistory();
+  };
+
   const handleDownloadNow = async () => {
+    // Reset cancellation flag
+    cancelPollingRef.current = false;
+    
     setIsLoading(true);
     setManualBackupProgress({
       isRunning: true,
       progress: 0,
       dispatchId: null,
+      backupId: null,
+      isTimedOut: false,
     });
 
     try {
       // Trigger backup
-      const { dispatch_id, status_url } = await triggerBackup();
+      const { dispatch_id } = await triggerBackup();
       setManualBackupProgress((prev) => ({
         ...prev,
         dispatchId: dispatch_id,
         progress: 10,
       }));
 
-      toast.info("Backup started. This may take a few minutes...");
+      toast.info("Backup started. This may take several minutes for large databases...");
 
       // Poll for status
       let pollAttempts = 0;
       const pollStatus = async (): Promise<string | null> => {
+        // Check if cancelled
+        if (cancelPollingRef.current) {
+          console.log("[Backup] Polling cancelled by user");
+          throw new Error("Backup polling cancelled");
+        }
+
         if (pollAttempts >= MAX_POLL_ATTEMPTS) {
-          throw new Error("Backup timed out. Please check the backup history.");
+          // Before timing out, do multiple final checks with delays
+          console.warn(`[Backup] Polling timeout reached (${MAX_POLL_ATTEMPTS} attempts). Doing extended final checks...`);
+          
+          // Do 3 final checks with 5 second delays (total 15 seconds of extra checking)
+          for (let finalCheck = 1; finalCheck <= 3; finalCheck++) {
+            try {
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+              console.log(`[Backup] Final check ${finalCheck}/3...`);
+              const finalStatus = await getBackupStatus(dispatch_id);
+              
+              console.log(`[Backup] Final check ${finalCheck}/3 result:`, finalStatus);
+              
+              // Store backup_id if we get it
+              if (finalStatus.backup_id && !manualBackupProgress.backupId) {
+                setManualBackupProgress((prev) => ({
+                  ...prev,
+                  backupId: finalStatus.backup_id,
+                }));
+              }
+              
+              if (finalStatus.status === "success" && finalStatus.signed_url) {
+                // Backup actually completed!
+                setManualBackupProgress((prev) => ({
+                  ...prev,
+                  progress: 100,
+                }));
+                console.log("[Backup] Backup completed on final check!");
+                return finalStatus.signed_url;
+              } else if (finalStatus.status === "failed") {
+                throw new Error(finalStatus.error || "Backup failed");
+              } else if (finalStatus.status === "in_progress" || finalStatus.status === "pending") {
+                // Still in progress, continue checking
+                console.log(`[Backup] Still in progress on final check ${finalCheck}/3, continuing...`);
+              }
+            } catch (finalCheckError) {
+              // If it's a failure error, throw it
+              if (finalCheckError instanceof Error && finalCheckError.message.includes("Backup failed")) {
+                throw finalCheckError;
+              }
+              // Otherwise, continue to next check
+              console.warn(`[Backup] Final check ${finalCheck}/3 failed:`, finalCheckError);
+            }
+          }
+          
+          // Backup still not complete after all final checks
+          console.warn(`[Backup] Backup still in progress after extended timeout. Will continue checking history in background.`);
+          setManualBackupProgress((prev) => ({
+            ...prev,
+            progress: 95, // Show 95% to indicate it's almost done
+            isTimedOut: true, // Mark as timed out but still monitoring
+          }));
+          throw new Error(
+            `Backup is taking longer than expected (over 20 minutes). The backup is still running in the background. ` +
+            `The system will continue checking automatically. You can close this dialog and check the backup history.`
+          );
         }
 
         pollAttempts++;
+        
+        // Better progress calculation with faster initial progress
+        // Use exponential curve: fast at start, slower as we approach completion
+        // First 50 attempts: 10% -> 60% (fast initial progress)
+        // Next 150 attempts: 60% -> 85% (moderate progress)
+        // Remaining attempts: 85% -> 95% (slow progress, waiting for completion)
+        let progressPercent: number;
+        if (pollAttempts <= 50) {
+          // Fast initial progress: 10% to 60% in first 50 attempts
+          progressPercent = 10 + Math.floor((pollAttempts / 50) * 50);
+        } else if (pollAttempts <= 200) {
+          // Moderate progress: 60% to 85% in next 150 attempts
+          const remainingAttempts = pollAttempts - 50;
+          progressPercent = 60 + Math.floor((remainingAttempts / 150) * 25);
+        } else {
+          // Slow progress: 85% to 95% for remaining attempts
+          const remainingAttempts = pollAttempts - 200;
+          const maxRemaining = MAX_POLL_ATTEMPTS - 200;
+          progressPercent = 85 + Math.floor((remainingAttempts / maxRemaining) * 10);
+        }
+        progressPercent = Math.min(progressPercent, 95);
         setManualBackupProgress((prev) => ({
           ...prev,
-          progress: Math.min(10 + (pollAttempts * 5), 90),
+          progress: progressPercent,
         }));
 
         try {
+          // Check cancellation before making API call
+          if (cancelPollingRef.current) {
+            throw new Error("Backup polling cancelled");
+          }
+
+          console.log(`[Backup] Polling attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} for dispatch_id: ${dispatch_id}`);
           const status = await getBackupStatus(dispatch_id);
+          
+          console.log(`[Backup] Poll attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} result:`, {
+            status: status.status,
+            hasSignedUrl: !!status.signed_url,
+            error: status.error,
+            backupId: status.backup_id,
+          });
+          
+          // Store backup_id when we get it
+          if (status.backup_id && !manualBackupProgress.backupId) {
+            setManualBackupProgress((prev) => ({
+              ...prev,
+              backupId: status.backup_id,
+            }));
+          }
+
+          // Check cancellation after API call
+          if (cancelPollingRef.current) {
+            throw new Error("Backup polling cancelled");
+          }
 
           if (status.status === "success" && status.signed_url) {
             setManualBackupProgress((prev) => ({
               ...prev,
               progress: 100,
             }));
+            console.log("[Backup] Backup completed successfully!");
             return status.signed_url;
           } else if (status.status === "failed") {
-            throw new Error(status.error || "Backup failed");
+            console.error("[Backup] Backup failed:", status.error);
+            // Get more details from backup_history if available
+            if (status.backup_id) {
+              try {
+                const historyData = await getBackupHistory(10);
+                const failedBackup = historyData.find(b => b.id === status.backup_id);
+                if (failedBackup && failedBackup.error_text) {
+                  throw new Error(`Backup failed: ${failedBackup.error_text}`);
+                }
+              } catch (historyError) {
+                console.warn("[Backup] Could not fetch backup history for error details:", historyError);
+              }
+            }
+            throw new Error(status.error || "Backup failed. Check GitHub Actions logs for details.");
           } else if (status.status === "in_progress" || status.status === "pending") {
             // Continue polling
+            console.log(`[Backup] Still in progress (${status.status}), polling again in ${POLL_INTERVAL_MS}ms...`);
             await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
             return pollStatus();
           } else {
-            throw new Error("Unknown backup status");
+            console.error("[Backup] Unknown status:", status);
+            throw new Error(`Unknown backup status: ${status.status}`);
           }
         } catch (error) {
+          // Check if cancelled
+          if (cancelPollingRef.current) {
+            throw new Error("Backup polling cancelled");
+          }
+
           if (error instanceof Error && error.message.includes("Failed to get backup status")) {
             // Retry on transient errors
+            console.warn(`[Backup] Transient error, retrying... (attempt ${pollAttempts})`);
             await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
             return pollStatus();
           }
+          console.error("[Backup] Polling error:", error);
           throw error;
         }
       };
 
       const signedUrl = await pollStatus();
 
-      if (signedUrl) {
+      if (signedUrl && !cancelPollingRef.current) {
         // Open download in new tab
         window.open(signedUrl, "_blank");
         toast.success("Backup completed! Download started.");
@@ -171,17 +596,86 @@ export function BackupSettings() {
         await Promise.all([loadHistory(), loadSettings()]);
       }
     } catch (error) {
+      if (cancelPollingRef.current) {
+        // User cancelled - don't show error
+        return;
+      }
       console.error("Backup failed:", error);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to create backup. Please try again."
-      );
+      
+      // If timeout occurred, refresh history to check if backup actually completed
+      if (error instanceof Error && error.message.includes("taking longer than expected")) {
+        // Refresh history to see if backup completed in the background
+        await loadHistory();
+        
+        // Check if any backup just completed
+        const latestHistory = await getBackupHistory(1);
+        const latestBackup = latestHistory[0];
+        
+        if (latestBackup && latestBackup.status === "success" && latestBackup.s3_key) {
+          // Backup actually completed! Generate signed URL and download
+          try {
+            const { signed_url } = await generateSignedUrl(latestBackup.s3_key);
+            window.open(signed_url, "_blank");
+            toast.success("Backup completed! Download started.");
+            setManualBackupProgress((prev) => ({
+              ...prev,
+              progress: 100,
+              isTimedOut: false,
+            }));
+            await loadHistory();
+            return; // Exit early since backup completed
+          } catch (downloadError) {
+            console.error("[Backup] Failed to generate download URL:", downloadError);
+          }
+        }
+        
+        // Start background monitoring for this backup
+        // Use backup_id if available (from final checks), otherwise use dispatchId
+        const backupIdToMonitor = manualBackupProgress.backupId || 
+          (latestBackup && latestBackup.status === "in_progress" ? latestBackup.id : undefined);
+        
+        if (manualBackupProgress.dispatchId) {
+          console.log(`[Backup] Starting background monitoring with dispatchId: ${manualBackupProgress.dispatchId}, backupId: ${backupIdToMonitor || 'not available'}`);
+          startBackgroundMonitoring(
+            manualBackupProgress.dispatchId,
+            backupIdToMonitor
+          );
+        }
+        
+        toast.info(
+          "Backup is still running. The system will continue checking automatically. You can check the backup history for updates.",
+          { duration: 8000 } // Show for 8 seconds
+        );
+      } else {
+        // For other errors, try to get more details from history
+        let errorMessage = error instanceof Error ? error.message : "Failed to create backup. Please try again.";
+        
+        try {
+          // Refresh history to get latest error details
+          await loadHistory();
+          const latestHistory = await getBackupHistory(1);
+          const latestBackup = latestHistory[0];
+          
+          if (latestBackup && latestBackup.status === "failed" && latestBackup.error_text) {
+            errorMessage = `Backup failed: ${latestBackup.error_text}`;
+          } else if (latestBackup && latestBackup.status === "failed") {
+            errorMessage = "Backup failed. Check GitHub Actions logs for details.";
+          }
+        } catch (historyError) {
+          console.warn("[Backup] Could not fetch error details from history:", historyError);
+        }
+        
+        toast.error(errorMessage, { duration: 15000 }); // Show for 15 seconds for errors
+      }
     } finally {
-      setIsLoading(false);
-      setManualBackupProgress({
-        isRunning: false,
-        progress: 0,
-        dispatchId: null,
-      });
+      if (!cancelPollingRef.current) {
+        setIsLoading(false);
+        setManualBackupProgress({
+          isRunning: false,
+          progress: 0,
+          dispatchId: null,
+        });
+      }
     }
   };
 
@@ -201,18 +695,140 @@ export function BackupSettings() {
     }
   };
 
+  const handleCancelStuckBackupClick = (backupId: string) => {
+    setCancelTargetId(backupId);
+    setCancelDialogOpen(true);
+  };
+
+  const handleCancelStuckBackup = async () => {
+    if (!cancelTargetId) return;
+
+    setIsCancelling(true);
+    try {
+      console.log("[Backup] Attempting to cancel backup:", cancelTargetId);
+      
+      const result = await cancelBackup(cancelTargetId);
+
+      if (!result.success) {
+        throw new Error(result.message || "Failed to cancel backup");
+      }
+
+      console.log("[Backup] Backup cancelled successfully:", result);
+      toast.success(`Backup marked as cancelled (${result.cancelled_count} backup(s) cancelled)`);
+      
+      // Close dialog and reset
+      setCancelDialogOpen(false);
+      setCancelTargetId(null);
+      
+      // Refresh history to show updated status
+      await loadHistory();
+    } catch (error) {
+      console.error("[Backup] Failed to cancel backup:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to cancel backup"
+      );
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  const handleCancelAllStuckBackupsClick = () => {
+    const stuckBackups = history.filter((item) => item.status === "in_progress");
+    
+    if (stuckBackups.length === 0) {
+      toast.info("No stuck backups found");
+      return;
+    }
+    
+    setCancelAllDialogOpen(true);
+  };
+
+  const handleCancelAllStuckBackups = async () => {
+    const stuckBackups = history.filter((item) => item.status === "in_progress");
+    
+    if (stuckBackups.length === 0) {
+      setCancelAllDialogOpen(false);
+      return;
+    }
+
+    setIsCancelling(true);
+    try {
+      const stuckBackupIds = stuckBackups.map((item) => item.id);
+      console.log("[Backup] Attempting to cancel backups:", stuckBackupIds);
+      
+      const result = await cancelBackup(undefined, stuckBackupIds);
+
+      if (!result.success) {
+        throw new Error(result.message || "Failed to cancel backups");
+      }
+
+      console.log("[Backup] Backups cancelled successfully:", result);
+      toast.success(`${result.cancelled_count} backup(s) marked as cancelled`);
+      
+      // Close dialog
+      setCancelAllDialogOpen(false);
+      
+      // Refresh history to show updated status
+      await loadHistory();
+    } catch (error) {
+      console.error("[Backup] Failed to cancel stuck backups:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to cancel stuck backups"
+      );
+    } finally {
+      setIsCancelling(false);
+    }
+  };
+
+  const handleDeleteBackupClick = (backupId: string, backupDate: string) => {
+    setDeleteTargetId(backupId);
+    setDeleteTargetDate(backupDate);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteBackup = async () => {
+    if (!deleteTargetId) return;
+
+    setIsDeleting(true);
+    try {
+      console.log("[Backup] Attempting to delete backup:", deleteTargetId);
+      
+      const result = await deleteBackup(deleteTargetId);
+
+      if (!result.success) {
+        throw new Error(result.message || "Failed to delete backup");
+      }
+
+      console.log("[Backup] Backup deleted successfully:", result);
+      toast.success("Backup deleted successfully");
+      
+      // Close dialog and reset
+      setDeleteDialogOpen(false);
+      setDeleteTargetId(null);
+      setDeleteTargetDate(null);
+      
+      // Refresh history to show updated list
+      await loadHistory();
+    } catch (error) {
+      console.error("[Backup] Failed to delete backup:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete backup"
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const formatDate = (dateString: string | null) => {
     if (!dateString) return "Never";
     try {
       const date = new Date(dateString);
-      return date.toLocaleString("en-US", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZoneName: "short",
-      });
+      const day = String(date.getDate()).padStart(2, "0");
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const year = date.getFullYear();
+      const hours = String(date.getHours()).padStart(2, "0");
+      const minutes = String(date.getMinutes()).padStart(2, "0");
+      return `${day}/${month}/${year} ${hours}:${minutes}`;
     } catch {
       return dateString;
     }
@@ -225,7 +841,49 @@ export function BackupSettings() {
     return `${mb.toFixed(2)} MB`;
   };
 
-  const getStatusBadge = (status: BackupHistoryItem["status"]) => {
+  // Circular progress component
+  const CircularProgress = ({ percentage, size = 32 }: { percentage: number; size?: number }) => {
+    const radius = (size - 4) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (percentage / 100) * circumference;
+    
+    return (
+      <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
+        <svg
+          className="transform -rotate-90"
+          width={size}
+          height={size}
+        >
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke="currentColor"
+            strokeWidth="2"
+            fill="none"
+            className="text-muted"
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            stroke="currentColor"
+            strokeWidth="2"
+            fill="none"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            className="text-blue-600 transition-all duration-300"
+            strokeLinecap="round"
+          />
+        </svg>
+        <span className="absolute text-xs font-semibold text-blue-600">
+          {Math.round(percentage)}%
+        </span>
+      </div>
+    );
+  };
+
+  const getStatusBadge = (status: BackupHistoryItem["status"], backupId?: string) => {
     switch (status) {
       case "success":
         return (
@@ -242,11 +900,15 @@ export function BackupSettings() {
           </Badge>
         );
       case "in_progress":
+        const progress = backupId ? (inProgressProgress[backupId] || 10) : 10;
         return (
-          <Badge variant="secondary">
-            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-            In Progress
-          </Badge>
+          <div className="flex items-center gap-2">
+            <CircularProgress percentage={progress} size={32} />
+            <Badge variant="outline" className="border-blue-500 text-blue-600">
+              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+              In Progress
+            </Badge>
+          </div>
         );
       case "cancelled":
         return (
@@ -304,23 +966,36 @@ export function BackupSettings() {
 
           {/* Manual Backup Button */}
           <div className="space-y-2">
-            <Button
-              onClick={handleDownloadNow}
-              disabled={isLoading || manualBackupProgress.isRunning}
-              className="w-full"
-            >
-              {isLoading || manualBackupProgress.isRunning ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Creating Backup...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4 mr-2" />
-                  Download Backup Now
-                </>
+            <div className="flex gap-2">
+              <Button
+                onClick={handleDownloadNow}
+                disabled={isLoading || manualBackupProgress.isRunning}
+                className="flex-1"
+              >
+                {isLoading || manualBackupProgress.isRunning ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Creating Backup...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4 mr-2" />
+                    Download Backup Now
+                  </>
+                )}
+              </Button>
+              
+              {manualBackupProgress.isRunning && (
+                <Button
+                  onClick={handleCancelBackup}
+                  variant="destructive"
+                  className="flex-shrink-0"
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Cancel
+                </Button>
               )}
-            </Button>
+            </div>
 
             {/* Progress Bar */}
             {manualBackupProgress.isRunning && (
@@ -328,9 +1003,16 @@ export function BackupSettings() {
                 <Progress value={manualBackupProgress.progress} className="w-full" />
                 <p className="text-xs text-center text-muted-foreground">
                   {manualBackupProgress.progress < 100
-                    ? `Backup in progress... ${manualBackupProgress.progress}%`
+                    ? manualBackupProgress.isTimedOut
+                      ? `Backup taking longer than expected (${manualBackupProgress.progress}%). Still monitoring in background...`
+                      : `Backup in progress... ${manualBackupProgress.progress}%`
                     : "Backup complete!"}
                 </p>
+                {manualBackupProgress.isTimedOut && (
+                  <p className="text-xs text-center text-blue-600">
+                    The system is checking the backup history automatically. You can close this and check the history tab.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -348,17 +1030,30 @@ export function BackupSettings() {
               </CardTitle>
               <CardDescription>Recent backup operations</CardDescription>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadHistory}
-              disabled={isLoadingHistory}
-            >
-              <RefreshCw
-                className={`w-4 h-4 mr-2 ${isLoadingHistory ? "animate-spin" : ""}`}
-              />
-              Refresh
-            </Button>
+            <div className="flex gap-2">
+              {history.some((item) => item.status === "in_progress") && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleCancelAllStuckBackupsClick}
+                  disabled={isLoadingHistory}
+                >
+                  <X className="w-4 h-4 mr-2" />
+                  Cancel All Stuck
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadHistory}
+                disabled={isLoadingHistory}
+              >
+                <RefreshCw
+                  className={`w-4 h-4 mr-2 ${isLoadingHistory ? "animate-spin" : ""}`}
+                />
+                Refresh
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -384,26 +1079,66 @@ export function BackupSettings() {
                 {history.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>{formatDate(item.created_at)}</TableCell>
-                    <TableCell>{getStatusBadge(item.status)}</TableCell>
+                    <TableCell>{getStatusBadge(item.status, item.id)}</TableCell>
                     <TableCell>{formatFileSize(item.size_bytes)}</TableCell>
                     <TableCell>
-                      {item.status === "success" && item.s3_key ? (
+                      <div className="flex items-center gap-2">
+                        {item.status === "success" && item.s3_key ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownloadFromHistory(item.s3_key)}
+                          >
+                            <Download className="w-4 h-4 mr-1" />
+                            Download
+                          </Button>
+                        ) : item.status === "in_progress" ? (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleCancelStuckBackupClick(item.id)}
+                          >
+                            <X className="w-4 h-4 mr-1" />
+                            Cancel
+                          </Button>
+                        ) : item.status === "failed" ? (
+                          <div className="flex items-center gap-2">
+                            {item.error_text ? (
+                              <>
+                                <span className="text-xs text-destructive" title={item.error_text}>
+                                  {item.error_text.substring(0, 40)}
+                                  {item.error_text.length > 40 ? "..." : ""}
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    toast.error("Backup Failed", {
+                                      description: item.error_text || "Check GitHub Actions logs for details",
+                                      duration: 15000,
+                                    });
+                                  }}
+                                  className="h-6 px-2 text-xs"
+                                >
+                                  Details
+                                </Button>
+                              </>
+                            ) : (
+                              <span className="text-xs text-destructive">Failed - No error details</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDownloadFromHistory(item.s3_key)}
+                          onClick={() => handleDeleteBackupClick(item.id, item.created_at)}
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
                         >
-                          <Download className="w-4 h-4 mr-1" />
-                          Download
+                          <Trash2 className="w-4 h-4" />
                         </Button>
-                      ) : item.status === "failed" && item.error_text ? (
-                        <span className="text-xs text-destructive" title={item.error_text}>
-                          {item.error_text.substring(0, 50)}
-                          {item.error_text.length > 50 ? "..." : ""}
-                        </span>
-                      ) : (
-                        "-"
-                      )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -412,6 +1147,148 @@ export function BackupSettings() {
           )}
         </CardContent>
       </Card>
+
+      {/* Cancel Single Backup Dialog */}
+      <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel Backup</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to mark this backup as cancelled? This will stop it from showing as 'in progress'.
+              The backup workflow may still be running in the background.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setCancelDialogOpen(false);
+                setCancelTargetId(null);
+              }}
+              disabled={isCancelling}
+            >
+              No, Keep It
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleCancelStuckBackup}
+              disabled={isCancelling}
+            >
+              {isCancelling ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                <>
+                  <X className="w-4 h-4 mr-2" />
+                  Yes, Cancel Backup
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel All Stuck Backups Dialog */}
+      <Dialog open={cancelAllDialogOpen} onOpenChange={setCancelAllDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel All Stuck Backups</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to mark all stuck backups as cancelled? This will stop them from showing as 'in progress'.
+              The backup workflows may still be running in the background.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setCancelAllDialogOpen(false)}
+              disabled={isCancelling}
+            >
+              No, Keep Them
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleCancelAllStuckBackups}
+              disabled={isCancelling}
+            >
+              {isCancelling ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                <>
+                  <X className="w-4 h-4 mr-2" />
+                  Yes, Cancel All
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Backup Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
+                <AlertTriangle className="h-6 w-6 text-destructive" />
+              </div>
+              <div>
+                <DialogTitle>Delete Backup</DialogTitle>
+                <DialogDescription>
+                  This action cannot be undone. The backup record will be permanently removed.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+          <div className="py-4">
+            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-foreground">
+                  Backup Date: <span className="font-normal text-muted-foreground">{deleteTargetDate ? formatDate(deleteTargetDate) : "N/A"}</span>
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Are you sure you want to delete this backup record? This will remove it from the history permanently.
+                </p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                setDeleteTargetId(null);
+                setDeleteTargetDate(null);
+              }}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteBackup}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete Backup
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

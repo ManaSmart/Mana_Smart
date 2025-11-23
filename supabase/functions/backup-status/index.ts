@@ -40,7 +40,10 @@ serve(async (req: Request) => {
       JSON.stringify({ error: "Missing or invalid authorization header" }),
       {
         status: 401,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
       }
     );
   }
@@ -49,14 +52,20 @@ serve(async (req: Request) => {
   if (token !== BACKUP_API_KEY) {
     return new Response(JSON.stringify({ error: "Invalid API key" }), {
       status: 403,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
     });
   }
 
   if (req.method !== "GET") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      },
     });
   }
 
@@ -67,7 +76,10 @@ serve(async (req: Request) => {
     if (!dispatchId) {
       return new Response(JSON.stringify({ error: "Missing dispatch_id parameter" }), {
         status: 400,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
       });
     }
 
@@ -164,15 +176,76 @@ serve(async (req: Request) => {
         if (workflowResponse.ok) {
           const workflowData = await workflowResponse.json();
           const workflowStatus = workflowData.status; // queued, in_progress, completed
-          const workflowConclusion = workflowData.conclusion; // success, failure, cancelled
+          // Note: workflowConclusion (success, failure, cancelled) is checked via backup_history status
 
           if (workflowStatus === "completed") {
-            // Workflow finished, but backup_history might not be updated yet
-            // Return in_progress and let the frontend poll again
+            // Workflow finished - re-check backup_history as it should be updated now
+            const { data: updatedEntry, error: refreshError } = await supabase
+              .from("backup_history")
+              .select("*")
+              .eq("dispatch_id", dispatchId)
+              .single();
+
+            if (!refreshError && updatedEntry) {
+              // If backup_history was updated, return the actual status
+              if (updatedEntry.status === "success" || updatedEntry.status === "failed") {
+                // If successful and has S3 key, generate signed URL
+                if (updatedEntry.status === "success" && updatedEntry.s3_key) {
+                  const signedUrlResponse = await fetch(
+                    `${SUPABASE_URL}/functions/v1/generate-signed-url`,
+                    {
+                      method: "POST",
+                      headers: {
+                        "Authorization": `Bearer ${BACKUP_API_KEY}`,
+                        "Content-Type": "application/json",
+                      },
+                      body: JSON.stringify({ s3_key: updatedEntry.s3_key }),
+                    }
+                  );
+
+                  if (signedUrlResponse.ok) {
+                    const { signed_url } = await signedUrlResponse.json();
+                    return new Response(
+                      JSON.stringify({
+                        status: "success",
+                        signed_url,
+                        backup_id: updatedEntry.id,
+                      }),
+                      {
+                        status: 200,
+                        headers: {
+                          "Content-Type": "application/json",
+                          "Access-Control-Allow-Origin": "*",
+                        },
+                      }
+                    );
+                  }
+                }
+
+                // Return status (success or failed)
+                return new Response(
+                  JSON.stringify({
+                    status: updatedEntry.status,
+                    error: updatedEntry.error_text || undefined,
+                    backup_id: updatedEntry.id,
+                  }),
+                  {
+                    status: 200,
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Access-Control-Allow-Origin": "*",
+                    },
+                  }
+                );
+              }
+            }
+
+            // Workflow completed but backup_history not updated yet - wait a bit
             return new Response(
               JSON.stringify({
                 status: "in_progress",
-                message: "Workflow completed, processing backup...",
+                message: "Workflow completed, waiting for database update...",
+                backup_id: backupEntry.id,
               }),
               {
                 status: 200,
@@ -188,6 +261,7 @@ serve(async (req: Request) => {
             JSON.stringify({
               status: workflowStatus === "in_progress" || workflowStatus === "queued" ? "in_progress" : "pending",
               message: `Workflow status: ${workflowStatus}`,
+              backup_id: backupEntry.id,
             }),
             {
               status: 200,
@@ -209,6 +283,7 @@ serve(async (req: Request) => {
       JSON.stringify({
         status: backupEntry.status === "in_progress" ? "in_progress" : "pending",
         message: "Backup in progress",
+        backup_id: backupEntry.id,
       }),
       {
         status: 200,
@@ -227,7 +302,10 @@ serve(async (req: Request) => {
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Access-Control-Allow-Origin": "*",
+        },
       }
     );
   }
