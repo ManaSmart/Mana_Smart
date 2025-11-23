@@ -311,7 +311,7 @@ supabase secrets set SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXV
 # Note: Use the same token value you used for BACKUP_GITHUB_TOKEN in GitHub Secrets
 supabase secrets set GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 supabase secrets set GITHUB_OWNER=ManaSmart
-supabase secrets set GITHUB_REPO=Mana_Smart_Scent
+supabase secrets set GITHUB_REPO=Mana_Smart
 supabase secrets set GITHUB_WORKFLOW_ID=backup.yml
 
 # 3. Backup API Key (must match VITE_BACKUP_API_KEY in frontend .env)
@@ -330,7 +330,7 @@ supabase secrets set AWS_S3_BUCKET=your-backup-bucket-name
 - **SUPABASE_SERVICE_ROLE_KEY**: From Supabase Dashboard → Settings → API → service_role key (⚠️ Keep secret!)
 - **GITHUB_TOKEN**: The Personal Access Token you created earlier (⚠️ **Important**: Use the SAME VALUE as `BACKUP_GITHUB_TOKEN` in GitHub Secrets, but the variable name is different - see table below)
 - **GITHUB_OWNER**: Your GitHub username or organization (e.g., `ManaSmart`)
-- **GITHUB_REPO**: Your repository name (e.g., `Mana_Smart_Scent`)
+- **GITHUB_REPO**: Your repository name (e.g., `Mana_Smart`)
 - **BACKUP_API_KEY**: Generate with `openssl rand -hex 32` or use any secure random string (must match frontend `.env.local`)
 - **AWS credentials**: From your AWS IAM user credentials
 - **AWS_S3_REGION**: Your S3 bucket region (e.g., `us-east-1`, `eu-west-1`)
