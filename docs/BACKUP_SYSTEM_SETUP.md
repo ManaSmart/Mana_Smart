@@ -95,7 +95,7 @@ Add the following secrets:
 |------------|-------------|---------|
 | `SUPABASE_URL` | Your Supabase project URL | `https://xxxxx.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (from Supabase Dashboard) | `eyJhbGc...` |
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://postgres:[password]@db.xxxxx.supabase.co:5432/postgres` |
+| `SUPABASE_DB_URL` | **Direct** PostgreSQL connection string (port 5432) | `postgresql://postgres:[password]@db.xxxxx.supabase.co:5432/postgres` |
 | `AWS_ACCESS_KEY_ID` | AWS access key | `AKIAIOSFODNN7EXAMPLE` |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
 | `AWS_S3_REGION` | AWS S3 region | `us-east-1` |
@@ -111,11 +111,23 @@ Add the following secrets:
 1. Go to Supabase Dashboard → Your Project → Settings → API
 2. Copy the "service_role" key (keep this secret!)
 
-#### Getting DATABASE_URL
+#### Getting SUPABASE_DB_URL
+
+**⚠️ CRITICAL: You MUST use the DIRECT connection URL (port 5432), NOT the pooled connection (port 6543)**
 
 1. Go to Supabase Dashboard → Your Project → Settings → Database
-2. Under "Connection string", select "URI" and copy the connection string
-3. Replace `[YOUR-PASSWORD]` with your database password
+2. Under "Connection Info", find the **"Direct connection"** section (Port 5432)
+3. Select "URI" format and copy the connection string
+4. Replace `[YOUR-PASSWORD]` with your database password
+5. **Verify the URL format**: It should look like:
+   - ✅ **CORRECT**: `postgresql://postgres:[password]@db.xxxxx.supabase.co:5432/postgres`
+   - ❌ **WRONG**: `postgresql://postgres:[password]@aws-1-eu-west-1.pooler.supabase.com:6543/postgres`
+   - ❌ **WRONG**: Any URL containing `.pooler.supabase.com` or port `6543`
+
+**Important Notes:**
+- The secret value should be the **entire connection string** with no quotes or equals signs
+- Example: `postgresql://postgres:yourpassword@db.xxxxx.supabase.co:5432/postgres`
+- Do NOT use pooled connection URLs (they end with `.pooler.supabase.com:6543`) as `pg_dump` requires direct connections
 
 #### Creating GitHub Personal Access Token
 
@@ -353,13 +365,13 @@ supabase secrets set AWS_S3_BUCKET=your-backup-bucket-name
 | AWS Region | `AWS_S3_REGION` | `AWS_S3_REGION` | ✅ **YES** (same name & value) |
 | AWS Bucket | `AWS_S3_BUCKET` | `AWS_S3_BUCKET` | ✅ **YES** (same name & value) |
 | Workflow ID | ❌ Not needed | `GITHUB_WORKFLOW_ID` | N/A (only in Supabase) |
-| Database URL | `DATABASE_URL` | ❌ Not needed | N/A (only in GitHub) |
+| Database URL | `SUPABASE_DB_URL` | ❌ Not needed | N/A (only in GitHub) |
 | Buckets List | `SUPABASE_BUCKETS_TO_BACKUP` | ❌ Not needed | N/A (only in GitHub) |
 
 **⚠️ Important Notes:**
 - **GitHub Token**: GitHub doesn't allow secret names starting with `GITHUB_`, so in GitHub Secrets it's called `BACKUP_GITHUB_TOKEN`, but in Supabase it's `GITHUB_TOKEN`. **Use the same token value in both places.**
 - **Most other variables**: Use the same name and value in both GitHub Secrets and Supabase Secrets.
-- **Some variables are only needed in one place**: `GITHUB_WORKFLOW_ID` is only in Supabase, while `DATABASE_URL` and `SUPABASE_BUCKETS_TO_BACKUP` are only in GitHub.
+- **Some variables are only needed in one place**: `GITHUB_WORKFLOW_ID` is only in Supabase, while `SUPABASE_DB_URL` and `SUPABASE_BUCKETS_TO_BACKUP` are only in GitHub.
 
 **Verify secrets are set**:
 ```bash
@@ -762,7 +774,9 @@ curl -X POST https://your-project.supabase.co/functions/v1/generate-signed-url -
   7. **Note**: The token value must be the same in both places, but the variable names are different (`GITHUB_TOKEN` in Supabase, `BACKUP_GITHUB_TOKEN` in GitHub)
 
 **Database connection error:**
-- Verify `DATABASE_URL` format: `postgresql://user:password@host:port/database`
+- Verify `SUPABASE_DB_URL` format: `postgresql://user:password@host:port/database`
+- **CRITICAL**: Ensure you're using the **direct connection URL (port 5432)**, NOT the pooled connection (port 6543)
+- The URL should NOT contain `.pooler.supabase.com` or port `6543`
 - Ensure database is accessible from GitHub Actions runners
 - Check if IP allowlist is blocking GitHub Actions IPs
 
@@ -850,13 +864,19 @@ If using Vercel, you can trigger the workflow via cron:
 The workflow uses this `pg_dump` command:
 
 ```bash
-pg_dump "$DATABASE_URL" \
+pg_dump --dbname="$SUPABASE_DB_URL" \
   --no-owner \
   --no-privileges \
-  --format=plain \
-  --blobs \
+  --format=custom \
+  --compress=6 \
+  --file=backup/db/backup.dump \
   --verbose
 ```
+
+**Important Notes:**
+- The `--dbname` flag is used with the direct PostgreSQL connection URL
+- The secret `SUPABASE_DB_URL` must contain the **direct connection URL (port 5432)**, not the pooled connection
+- Pooled connections (port 6543 or `.pooler.supabase.com`) will cause `pg_dump` to fail
 
 **Flags explained:**
 - `--no-owner`: Don't output commands to set ownership

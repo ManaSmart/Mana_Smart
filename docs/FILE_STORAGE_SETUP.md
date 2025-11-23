@@ -75,6 +75,8 @@ The file storage system provides a secure, organized way to handle file uploads 
 
 ## Setup Instructions
 
+> **⚠️ Using AWS S3?** If you're using S3 for file storage instead of Supabase Storage, make sure to configure CORS on your S3 bucket. See [S3_CORS_SETUP.md](./S3_CORS_SETUP.md) for detailed instructions.
+
 ### 1. Create Supabase Storage Buckets
 
 Run these SQL commands in your Supabase SQL Editor:

@@ -559,7 +559,12 @@ export default function App() {
           .limit(1)
           .maybeSingle<CompanyBranding>();
 
-        if (error && error.code !== "PGRST116") {
+        if (error) {
+          // PGRST116 means no rows found - this is expected if branding hasn't been set up yet
+          if (error.code === "PGRST116") {
+            // Silently ignore - no branding record exists yet
+            return;
+          }
           console.error('Error loading branding:', error);
           return;
         }
@@ -584,17 +589,18 @@ export default function App() {
           const logoFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_LOGO);
           
           if (logoFile) {
-            // Get fresh URL from storage (important for S3)
-            console.log('Loading logo from storage in App.tsx:', {
+            // Get fresh URL from storage (logos are now private/secured, use signed URLs)
+            console.log('Loading secured logo from storage in App.tsx:', {
               bucket: logoFile.bucket,
               path: logoFile.path,
-              isPublic: logoFile.is_public
+              isPublic: logoFile.is_public,
+              secured: logoFile.metadata?.secured
             });
             
             const logoUrl = await getFileUrl(
               logoFile.bucket as any,
               logoFile.path,
-              logoFile.is_public || true // Ensure it's treated as public
+              false // Private file, use signed URL (logos are now secured)
             );
             
             if (logoUrl) {

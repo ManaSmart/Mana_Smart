@@ -19,7 +19,7 @@ on:
 env:
   SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
   SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_S3_REGION: ${{ secrets.AWS_S3_REGION }}
@@ -125,7 +125,8 @@ jobs:
           echo "Using compressed custom format for faster processing..."
           
           # Use custom format with compression for faster processing
-          pg_dump "$DATABASE_URL" \
+          # Using --dbname flag with direct PostgreSQL connection URL (port 5432)
+          pg_dump --dbname="$SUPABASE_DB_URL" \
             --no-owner \
             --no-privileges \
             --format=custom \
@@ -140,7 +141,7 @@ jobs:
           # Convert to SQL format for compatibility (optional, but slower)
           # For restore, users can use pg_restore with the .dump file
           echo "Converting to SQL format for compatibility..."
-          pg_restore "$DATABASE_URL" \
+          pg_restore --dbname="$SUPABASE_DB_URL" \
             --no-owner \
             --no-privileges \
             --format=plain \

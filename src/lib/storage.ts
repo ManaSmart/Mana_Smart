@@ -40,6 +40,26 @@ export async function uploadFile(options: UploadFileOptions): Promise<UploadFile
 }
 
 /**
+ * Upload logo to S3 storage (uses S3, regardless of STORAGE_PROVIDER setting)
+ * Logos are stored in S3 with presigned URLs for secure access
+ */
+export async function uploadLogoToS3(options: UploadFileOptions): Promise<UploadFileResult> {
+	// Force S3 storage for logos
+	const s3Options: UploadFileOptions = {
+		...options,
+		bucket: STORAGE_BUCKETS.S3, // Force S3 bucket
+		isPublic: false, // Use presigned URLs (more secure)
+		metadata: {
+			...(options.metadata || {}),
+			secured: true, // Mark as secured
+			uploaded_via: 's3_storage', // Track storage method
+		},
+	};
+	
+	return uploadFileToS3(s3Options);
+}
+
+/**
  * Upload a file to Supabase Storage and create metadata record
  */
 async function uploadFileToSupabase(options: UploadFileOptions): Promise<UploadFileResult> {
@@ -67,7 +87,7 @@ async function uploadFileToSupabase(options: UploadFileOptions): Promise<UploadF
 		const filePath = customPath || generateFilePath(category, ownerId, file.name);
 
 		// Upload file to Supabase Storage
-		const { error: uploadError } = await supabase.storage
+		const { data: uploadData, error: uploadError } = await supabase.storage
 			.from(bucket)
 			.upload(filePath, file, {
 				cacheControl: '3600',
@@ -75,10 +95,48 @@ async function uploadFileToSupabase(options: UploadFileOptions): Promise<UploadF
 			});
 
 		if (uploadError) {
+			console.error('Supabase upload error:', {
+				error: uploadError,
+				bucket,
+				filePath,
+				fileName: file.name,
+				message: uploadError.message,
+			});
 			return {
 				success: false,
-				error: uploadError.message,
+				error: `Upload failed: ${uploadError.message}`,
 			};
+		}
+
+		console.log('File uploaded successfully:', {
+			bucket,
+			filePath,
+			uploadData,
+		});
+
+		// Verify the file exists by listing it (helps debug if upload actually succeeded)
+		try {
+			const { data: listData, error: listError } = await supabase.storage
+				.from(bucket)
+				.list(filePath.split('/').slice(0, -1).join('/') || '', {
+					limit: 100,
+					search: filePath.split('/').pop(),
+				});
+			
+			if (listError) {
+				console.warn('Could not verify file existence (this is OK, file may still be processing):', listError.message);
+			} else {
+				const fileName = filePath.split('/').pop();
+				const fileExists = listData?.some(file => file.name === fileName);
+				console.log('File existence check:', {
+					filePath,
+					fileName,
+					fileExists,
+					listedFiles: listData?.map(f => f.name),
+				});
+			}
+		} catch (verifyError) {
+			console.warn('File verification check failed (non-critical):', verifyError);
 		}
 
 		// Get image dimensions if it's an image
@@ -162,10 +220,64 @@ async function uploadFileToSupabase(options: UploadFileOptions): Promise<UploadF
 			publicUrl = publicUrlData.publicUrl;
 		} else {
 			// Generate signed URL (valid for 1 hour)
-			const { data: signedUrlData } = await supabase.storage
-				.from(bucket)
-				.createSignedUrl(filePath, 3600);
-			signedUrl = signedUrlData?.signedUrl;
+			// Note: Supabase sometimes needs significant time after upload before signed URLs work
+			// This is a known issue with Supabase Storage - files may not be immediately available for signed URL generation
+			// Retry with longer exponential backoff
+			let signedUrlData: { signedUrl: string } | null = null;
+			let lastError: any = null;
+			const maxRetries = 4;
+			const delays = [1000, 2000, 3000, 5000]; // Longer delays: 1s, 2s, 3s, 5s
+			
+			// Initial delay before first attempt
+			await new Promise(resolve => setTimeout(resolve, 1000));
+			
+			for (let attempt = 0; attempt <= maxRetries; attempt++) {
+				if (attempt > 0) {
+					const delay = delays[attempt - 1] || 5000;
+					console.log(`Retrying signed URL creation (attempt ${attempt + 1}/${maxRetries + 1}) after ${delay}ms delay...`);
+					await new Promise(resolve => setTimeout(resolve, delay));
+				}
+				
+				const { data, error } = await supabase.storage
+					.from(bucket)
+					.createSignedUrl(filePath, 3600);
+				
+				if (error) {
+					lastError = error;
+					console.warn(`Signed URL creation attempt ${attempt + 1} failed:`, {
+						error: error.message,
+						errorCode: (error as any).statusCode || (error as any).code,
+						bucket,
+						filePath,
+					});
+					
+					// If it's not "Object not found", don't retry (it's a different error like RLS/permissions)
+					if (error.message !== 'Object not found' && !error.message.includes('not found')) {
+						console.error('Non-retryable error (likely RLS/permissions issue):', {
+							error: error.message,
+							errorCode: (error as any).statusCode || (error as any).code,
+							hint: 'This may be an RLS policy issue. Check that authenticated users can create signed URLs for the branding bucket.',
+						});
+						break;
+					}
+				} else {
+					signedUrlData = data;
+					signedUrl = data?.signedUrl;
+					console.log(`✅ Successfully created signed URL on attempt ${attempt + 1}`);
+					break;
+				}
+			}
+			
+			if (!signedUrlData && lastError) {
+				console.warn('⚠️ All signed URL creation attempts failed. File is uploaded but URL will need to be fetched later:', {
+					error: lastError.message,
+					bucket,
+					filePath,
+					hint: 'The file was uploaded successfully. The URL can be fetched later using getFileUrl(). This is a known Supabase timing issue - files may take a few seconds to be available for signed URL generation.',
+				});
+				// Don't fail the upload - the file is uploaded, URL can be fetched later
+				// The Settings component will handle fetching the URL as a fallback
+			}
 		}
 
 		return {
@@ -192,11 +304,13 @@ export async function getFileUrl(
 	expiresIn: number = 3600
 ): Promise<string | null> {
 	// Check if file is stored in S3 (bucket will be 's3' for S3 files)
-	if (STORAGE_PROVIDER === 's3' || bucket === STORAGE_BUCKETS.S3) {
+	// Prioritize bucket over global provider setting - bucket is the source of truth
+	if (bucket === STORAGE_BUCKETS.S3) {
 		return getFileUrlFromS3(path, isPublic, expiresIn);
 	}
 	
-	// Default to Supabase
+	// For all other buckets (including 'branding'), use Supabase
+	// Note: Even if STORAGE_PROVIDER is 's3', if the bucket is a Supabase bucket, use Supabase
 	try {
 		if (isPublic) {
 			const { data } = supabase.storage.from(bucket).getPublicUrl(path);
@@ -232,7 +346,12 @@ export async function getFileMetadata(fileId: string): Promise<FileMetadata | nu
 			.single();
 
 		if (error) {
-			console.error('Error fetching file metadata:', error);
+			// PGRST116 means no rows found - this is expected if file was deleted or doesn't exist
+			if (error.code === 'PGRST116') {
+				console.warn('File metadata not found (may have been deleted):', fileId);
+			} else {
+				console.error('Error fetching file metadata:', error);
+			}
 			return null;
 		}
 
@@ -301,21 +420,32 @@ export async function deleteFile(fileId: string): Promise<boolean> {
 		}
 
 		// Delete file from storage (Supabase or S3)
-		if (fileMetadata.bucket === STORAGE_BUCKETS.S3 || STORAGE_PROVIDER === 's3') {
+		// Prioritize bucket over global provider setting - bucket is the source of truth
+		if (fileMetadata.bucket === STORAGE_BUCKETS.S3) {
 			// Delete from S3
 			const deleted = await deleteFileFromS3(fileMetadata.path);
 			if (!deleted) {
 				console.error('Error deleting file from S3');
 			}
 		} else {
-			// Delete from Supabase
+			// Delete from Supabase (for all other buckets including 'branding')
+			// Note: Even if STORAGE_PROVIDER is 's3', if the bucket is a Supabase bucket, delete from Supabase
 			const { error: storageError } = await supabase.storage
 				.from(fileMetadata.bucket)
 				.remove([fileMetadata.path]);
 
 			if (storageError) {
-				console.error('Error deleting file from storage:', storageError);
+				console.error('Error deleting file from Supabase storage:', {
+					error: storageError,
+					bucket: fileMetadata.bucket,
+					path: fileMetadata.path,
+				});
 				// Metadata is already deleted, so we'll continue
+			} else {
+				console.log('Successfully deleted file from Supabase storage:', {
+					bucket: fileMetadata.bucket,
+					path: fileMetadata.path,
+				});
 			}
 		}
 
@@ -349,12 +479,13 @@ export function getBucketForCategory(category: FileCategory): StorageBucket {
 
 /**
  * Get public access setting for a category
+ * Note: BRANDING_LOGO is now private/secured by default
  */
 export function getPublicAccessForCategory(category: FileCategory): boolean {
 	const publicCategories: FileCategory[] = [
 		FILE_CATEGORIES.PROFILE_PICTURE,
 		FILE_CATEGORIES.INVENTORY_IMAGE,
-		FILE_CATEGORIES.BRANDING_LOGO,
+		// BRANDING_LOGO removed - logos are now private/secured
 	];
 
 	return publicCategories.includes(category);
@@ -380,9 +511,9 @@ function generateFilePath(category: FileCategory, ownerId: string, fileName: str
 		case 'employee_document':
 			return `employees/${ownerId}/documents/${sanitizedFileName}`;
 		case 'branding_logo':
-			return `branding/logos/${sanitizedFileName}`;
+			return `logos/${sanitizedFileName}`;
 		case 'branding_stamp':
-			return `branding/stamps/${sanitizedFileName}`;
+			return `stamps/${sanitizedFileName}`;
 		case 'payroll_document':
 			return `payroll/${ownerId}/document-${timestamp}${extension}`;
 		case 'asset_file':

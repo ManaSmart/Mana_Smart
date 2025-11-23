@@ -83,13 +83,16 @@ Deploy all 5 Edge Functions to Supabase.
 ## pg_dump Command Used
 
 ```bash
-pg_dump "$DATABASE_URL" \
+pg_dump --dbname="$SUPABASE_DB_URL" \
   --no-owner \
   --no-privileges \
-  --format=plain \
-  --blobs \
+  --format=custom \
+  --compress=6 \
+  --file=backup/db/backup.dump \
   --verbose
 ```
+
+**⚠️ Important:** The `SUPABASE_DB_URL` secret must contain the **direct PostgreSQL connection URL (port 5432)**, NOT the pooled connection (port 6543). Pooled connections will cause `pg_dump` to fail.
 
 **Explanation:**
 - `--no-owner`: Excludes ownership commands (portable)
@@ -143,7 +146,7 @@ backup-YYYY-MM-DD-HH-mm-UTC.zip
 2. **Workflow fails**: Check GitHub Secrets are set correctly
 3. **S3 upload fails**: Verify AWS credentials and bucket permissions
 4. **Storage download fails**: Check bucket names in `SUPABASE_BUCKETS_TO_BACKUP`
-5. **Database connection fails**: Verify `DATABASE_URL` format and accessibility
+5. **Database connection fails**: Verify `SUPABASE_DB_URL` format and accessibility. **CRITICAL**: Must use direct connection (port 5432), NOT pooled (port 6543)
 
 See [BACKUP_SYSTEM_SETUP.md](./BACKUP_SYSTEM_SETUP.md) for detailed troubleshooting.
 

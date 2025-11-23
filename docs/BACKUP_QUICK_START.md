@@ -6,7 +6,8 @@
 
 ```bash
 # Execute the SQL migration
-psql $DATABASE_URL -f supabase/migrations/007_create_backup_system.sql
+# Note: Use your direct PostgreSQL connection URL (port 5432)
+psql $SUPABASE_DB_URL -f supabase/migrations/007_create_backup_system.sql
 ```
 
 Or via Supabase Dashboard → SQL Editor → paste and run the migration.
@@ -18,7 +19,7 @@ Go to: GitHub Repo → Settings → Secrets and variables → Actions
 Add these secrets:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `DATABASE_URL`
+- `SUPABASE_DB_URL` (⚠️ Must be direct connection, port 5432, NOT pooled)
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
 - `AWS_S3_REGION`

@@ -206,7 +206,8 @@ export async function getFileUrlFromS3(
 ): Promise<string | null> {
 	try {
 		// Check if this is a branding logo - use longer expiration (7 days = 604800 seconds)
-		const isBrandingLogo = path.includes('branding/logos');
+		// Check for both old S3 path format (branding/logos) and new Supabase format (logos)
+		const isBrandingLogo = path.includes('branding/logos') || path.startsWith('logos/');
 		const expirationTime = isBrandingLogo ? 604800 : expiresIn; // 7 days for logos, default for others
 		
 		// Since we're getting 403 errors for public URLs, always use presigned URLs
@@ -216,6 +217,7 @@ export async function getFileUrlFromS3(
 			console.log('To use public URLs, configure S3 bucket for public read access');
 		}
 		console.log('Generated presigned URL (expires in', expirationTime, 'seconds)');
+		console.warn('⚠️ If you see CORS errors, configure CORS on your S3 bucket. See docs/S3_CORS_SETUP.md for instructions.');
 		
 		// Use presigned URL (works for both public and private files)
 		return await getSignedUrlForS3(path, expirationTime);

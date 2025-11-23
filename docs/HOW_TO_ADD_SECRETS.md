@@ -27,7 +27,7 @@ GitHub Secrets are used by GitHub Actions workflows to access your services.
 |------------|---------------------|
 | `SUPABASE_URL` | Go to Supabase Dashboard → Your Project → Settings → API → Copy "Project URL" |
 | `SUPABASE_SERVICE_ROLE_KEY` | Go to Supabase Dashboard → Your Project → Settings → API → Copy "service_role" key (⚠️ Keep this secret!) |
-| `DATABASE_URL` | Go to Supabase Dashboard → Your Project → Settings → Database → Connection string → Select "URI" → Replace `[YOUR-PASSWORD]` with your actual database password |
+| `SUPABASE_DB_URL` | Go to Supabase Dashboard → Your Project → Settings → Database → **Direct connection** (Port 5432) → Select "URI" → Replace `[YOUR-PASSWORD]` with your actual database password. **⚠️ MUST use direct connection (port 5432), NOT pooled (port 6543)** |
 | `AWS_ACCESS_KEY_ID` | From your AWS account → IAM → Users → Your user → Security credentials → Access keys |
 | `AWS_SECRET_ACCESS_KEY` | Same as above (shown only once when created) |
 | `AWS_S3_REGION` | Your S3 bucket region (e.g., `us-east-1`, `eu-west-1`) |
