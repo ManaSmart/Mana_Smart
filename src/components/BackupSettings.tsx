@@ -30,6 +30,7 @@ import {
   generateSignedUrl,
   cancelBackup,
   deleteBackup,
+  restoreBackup,
 } from "../lib/backupApi";
 
 interface BackupHistoryItem {
@@ -43,7 +44,7 @@ interface BackupHistoryItem {
 }
 
 const POLL_INTERVAL_MS = 3000; // Poll every 3 seconds
-const MAX_POLL_ATTEMPTS = 400; // Max 20 minutes of polling (400 * 3s = 1200s = 20min)
+const MAX_POLL_ATTEMPTS = 1200; // Max 60 minutes of polling (1200 * 3s = 3600s = 60min) - matches workflow timeout
 
 interface BackupSettingsProps {
   autoBackup?: boolean;
@@ -88,6 +89,12 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [deleteTargetDate, setDeleteTargetDate] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  
+  // Dialog state for restore
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreResults, setRestoreResults] = useState<any>(null);
 
   // Load initial settings and history
   useEffect(() => {
@@ -841,6 +848,52 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     return `${mb.toFixed(2)} MB`;
   };
 
+  const handleRestoreClick = () => {
+    setRestoreDialogOpen(true);
+    setRestoreFile(null);
+    setRestoreResults(null);
+  };
+
+  const handleRestoreFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setRestoreFile(file);
+      setRestoreResults(null);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!restoreFile) {
+      toast.error("Please select a backup file to restore");
+      return;
+    }
+
+    setIsRestoring(true);
+    setRestoreResults(null);
+
+    try {
+      console.log("[Backup] Starting restore for file:", restoreFile.name);
+      const results = await restoreBackup(restoreFile);
+      
+      setRestoreResults(results);
+      
+      if (results.success) {
+        toast.success("Backup restore completed successfully! Data has been merged with existing data.");
+        // Refresh history and settings
+        await Promise.all([loadHistory(), loadSettings()]);
+      } else {
+        toast.error("Restore completed with warnings. Check the results for details.");
+      }
+    } catch (error) {
+      console.error("[Backup] Restore failed:", error);
+      toast.error(
+        error instanceof Error ? error.message : "Failed to restore backup"
+      );
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
   // Circular progress component
   const CircularProgress = ({ percentage, size = 32 }: { percentage: number; size?: number }) => {
     const radius = (size - 4) / 2;
@@ -983,6 +1036,15 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                     Download Backup Now
                   </>
                 )}
+              </Button>
+              
+              <Button
+                onClick={handleRestoreClick}
+                variant="outline"
+                className="flex-shrink-0"
+              >
+                <Database className="w-4 h-4 mr-2" />
+                Restore Backup
               </Button>
               
               {manualBackupProgress.isRunning && (
@@ -1283,6 +1345,153 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                 <>
                   <Trash2 className="w-4 h-4 mr-2" />
                   Delete Backup
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Backup Dialog */}
+      <Dialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Database className="w-5 h-5" />
+              Restore Backup
+            </DialogTitle>
+            <DialogDescription>
+              Upload a backup file to restore data. The restore will merge data with existing records without overwriting them.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            {/* File Input */}
+            <div className="space-y-2">
+              <Label htmlFor="restore-file">Backup File (ZIP)</Label>
+              <input
+                id="restore-file"
+                type="file"
+                accept=".zip"
+                onChange={handleRestoreFileChange}
+                className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary file:text-primary-foreground hover:file:bg-primary/90"
+                disabled={isRestoring}
+              />
+              {restoreFile && (
+                <p className="text-sm text-muted-foreground">
+                  Selected: {restoreFile.name} ({(restoreFile.size / (1024 * 1024)).toFixed(2)} MB)
+                </p>
+              )}
+            </div>
+
+            {/* Warning */}
+            <div className="p-4 border border-yellow-200 bg-yellow-50 rounded-lg">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5" />
+                <div className="space-y-1 text-sm">
+                  <p className="font-semibold text-yellow-900">Important Notes:</p>
+                  <ul className="list-disc list-inside space-y-1 text-yellow-800">
+                    <li>Data will be merged with existing records (no overwrites)</li>
+                    <li>Auth users will be created only if they don't exist</li>
+                    <li>Storage files will be uploaded only if they don't exist</li>
+                    <li>Database SQL restore requires manual execution via Supabase SQL Editor or psql</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Restore Results */}
+            {restoreResults && (
+              <div className="space-y-3 p-4 border rounded-lg">
+                <h4 className="font-semibold">Restore Results:</h4>
+                
+                {/* Database Results */}
+                {restoreResults.results?.database && (
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Database:</p>
+                    <p className="text-sm text-muted-foreground">
+                      {restoreResults.results.database.restored ? (
+                        <span className="text-green-600">✓ Restored ({restoreResults.results.database.rows_affected} rows)</span>
+                      ) : (
+                        <span className="text-yellow-600">
+                          ⚠ {restoreResults.results.database.message || "Not restored"}
+                        </span>
+                      )}
+                    </p>
+                    {restoreResults.results.database.note && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {restoreResults.results.database.note}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Auth Users Results */}
+                {restoreResults.results?.auth_users && (
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Auth Users:</p>
+                    <p className="text-sm text-muted-foreground">
+                      {restoreResults.results.auth_users.restored ? (
+                        <span className="text-green-600">
+                          ✓ Merged {restoreResults.results.auth_users.users_merged} user(s)
+                          {restoreResults.results.auth_users.users_skipped && restoreResults.results.auth_users.users_skipped > 0 && (
+                            <span className="text-muted-foreground">, skipped {restoreResults.results.auth_users.users_skipped}</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-yellow-600">⚠ Not restored</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {/* Storage Results */}
+                {restoreResults.results?.storage && (
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium">Storage Files:</p>
+                    <p className="text-sm text-muted-foreground">
+                      {restoreResults.results.storage.restored ? (
+                        <span className="text-green-600">
+                          ✓ Uploaded {restoreResults.results.storage.files_uploaded} file(s)
+                          {restoreResults.results.storage.files_skipped && restoreResults.results.storage.files_skipped > 0 && (
+                            <span className="text-muted-foreground">, skipped {restoreResults.results.storage.files_skipped}</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-yellow-600">⚠ Not restored</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRestoreDialogOpen(false);
+                setRestoreFile(null);
+                setRestoreResults(null);
+              }}
+              disabled={isRestoring}
+            >
+              Close
+            </Button>
+            <Button
+              onClick={handleRestore}
+              disabled={!restoreFile || isRestoring}
+            >
+              {isRestoring ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Restoring...
+                </>
+              ) : (
+                <>
+                  <Database className="w-4 h-4 mr-2" />
+                  Restore Backup
                 </>
               )}
             </Button>

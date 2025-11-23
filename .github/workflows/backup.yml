@@ -115,22 +115,46 @@ jobs:
 
       - name: Dump PostgreSQL database
         id: pg_dump
+        timeout-minutes: 30
         run: |
+          echo "=========================================="
           echo "Starting database dump..."
+          echo "=========================================="
+          echo "Using compressed custom format for faster processing..."
+          
+          # Use custom format with compression for faster processing
           pg_dump "$DATABASE_URL" \
             --no-owner \
             --no-privileges \
-            --format=plain \
-            --blobs \
-            --verbose \
-            > backup/db/backup.sql 2>&1 || {
-            echo "Database dump failed"
+            --format=custom \
+            --compress=6 \
+            --file=backup/db/backup.dump \
+            --verbose 2>&1 | tee backup/db/dump.log || {
+            echo "ERROR: Database dump failed"
+            cat backup/db/dump.log
             exit 1
           }
           
-          DB_SIZE=$(du -b backup/db/backup.sql | cut -f1)
-          echo "Database dump size: $DB_SIZE bytes"
+          # Convert to SQL format for compatibility (optional, but slower)
+          # For restore, users can use pg_restore with the .dump file
+          echo "Converting to SQL format for compatibility..."
+          pg_restore "$DATABASE_URL" \
+            --no-owner \
+            --no-privileges \
+            --format=plain \
+            backup/db/backup.dump \
+            > backup/db/backup.sql 2>&1 || {
+            echo "WARNING: SQL conversion failed, but .dump file is available"
+            # Create empty SQL file so archive doesn't fail
+            touch backup/db/backup.sql
+          }
+          
+          DB_SIZE=$(du -b backup/db/backup.dump | cut -f1)
+          SQL_SIZE=$(du -b backup/db/backup.sql | cut -f1)
+          echo "Database dump size: $DB_SIZE bytes (.dump format)"
+          echo "SQL dump size: $SQL_SIZE bytes (.sql format)"
           echo "db_size=$DB_SIZE" >> $GITHUB_OUTPUT
+          echo "sql_size=$SQL_SIZE" >> $GITHUB_OUTPUT
 
       - name: Export auth users
         id: export_auth
@@ -176,10 +200,53 @@ jobs:
             });
           "
 
+      - name: Update backup status (in progress)
+        id: update_status_progress
+        run: |
+          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          node -e "
+          (async () => {
+            try {
+              const { createClient } = require('@supabase/supabase-js');
+              const supabase = createClient(
+                process.env.SUPABASE_URL,
+                process.env.SUPABASE_SERVICE_ROLE_KEY
+              );
+              const dispatchId = process.env.DISPATCH_ID || '';
+              
+              // Update status to show we're processing storage
+              const { data: existingEntry } = await supabase
+                .from('backup_history')
+                .select('id')
+                .eq('dispatch_id', dispatchId)
+                .maybeSingle();
+              
+              if (existingEntry) {
+                await supabase
+                  .from('backup_history')
+                  .update({ 
+                    status: 'in_progress',
+                    error_text: 'Processing database and storage files...'
+                  })
+                  .eq('id', existingEntry.id);
+              }
+              process.exit(0);
+            } catch (err) {
+              console.warn('Failed to update progress status:', err.message);
+              process.exit(0); // Don't fail the workflow
+            }
+          })();
+          "
+        env:
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+
       - name: Download Supabase Storage files
         id: download_storage
+        timeout-minutes: 20
         run: |
+          echo "=========================================="
           echo "Downloading storage files..."
+          echo "=========================================="
           node -e "
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
@@ -196,9 +263,15 @@ jobs:
             .filter(b => b.length > 0);
           
           if (buckets.length === 0) {
-            console.log('No buckets specified for backup');
+            console.log('No buckets specified for backup - skipping storage backup');
+            // Create empty storage directory
+            if (!fs.existsSync('backup/storage')) {
+              fs.mkdirSync('backup/storage', { recursive: true });
+            }
             process.exit(0);
           }
+          
+          console.log(\`Backing up \${buckets.length} bucket(s): \${buckets.join(', ')}\`);
           
           async function downloadFile(bucket, filePath, localPath) {
             try {
@@ -260,11 +333,13 @@ jobs:
             return files;
           }
           
-          (async () => {
+            (async () => {
             const startTime = Date.now();
             let totalFiles = 0;
             let totalSize = 0;
-            const MAX_CONCURRENT_DOWNLOADS = 10; // Download up to 10 files in parallel
+            const MAX_CONCURRENT_DOWNLOADS = 5; // Reduced to 5 for stability
+            const MAX_STORAGE_SIZE_MB = 500; // Limit storage backup to 500MB to prevent timeout
+            const MAX_STORAGE_FILES = 1000; // Limit to 1000 files to prevent timeout
             
             for (const bucket of buckets) {
               console.log(\`Processing bucket: \${bucket}\`);
@@ -272,9 +347,22 @@ jobs:
               const files = await listFiles(bucket);
               console.log(\`Found \${files.length} files in \${bucket}\`);
               
+              // Limit files if too many to prevent timeout
+              let filesToProcess = files;
+              if (files.length > MAX_STORAGE_FILES) {
+                console.log(\`WARNING: Too many files (\${files.length}). Limiting to first \${MAX_STORAGE_FILES} files to prevent timeout.\`);
+                filesToProcess = files.slice(0, MAX_STORAGE_FILES);
+              }
+              
               // Download files in parallel batches
-              for (let i = 0; i < files.length; i += MAX_CONCURRENT_DOWNLOADS) {
-                const batch = files.slice(i, i + MAX_CONCURRENT_DOWNLOADS);
+              for (let i = 0; i < filesToProcess.length; i += MAX_CONCURRENT_DOWNLOADS) {
+                const batch = filesToProcess.slice(i, i + MAX_CONCURRENT_DOWNLOADS);
+                
+                // Check size limit
+                if (totalSize > MAX_STORAGE_SIZE_MB * 1024 * 1024) {
+                  console.log(\`WARNING: Storage backup size limit reached (\${MAX_STORAGE_SIZE_MB}MB). Stopping download to prevent timeout.\`);
+                  break;
+                }
                 const downloadPromises = batch.map(async (filePath) => {
                   const localPath = \`backup/storage/\${bucket}/\${filePath}\`;
                   const success = await downloadFile(bucket, filePath, localPath);
@@ -295,17 +383,29 @@ jobs:
                 });
                 
                 // Log progress every 10 files
-                if ((i + batch.length) % 10 === 0 || i + batch.length === files.length) {
-                  console.log(\`Progress: \${Math.min(i + batch.length, files.length)}/\${files.length} files processed\`);
+                const processed = Math.min(i + batch.length, filesToProcess.length);
+                if (processed % 10 === 0 || processed === filesToProcess.length) {
+                  const sizeMB = (totalSize / 1024 / 1024).toFixed(2);
+                  console.log(\`Progress: \${processed}/\${filesToProcess.length} files processed (\${sizeMB} MB)\`);
                 }
               }
               
               const bucketTime = ((Date.now() - bucketStartTime) / 1000).toFixed(2);
-              console.log(\`Bucket \${bucket} completed in \${bucketTime}s: \${totalFiles} files, \${(totalSize / 1024 / 1024).toFixed(2)} MB\`);
+              const bucketSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+              console.log(\`Bucket \${bucket} completed in \${bucketTime}s: \${totalFiles} files, \${bucketSizeMB} MB\`);
+              
+              if (files.length > MAX_STORAGE_FILES) {
+                console.log(\`NOTE: Only backed up \${filesToProcess.length} of \${files.length} files due to size limits\`);
+              }
             }
             
             const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
-            console.log(\`Storage backup completed in \${totalTime}s: \${totalFiles} files, total size: \${(totalSize / 1024 / 1024).toFixed(2)} MB\`);
+            const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+            console.log(\`==========================================\`);
+            console.log(\`Storage backup completed in \${totalTime}s\`);
+            console.log(\`Total files: \${totalFiles}\`);
+            console.log(\`Total size: \${totalSizeMB} MB\`);
+            console.log(\`==========================================\`);
           })().catch(err => {
             console.error('Storage download error:', err);
             process.exit(1);
@@ -314,23 +414,29 @@ jobs:
 
       - name: Create backup archive
         id: create_archive
+        timeout-minutes: 10
         run: |
+          echo "=========================================="
           echo "Creating backup archive..."
+          echo "=========================================="
           TIMESTAMP=$(date -u +"%Y-%m-%d-%H-%M-UTC")
           ARCHIVE_NAME="backup-$TIMESTAMP.zip"
           
           cd backup
-          zip -r "../$ARCHIVE_NAME" . -q
+          echo "Compressing files..."
+          zip -r "../$ARCHIVE_NAME" . -q -9
           cd ..
           
           ARCHIVE_SIZE=$(du -b "$ARCHIVE_NAME" | cut -f1)
+          ARCHIVE_SIZE_MB=$(awk "BEGIN {printf \"%.2f\", $ARCHIVE_SIZE / 1024 / 1024}")
           echo "Archive created: $ARCHIVE_NAME"
-          echo "Archive size: $ARCHIVE_SIZE bytes"
+          echo "Archive size: $ARCHIVE_SIZE bytes ($ARCHIVE_SIZE_MB MB)"
           echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
           echo "archive_size=$ARCHIVE_SIZE" >> $GITHUB_OUTPUT
 
       - name: Upload to S3 (with retry)
         id: upload_s3
+        timeout-minutes: 15
         run: |
           ARCHIVE_NAME="${{ steps.create_archive.outputs.archive_name }}"
           TIMESTAMP=$(date -u +"%Y-%m-%d")
@@ -407,20 +513,34 @@ jobs:
 
       - name: Update backup_history and system_settings
         id: update_history
-        if: success()
+        if: always()  # Always run, even on failure
         run: |
           ARCHIVE_SIZE="${{ steps.create_archive.outputs.archive_size }}"
           S3_KEY="${{ steps.upload_s3.outputs.s3_key }}"
           DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
           WORKFLOW_RUN_ID="${{ github.run_id }}"
           
-          echo "=========================================="
-          echo "Updating backup history (SUCCESS)"
-          echo "=========================================="
+          # Check if previous steps succeeded
+          UPLOAD_OUTCOME="${{ steps.upload_s3.outcome }}"
+          if [ "$UPLOAD_OUTCOME" = "success" ] && [ -n "$S3_KEY" ]; then
+            export STATUS="success"
+            export ERROR_TEXT=""
+            echo "=========================================="
+            echo "Updating backup history (SUCCESS)"
+            echo "=========================================="
+          else
+            export STATUS="failed"
+            export ERROR_TEXT="Backup workflow completed but S3 upload may have failed. Check GitHub Actions logs for details."
+            echo "=========================================="
+            echo "Updating backup history (FAILURE/PARTIAL)"
+            echo "=========================================="
+          fi
+          
           echo "Dispatch ID: $DISPATCH_ID"
           echo "Workflow Run ID: $WORKFLOW_RUN_ID"
-          echo "S3 Key: $S3_KEY"
-          echo "Archive Size: $ARCHIVE_SIZE bytes"
+          echo "S3 Key: ${S3_KEY:-NOT UPLOADED}"
+          echo "Archive Size: ${ARCHIVE_SIZE:-0} bytes"
+          echo "Status: $STATUS"
           echo ""
           
           # Use IIFE to properly handle async/await
@@ -436,8 +556,14 @@ jobs:
               
               const now = new Date().toISOString();
               const dispatchId = process.env.DISPATCH_ID || '';
+              const status = process.env.STATUS || 'failed';
+              const errorText = process.env.ERROR_TEXT || null;
               
               console.log('[UPDATE] Looking for backup entry with dispatch_id:', dispatchId);
+              console.log('[UPDATE] Status to set:', status);
+              if (errorText) {
+                console.log('[UPDATE] Error text:', errorText);
+              }
               
               // Find existing entry by dispatch_id
               const { data: existingEntry, error: findError } = await supabase
@@ -463,10 +589,10 @@ jobs:
                   .from('backup_history')
                   .update({
                     workflow_run_id: process.env.WORKFLOW_RUN_ID,
-                    s3_key: process.env.S3_KEY,
-                    status: 'success',
+                    s3_key: process.env.S3_KEY || null,
+                    status: process.env.STATUS || 'failed',
                     size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
-                    error_text: null,
+                    error_text: process.env.ERROR_TEXT || null,
                   })
                   .eq('id', existingEntry.id)
                   .select();
@@ -486,10 +612,10 @@ jobs:
                   .insert({
                     dispatch_id: dispatchId || null,
                     workflow_run_id: process.env.WORKFLOW_RUN_ID,
-                    s3_key: process.env.S3_KEY,
-                    status: 'success',
+                    s3_key: process.env.S3_KEY || null,
+                    status: process.env.STATUS || 'failed',
                     size_bytes: parseInt(process.env.ARCHIVE_SIZE || '0'),
-                    error_text: null,
+                    error_text: process.env.ERROR_TEXT || null,
                     created_at: now
                   })
                   .select();

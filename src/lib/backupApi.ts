@@ -211,3 +211,55 @@ export async function generateSignedUrl(s3Key: string): Promise<{ signed_url: st
   return await response.json();
 }
 
+/**
+ * Restore a backup file by merging data with existing data (no overwrites)
+ * @param backupFile The backup ZIP file to restore
+ * @returns Restore results including status for database, auth users, and storage
+ */
+export async function restoreBackup(
+  backupFile: File
+): Promise<{
+  success: boolean;
+  message: string;
+  results: {
+    database: {
+      restored: boolean;
+      message?: string;
+      sql_converted?: boolean;
+      sql_size?: number;
+      note?: string;
+      rows_affected?: number;
+    };
+    auth_users: {
+      restored: boolean;
+      users_merged: number;
+      users_skipped?: number;
+    };
+    storage: {
+      restored: boolean;
+      files_uploaded: number;
+      files_skipped?: number;
+    };
+  };
+}> {
+  const formData = new FormData();
+  formData.append('backup_file', backupFile);
+
+  const url = `${SUPABASE_URL}/functions/v1/restore-backup`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      ...(BACKUP_API_KEY ? { Authorization: `Bearer ${BACKUP_API_KEY}` } : {}),
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to restore backup: ${response.statusText} - ${errorText}`);
+  }
+
+  return await response.json();
+}
+
