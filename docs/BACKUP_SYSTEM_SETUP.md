@@ -128,7 +128,8 @@ Add the following secrets:
    - **Why**: Backups run automatically and will fail if the token expires, potentially causing data loss
    - **Security**: The token is stored securely in GitHub Secrets and only used by GitHub Actions, so the risk is minimal
    - **Alternative**: If you prefer shorter expiration (30-90 days), set a calendar reminder to renew it before it expires
-4. Copy the token and add it as `BACKUP_GITHUB_TOKEN` secret (⚠️ Note: GitHub doesn't allow secret names starting with `GITHUB_`, so we use `BACKUP_GITHUB_TOKEN` instead)
+4. Copy the token and add it as `BACKUP_GITHUB_TOKEN` secret in GitHub (⚠️ Note: GitHub doesn't allow secret names starting with `GITHUB_`, so we use `BACKUP_GITHUB_TOKEN` instead)
+5. **Important**: You'll also need to set this same token value in Supabase Edge Function secrets as `GITHUB_TOKEN` (see Step 4.5). The variable names are different, but use the same token value.
 
 ### Step 4: Deploy Supabase Edge Functions
 
@@ -327,13 +328,36 @@ supabase secrets set AWS_S3_BUCKET=your-backup-bucket-name
 
 - **SUPABASE_URL**: From Supabase Dashboard → Settings → API → Project URL
 - **SUPABASE_SERVICE_ROLE_KEY**: From Supabase Dashboard → Settings → API → service_role key (⚠️ Keep secret!)
-- **GITHUB_TOKEN**: The Personal Access Token you created earlier
+- **GITHUB_TOKEN**: The Personal Access Token you created earlier (⚠️ **Important**: Use the SAME VALUE as `BACKUP_GITHUB_TOKEN` in GitHub Secrets, but the variable name is different - see table below)
 - **GITHUB_OWNER**: Your GitHub username or organization (e.g., `ManaSmart`)
 - **GITHUB_REPO**: Your repository name (e.g., `Mana_Smart_Scent`)
 - **BACKUP_API_KEY**: Generate with `openssl rand -hex 32` or use any secure random string (must match frontend `.env.local`)
 - **AWS credentials**: From your AWS IAM user credentials
 - **AWS_S3_REGION**: Your S3 bucket region (e.g., `us-east-1`, `eu-west-1`)
 - **AWS_S3_BUCKET**: Your S3 bucket name
+
+**📋 Variable Name Comparison:**
+
+| Purpose | GitHub Secret Name | Supabase Secret Name | Same Value? |
+|---------|-------------------|---------------------|------------|
+| GitHub Token | `BACKUP_GITHUB_TOKEN` | `GITHUB_TOKEN` | ✅ **YES** (same token value) |
+| GitHub Owner | `GITHUB_OWNER` | `GITHUB_OWNER` | ✅ **YES** (same name & value) |
+| GitHub Repo | `GITHUB_REPO` | `GITHUB_REPO` | ✅ **YES** (same name & value) |
+| Backup API Key | `BACKUP_API_KEY` | `BACKUP_API_KEY` | ✅ **YES** (same name & value) |
+| Supabase URL | `SUPABASE_URL` | `SUPABASE_URL` | ✅ **YES** (same name & value) |
+| Service Role Key | `SUPABASE_SERVICE_ROLE_KEY` | `SUPABASE_SERVICE_ROLE_KEY` | ✅ **YES** (same name & value) |
+| AWS Access Key | `AWS_ACCESS_KEY_ID` | `AWS_ACCESS_KEY_ID` | ✅ **YES** (same name & value) |
+| AWS Secret Key | `AWS_SECRET_ACCESS_KEY` | `AWS_SECRET_ACCESS_KEY` | ✅ **YES** (same name & value) |
+| AWS Region | `AWS_S3_REGION` | `AWS_S3_REGION` | ✅ **YES** (same name & value) |
+| AWS Bucket | `AWS_S3_BUCKET` | `AWS_S3_BUCKET` | ✅ **YES** (same name & value) |
+| Workflow ID | ❌ Not needed | `GITHUB_WORKFLOW_ID` | N/A (only in Supabase) |
+| Database URL | `DATABASE_URL` | ❌ Not needed | N/A (only in GitHub) |
+| Buckets List | `SUPABASE_BUCKETS_TO_BACKUP` | ❌ Not needed | N/A (only in GitHub) |
+
+**⚠️ Important Notes:**
+- **GitHub Token**: GitHub doesn't allow secret names starting with `GITHUB_`, so in GitHub Secrets it's called `BACKUP_GITHUB_TOKEN`, but in Supabase it's `GITHUB_TOKEN`. **Use the same token value in both places.**
+- **Most other variables**: Use the same name and value in both GitHub Secrets and Supabase Secrets.
+- **Some variables are only needed in one place**: `GITHUB_WORKFLOW_ID` is only in Supabase, while `DATABASE_URL` and `SUPABASE_BUCKETS_TO_BACKUP` are only in GitHub.
 
 **Verify secrets are set**:
 ```bash
@@ -342,16 +366,98 @@ supabase secrets list
 
 This will show all your secrets (values are hidden for security).
 
+**🔄 How to Change/Rename a Secret:**
+
+Supabase doesn't allow renaming secrets directly. To change a secret name:
+
+1. **Set the new secret** with the correct name:
+   ```bash
+   supabase secrets set NEW_SECRET_NAME=your_value_here --project-ref your-project-ref
+   ```
+
+2. **Delete the old secret** (optional but recommended):
+   ```bash
+   supabase secrets unset OLD_SECRET_NAME --project-ref your-project-ref
+   ```
+
+**Example:** If you accidentally set `BACKUP_GITHUB_TOKEN` instead of `GITHUB_TOKEN`:
+```bash
+# 1. Set the correct name (use the same value)
+supabase secrets set GITHUB_TOKEN=ghp_your_token_here --project-ref rqssjgiunwyjeyutgkkp
+
+# 2. Delete the old one
+supabase secrets unset BACKUP_GITHUB_TOKEN --project-ref rqssjgiunwyjeyutgkkp
+```
+
+**Note:** After changing secrets, you may need to redeploy your Edge Functions for the changes to take effect:
+```bash
+supabase functions deploy function-name --no-verify-jwt --project-ref your-project-ref
+```
+
 #### Step 4.6: Test Edge Functions
 
 Test that your functions are working correctly:
 
+**📍 Where to Get the Edge Function URL:**
+
+The Edge Function URL follows this pattern:
+```
+https://[YOUR-PROJECT-REF].supabase.co/functions/v1/[FUNCTION-NAME]
+```
+
+**To find your project URL:**
+
+1. **From Supabase Dashboard:**
+   - Go to: https://app.supabase.com
+   - Select your project
+   - Go to **Settings** → **API**
+   - Find **Project URL** (looks like: `https://abcdefghijklmnop.supabase.co`)
+   - Copy this URL
+
+2. **From Deployment Output:**
+   - When you deploy a function (Step 4.4), the CLI shows the URL:
+   ```
+   Function URL: https://xxxxx.supabase.co/functions/v1/trigger-backup
+   ```
+
+3. **Construct the URL manually:**
+   - Replace `[YOUR-PROJECT-REF]` with your project reference ID
+   - Replace `[FUNCTION-NAME]` with the function name (e.g., `settings-toggle`, `trigger-backup`)
+   - Example: If your project URL is `https://abcdefghijklmnop.supabase.co`, then:
+     - `settings-toggle` URL: `https://abcdefghijklmnop.supabase.co/functions/v1/settings-toggle`
+     - `trigger-backup` URL: `https://abcdefghijklmnop.supabase.co/functions/v1/trigger-backup`
+
+**⚠️ Windows Users Note:**
+- In **PowerShell**: Use backticks (`` ` ``) for line continuation, or use a single line
+- In **CMD**: Use carets (`^`) for line continuation, or use a single line
+- The backslash (`\`) used in bash/Linux examples doesn't work in Windows
+
 **1. Test `settings-toggle`** (enable backups):
+
+**Linux/macOS (bash):**
 ```bash
+# Replace "your-project.supabase.co" with your actual project URL
 curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"backup_enabled": true}'
+```
+
+**Windows PowerShell:**
+```powershell
+# Single line (recommended)
+curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json" -d '{\"backup_enabled\": true}'
+
+# Or with line continuation (use backticks)
+curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle `
+  -H "Authorization: Bearer YOUR_BACKUP_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{\"backup_enabled\": true}'
+```
+
+**Windows CMD:**
+```cmd
+curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json" -d "{\"backup_enabled\": true}"
 ```
 
 **Expected response**:
@@ -360,10 +466,29 @@ curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle \
 ```
 
 **2. Test `trigger-backup`** (trigger a backup):
+
+**Linux/macOS (bash):**
 ```bash
+# Replace "your-project.supabase.co" with your actual project URL
 curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
   -H "Content-Type: application/json"
+```
+
+**Windows PowerShell:**
+```powershell
+# Single line (recommended)
+curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json"
+
+# Or with line continuation
+curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup `
+  -H "Authorization: Bearer YOUR_BACKUP_API_KEY" `
+  -H "Content-Type: application/json"
+```
+
+**Windows CMD:**
+```cmd
+curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json"
 ```
 
 **Expected response**:
@@ -376,9 +501,18 @@ curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup \
 ```
 
 **3. Test `backup-status`**:
+
+**Linux/macOS (bash):**
 ```bash
+# Replace "your-project.supabase.co" with your actual project URL
 curl -X GET "https://your-project.supabase.co/functions/v1/backup-status?dispatch_id=abc-123-def" \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
+```
+
+**Windows PowerShell/CMD:**
+```powershell
+# Single line
+curl -X GET "https://your-project.supabase.co/functions/v1/backup-status?dispatch_id=abc-123-def" -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
 ```
 
 #### Troubleshooting Deployment Issues
@@ -478,8 +612,16 @@ Same as GitHub Secrets, plus:
 
 ### Test via cURL
 
+**📌 Important:** 
+- Replace `https://your-project.supabase.co` in all examples below with your actual Supabase project URL. You can find it in:
+  - **Supabase Dashboard** → **Settings** → **API** → **Project URL**
+  - Or use the URL shown when you deploy functions (Step 4.4)
+- Replace `YOUR_BACKUP_API_KEY` with your actual backup API key (same value as `VITE_BACKUP_API_KEY` in your `.env.local`)
+- **Windows users:** Use single-line commands or see Step 4.6 for Windows-specific syntax
+
 #### 1. Toggle Backup On/Off
 
+**Linux/macOS:**
 ```bash
 curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
@@ -487,12 +629,23 @@ curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle \
   -d '{"backup_enabled": true}'
 ```
 
+**Windows (PowerShell/CMD - single line):**
+```powershell
+curl -X POST https://your-project.supabase.co/functions/v1/settings-toggle -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json" -d "{\"backup_enabled\": true}"
+```
+
 #### 2. Trigger Manual Backup
 
+**Linux/macOS:**
 ```bash
 curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
   -H "Content-Type: application/json"
+```
+
+**Windows (PowerShell/CMD - single line):**
+```powershell
+curl -X POST https://your-project.supabase.co/functions/v1/trigger-backup -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json"
 ```
 
 Response:
@@ -506,9 +659,15 @@ Response:
 
 #### 3. Poll Backup Status
 
+**Linux/macOS:**
 ```bash
 curl -X GET "https://your-project.supabase.co/functions/v1/backup-status?dispatch_id=abc-123-def" \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
+```
+
+**Windows (PowerShell/CMD - single line):**
+```powershell
+curl -X GET "https://your-project.supabase.co/functions/v1/backup-status?dispatch_id=abc-123-def" -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
 ```
 
 Response (pending):
@@ -530,18 +689,30 @@ Response (success):
 
 #### 4. Get Backup History
 
+**Linux/macOS:**
 ```bash
 curl -X GET "https://your-project.supabase.co/functions/v1/backup-history?limit=5" \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
 ```
 
+**Windows (PowerShell/CMD - single line):**
+```powershell
+curl -X GET "https://your-project.supabase.co/functions/v1/backup-history?limit=5" -H "Authorization: Bearer YOUR_BACKUP_API_KEY"
+```
+
 #### 5. Generate Signed URL for Existing Backup
 
+**Linux/macOS:**
 ```bash
 curl -X POST https://your-project.supabase.co/functions/v1/generate-signed-url \
   -H "Authorization: Bearer YOUR_BACKUP_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"s3_key": "backups/2024-01-15/backup-2024-01-15-02-00-UTC.zip"}'
+```
+
+**Windows (PowerShell/CMD - single line):**
+```powershell
+curl -X POST https://your-project.supabase.co/functions/v1/generate-signed-url -H "Authorization: Bearer YOUR_BACKUP_API_KEY" -H "Content-Type: application/json" -d "{\"s3_key\": \"backups/2024-01-15/backup-2024-01-15-02-00-UTC.zip\"}"
 ```
 
 ### Test Scheduled Backup
