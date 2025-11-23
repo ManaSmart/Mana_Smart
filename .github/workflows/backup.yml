@@ -94,6 +94,8 @@ jobs:
             });
           "
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TRIGGER_TYPE: ${{ github.event.inputs.trigger_type || 'scheduled' }}
           
       - name: Log workflow inputs
@@ -199,11 +201,13 @@ jobs:
               process.exit(0);
             });
           "
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
       - name: Update backup status (in progress)
         id: update_status_progress
         run: |
-          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
           node -e "
           (async () => {
             try {
@@ -238,6 +242,8 @@ jobs:
           })();
           "
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
 
       - name: Download Supabase Storage files
@@ -411,6 +417,10 @@ jobs:
             process.exit(1);
           });
           "
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_BUCKETS_TO_BACKUP: ${{ secrets.SUPABASE_BUCKETS_TO_BACKUP }}
 
       - name: Create backup archive
         id: create_archive
@@ -671,6 +681,8 @@ jobs:
           })();
           "
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           S3_KEY: ${{ steps.upload_s3.outputs.s3_key }}
@@ -791,6 +803,8 @@ jobs:
           })();
           "
         env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
           WORKFLOW_RUN_ID: ${{ github.run_id }}
           ERROR_MSG: "Backup workflow failed. Check GitHub Actions logs for details."
