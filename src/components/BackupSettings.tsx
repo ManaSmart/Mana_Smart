@@ -654,8 +654,23 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           { duration: 8000 } // Show for 8 seconds
         );
       } else {
-        // For other errors, try to get more details from history
+        // For other errors, extract detailed error message
         let errorMessage = error instanceof Error ? error.message : "Failed to create backup. Please try again.";
+        
+        // Extract the actual error from Edge Function response
+        if (errorMessage.includes("Edge Function trigger-backup failed:")) {
+          const match = errorMessage.match(/Edge Function trigger-backup failed: (.+)/);
+          if (match && match[1]) {
+            errorMessage = match[1];
+          }
+        }
+        
+        // Log full error for debugging
+        console.error("[Backup] Full error details:", {
+          error,
+          errorMessage,
+          errorType: error instanceof Error ? error.constructor.name : typeof error,
+        });
         
         try {
           // Refresh history to get latest error details
@@ -664,15 +679,26 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           const latestBackup = latestHistory[0];
           
           if (latestBackup && latestBackup.status === "failed" && latestBackup.error_text) {
-            errorMessage = `Backup failed: ${latestBackup.error_text}`;
-          } else if (latestBackup && latestBackup.status === "failed") {
-            errorMessage = "Backup failed. Check GitHub Actions logs for details.";
+            // Use error from history if available and more detailed
+            if (latestBackup.error_text.length > errorMessage.length) {
+              errorMessage = latestBackup.error_text;
+            }
           }
         } catch (historyError) {
           console.warn("[Backup] Could not fetch error details from history:", historyError);
         }
         
-        toast.error(errorMessage, { duration: 15000 }); // Show for 15 seconds for errors
+        // Show error with longer duration for detailed messages
+        toast.error(errorMessage, { 
+          duration: 20000, // Show for 20 seconds to read detailed error
+          description: "Check Supabase Edge Function logs for more details if needed.",
+        });
+        
+        setManualBackupProgress((prev) => ({
+          ...prev,
+          status: "failed",
+          error: errorMessage,
+        }));
       }
     } finally {
       if (!cancelPollingRef.current) {

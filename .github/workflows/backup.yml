@@ -2,6 +2,15 @@ name: Backup Database and Storage
 
 on:
   workflow_dispatch:  # Allow manual triggers
+    inputs:
+      dispatch_id:
+        description: 'Dispatch ID for tracking backup'
+        required: false
+        type: string
+      trigger_type:
+        description: 'Type of trigger (manual or scheduled)'
+        required: false
+        type: string
   schedule:
     - cron: '0 2 * * *'  # Daily at 2:00 AM UTC
 
@@ -22,6 +31,7 @@ jobs:
       AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
       SUPABASE_BUCKETS_TO_BACKUP: ${{ secrets.SUPABASE_BUCKETS_TO_BACKUP }}
       DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+      TRIGGER_TYPE: ${{ github.event.inputs.trigger_type || 'scheduled' }}
 
     steps:
       - name: Checkout code

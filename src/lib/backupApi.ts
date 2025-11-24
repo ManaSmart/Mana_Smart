@@ -22,10 +22,7 @@ function getCurrentUserId(): string | null {
 
 /**
  * Call a Supabase Edge Function with authentication
- * Uses supabase.functions.invoke() which automatically handles:
- * - User session authentication
- * - CORS headers
- * - Proper error handling
+ * Uses direct fetch for better error handling to get full error messages
  * 
  * Automatically includes user_id for authentication verification
  */
@@ -46,18 +43,61 @@ async function callEdgeFunction<T = any>(
   };
 
   try {
-    const { data, error } = await supabase.functions.invoke(functionName, {
-      body: requestBody as any,
-      headers,
+    // Use direct fetch to get better error messages
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error('Supabase configuration is missing. Please check your environment variables.');
+    }
+
+    const functionUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/${functionName}`;
+    
+    const response = await fetch(functionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+        'apikey': supabaseAnonKey,
+        ...headers,
+      },
+      body: JSON.stringify(requestBody),
     });
 
-    if (error) {
+    const responseText = await response.text();
+    let responseData: any;
+    
+    try {
+      responseData = responseText ? JSON.parse(responseText) : null;
+    } catch (parseError) {
+      // If response is not JSON, use the text as error message
+      throw new Error(`Edge Function ${functionName} returned invalid response: ${responseText}`);
+    }
+
+    if (!response.ok) {
+      // Extract error message from response
+      let errorMessage = 'Unknown error';
+      
+      if (responseData) {
+        if (responseData.error) {
+          errorMessage = responseData.error;
+        }
+        if (responseData.message && responseData.message !== responseData.error) {
+          errorMessage += `: ${responseData.message}`;
+        }
+        if (responseData.details) {
+          errorMessage += ` (${responseData.details})`;
+        }
+      } else {
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      
       throw new Error(
-        `Edge Function ${functionName} failed: ${error.message || 'Unknown error'}`
+        `Edge Function ${functionName} failed: ${errorMessage}`
       );
     }
 
-    return data as T;
+    return responseData as T;
   } catch (error) {
     // Handle network errors (function not deployed, CORS, etc.)
     if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
