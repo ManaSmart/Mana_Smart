@@ -649,36 +649,31 @@ jobs:
           
           const supabase = createClient(cleanUrl, supabaseKey);
           
-          // ✅ IMPROVED: Update backup_history using async/await to ensure it completes immediately
-          // Wrap in async IIFE to use await in Node.js -e script
-          (async () => {
-            try {
-              const { data: backupData, error: backupError } = await supabase
-                .from('backup_history')
-                .update({
-                  status: status,
-                  s3_key: s3Key,
-                  size_bytes: sizeBytes,
-                  error_text: errorText,
-                })
-                .eq('dispatch_id', dispatchId)
-                .select();
-              
-              if (backupError) {
+          // Update backup_history
+          supabase
+            .from('backup_history')
+            .update({
+              status: status,
+              s3_key: s3Key,
+              size_bytes: sizeBytes,
+              error_text: errorText,
+            })
+            .eq('dispatch_id', dispatchId)
+            .then(({ data, error }) => {
+              if (error) {
                 console.error('✗ CRITICAL ERROR updating backup history');
-                console.error('Error:', backupError);
-                console.error('Error code:', backupError.code);
-                console.error('Error message:', backupError.message);
-                console.error('Error details:', backupError.details);
-                console.error('Error hint:', backupError.hint);
+                console.error('Error:', error);
+                console.error('Error code:', error.code);
+                console.error('Error message:', error.message);
+                console.error('Error details:', error.details);
+                console.error('Error hint:', error.hint);
                 process.exit(1);
               }
               
               console.log('✓ Backup history updated successfully');
-              console.log('✓ Updated backup entry:', backupData);
               
               // Update system_settings_kv
-              const { error: settingsError } = await supabase
+              return supabase
                 .from('system_settings_kv')
                 .upsert({
                   key: 'last_backup_at',
@@ -686,21 +681,19 @@ jobs:
                 }, {
                   onConflict: 'key',
                 });
-              
+            })
+            .then(({ error: settingsError }) => {
               if (settingsError) {
                 console.error('⚠ Warning: Failed to update last_backup_at:', settingsError.message);
                 // Don't fail the step, just log the warning
               } else {
                 console.log('✓ System settings updated');
               }
-            } catch (err) {
+            })
+            .catch((err) => {
               console.error('✗ CRITICAL ERROR:', err);
               process.exit(1);
-            }
-          })().catch((err) => {
-            console.error('✗ CRITICAL ERROR in async function:', err);
-            process.exit(1);
-          });
+            });
           "
 
       - name: Handle backup failure
