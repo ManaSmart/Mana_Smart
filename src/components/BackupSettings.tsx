@@ -692,10 +692,28 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       return;
     }
 
+    // Validate S3 key format (basic validation)
+    if (typeof s3Key !== 'string' || s3Key.length === 0 || s3Key.length > 1024) {
+      toast.error("Invalid backup file reference");
+      return;
+    }
+
+    // Sanitize S3 key (remove potentially dangerous characters)
+    const sanitizedKey = s3Key.replace(/[<>"']/g, '');
+    if (sanitizedKey !== s3Key) {
+      toast.error("Invalid backup file reference");
+      return;
+    }
+
     try {
-      const { signed_url } = await generateSignedUrl(s3Key);
-      window.open(signed_url, "_blank");
-      toast.success("Download started");
+      const { signed_url } = await generateSignedUrl(sanitizedKey);
+      // Validate URL before opening
+      if (signed_url && (signed_url.startsWith('http://') || signed_url.startsWith('https://'))) {
+        window.open(signed_url, "_blank");
+        toast.success("Download started");
+      } else {
+        throw new Error("Invalid download URL received");
+      }
     } catch (error) {
       console.error("Failed to generate download URL:", error);
       toast.error("Failed to generate download URL");
@@ -709,6 +727,15 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
 
   const handleCancelStuckBackup = async () => {
     if (!cancelTargetId) return;
+
+    // Validate backup ID format (UUID)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(cancelTargetId)) {
+      toast.error("Invalid backup ID format");
+      setCancelDialogOpen(false);
+      setCancelTargetId(null);
+      return;
+    }
 
     setIsCancelling(true);
     try {
@@ -760,7 +787,19 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
 
     setIsCancelling(true);
     try {
-      const stuckBackupIds = stuckBackups.map((item) => item.id);
+      // Validate all backup IDs before sending
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const stuckBackupIds = stuckBackups
+        .map((item) => item.id)
+        .filter((id) => uuidRegex.test(id)); // Filter out invalid IDs
+      
+      if (stuckBackupIds.length === 0) {
+        toast.error("No valid backup IDs to cancel");
+        setIsCancelling(false);
+        setCancelAllDialogOpen(false);
+        return;
+      }
+      
       console.log("[Backup] Attempting to cancel backups:", stuckBackupIds);
       
       const result = await cancelBackup(undefined, stuckBackupIds);
@@ -796,6 +835,16 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const handleDeleteBackup = async () => {
     if (!deleteTargetId) return;
 
+    // Validate backup ID format (UUID)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(deleteTargetId)) {
+      toast.error("Invalid backup ID format");
+      setDeleteDialogOpen(false);
+      setDeleteTargetId(null);
+      setDeleteTargetDate(null);
+      return;
+    }
+
     setIsDeleting(true);
     try {
       console.log("[Backup] Attempting to delete backup:", deleteTargetId);
@@ -830,6 +879,10 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     if (!dateString) return "Never";
     try {
       const date = new Date(dateString);
+      // Validate date is valid
+      if (isNaN(date.getTime())) {
+        return "Invalid date";
+      }
       const day = String(date.getDate()).padStart(2, "0");
       const month = String(date.getMonth() + 1).padStart(2, "0");
       const year = date.getFullYear();
@@ -837,7 +890,7 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       const minutes = String(date.getMinutes()).padStart(2, "0");
       return `${day}/${month}/${year} ${hours}:${minutes}`;
     } catch {
-      return dateString;
+      return "Invalid date";
     }
   };
 
@@ -856,15 +909,60 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
 
   const handleRestoreFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
-      setRestoreFile(file);
-      setRestoreResults(null);
+    if (!file) {
+      return;
     }
+
+    // Validate file type
+    const validTypes = ['application/zip', 'application/x-zip-compressed', 'application/x-zip'];
+    const isValidType = validTypes.includes(file.type) || file.name.toLowerCase().endsWith('.zip');
+    
+    if (!isValidType) {
+      toast.error("Invalid file type. Please select a ZIP file.");
+      event.target.value = ''; // Clear the input
+      return;
+    }
+
+    // Validate file size (max 500MB for backup files)
+    const maxSize = 500 * 1024 * 1024; // 500MB
+    if (file.size > maxSize) {
+      toast.error("File size exceeds 500MB limit. Please select a smaller backup file.");
+      event.target.value = ''; // Clear the input
+      return;
+    }
+
+    // Additional security: check file name for suspicious patterns
+    const suspiciousPatterns = [/\.\./, /[<>:"|?*]/, /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)/i];
+    if (suspiciousPatterns.some(pattern => pattern.test(file.name))) {
+      toast.error("Invalid file name. Please use a valid filename.");
+      event.target.value = ''; // Clear the input
+      return;
+    }
+
+    setRestoreFile(file);
+    setRestoreResults(null);
   };
 
   const handleRestore = async () => {
     if (!restoreFile) {
       toast.error("Please select a backup file to restore");
+      return;
+    }
+
+    // Re-validate file before restore (defense in depth)
+    const validTypes = ['application/zip', 'application/x-zip-compressed', 'application/x-zip'];
+    const isValidType = validTypes.includes(restoreFile.type) || restoreFile.name.toLowerCase().endsWith('.zip');
+    
+    if (!isValidType) {
+      toast.error("Invalid file type. Please select a ZIP file.");
+      setRestoreFile(null);
+      return;
+    }
+
+    const maxSize = 500 * 1024 * 1024; // 500MB
+    if (restoreFile.size > maxSize) {
+      toast.error("File size exceeds 500MB limit. Please select a smaller backup file.");
+      setRestoreFile(null);
       return;
     }
 
@@ -1167,16 +1265,22 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                           <div className="flex items-center gap-2">
                             {item.error_text ? (
                               <>
-                                <span className="text-xs text-destructive" title={item.error_text}>
-                                  {item.error_text.substring(0, 40)}
+                                {/* Sanitize error text for display (prevent XSS) */}
+                                <span 
+                                  className="text-xs text-destructive" 
+                                  title={item.error_text.replace(/[<>]/g, '')}
+                                >
+                                  {item.error_text.substring(0, 40).replace(/[<>]/g, '')}
                                   {item.error_text.length > 40 ? "..." : ""}
                                 </span>
                                 <Button
                                   variant="ghost"
                                   size="sm"
                                   onClick={() => {
+                                    // Sanitize error text before displaying
+                                    const sanitizedError = item.error_text?.replace(/[<>]/g, '') || "Check GitHub Actions logs for details";
                                     toast.error("Backup Failed", {
-                                      description: item.error_text || "Check GitHub Actions logs for details",
+                                      description: sanitizedError,
                                       duration: 15000,
                                     });
                                   }}
@@ -1379,7 +1483,7 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
               />
               {restoreFile && (
                 <p className="text-sm text-muted-foreground">
-                  Selected: {restoreFile.name} ({(restoreFile.size / (1024 * 1024)).toFixed(2)} MB)
+                  Selected: <span className="font-mono text-xs">{restoreFile.name.replace(/[<>]/g, '')}</span> ({(restoreFile.size / (1024 * 1024)).toFixed(2)} MB)
                 </p>
               )}
             </div>

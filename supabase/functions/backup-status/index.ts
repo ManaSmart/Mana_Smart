@@ -20,65 +20,116 @@ const GITHUB_OWNER = Deno.env.get("GITHUB_OWNER") ?? "";
 const GITHUB_REPO = Deno.env.get("GITHUB_REPO") ?? "";
 const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://console-mana.com",
+  "https://www.console-mana.com",
+  "https://mana-smart-scent.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const isAllowed = allowedOrigins.includes(origin);
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : allowedOrigins[0] || "*",
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  };
+}
+
 serve(async (req: Request) => {
-  // Handle CORS
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
+    return new Response("ok", { 
+      status: 200,
+      headers: getCorsHeaders(req) 
+    });
+  }
+
+  if (req.method !== "GET" && req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
       headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "authorization, content-type",
+        "Content-Type": "application/json",
+        ...getCorsHeaders(req),
       },
     });
   }
 
-  // Verify authentication
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  // Verify user authentication
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  let userId: string | null = null;
+  let dispatchId: string | null = null;
+  let body: any = {};
+  
+  try {
+    // Support both GET (query param) and POST (body) for backward compatibility
+    if (req.method === "GET") {
+      const url = new URL(req.url);
+      dispatchId = url.searchParams.get("dispatch_id");
+      userId = url.searchParams.get("user_id");
+    } else if (req.method === "POST") {
+      body = await req.json();
+      dispatchId = body.dispatch_id || null;
+      userId = body.user_id || null;
+    }
+
+    // Require authentication for POST requests
+    if (req.method === "POST" && !userId) {
+      return new Response(
+        JSON.stringify({ error: "Authentication required. Please log in." }),
+        {
+          status: 401,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+
+    // Verify user if provided
+    if (userId) {
+      const { data: user, error: userError } = await supabase
+        .from("system_users")
+        .select("user_id, status")
+        .eq("user_id", userId)
+        .single();
+
+      if (userError || !user || user.status !== "active") {
+        return new Response(
+          JSON.stringify({ error: "User not found or account is not active" }),
+          {
+            status: 403,
+            headers: {
+              "Content-Type": "application/json",
+              ...getCorsHeaders(req),
+            },
+          }
+        );
+      }
+    }
+  } catch (parseError) {
     return new Response(
-      JSON.stringify({ error: "Missing or invalid authorization header" }),
+      JSON.stringify({ error: "Invalid request" }),
       {
-        status: 401,
+        status: 400,
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...getCorsHeaders(req),
         },
       }
     );
   }
 
-  const token = authHeader.replace("Bearer ", "");
-  if (token !== BACKUP_API_KEY) {
-    return new Response(JSON.stringify({ error: "Invalid API key" }), {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
-  }
-
-  if (req.method !== "GET") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
-  }
-
   try {
-    const url = new URL(req.url);
-    const dispatchId = url.searchParams.get("dispatch_id");
-
     if (!dispatchId) {
       return new Response(JSON.stringify({ error: "Missing dispatch_id parameter" }), {
         status: 400,
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...getCorsHeaders(req),
         },
       });
     }
@@ -102,7 +153,7 @@ serve(async (req: Request) => {
           status: 404,
           headers: {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
+            ...getCorsHeaders(req),
           },
         }
       );
@@ -137,7 +188,7 @@ serve(async (req: Request) => {
               status: 200,
               headers: {
                 "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
+                ...getCorsHeaders(req),
               },
             }
           );
@@ -155,7 +206,7 @@ serve(async (req: Request) => {
           status: 200,
           headers: {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
+            ...getCorsHeaders(req),
           },
         }
       );
@@ -215,7 +266,7 @@ serve(async (req: Request) => {
                         status: 200,
                         headers: {
                           "Content-Type": "application/json",
-                          "Access-Control-Allow-Origin": "*",
+                          ...getCorsHeaders(req),
                         },
                       }
                     );
@@ -233,7 +284,7 @@ serve(async (req: Request) => {
                     status: 200,
                     headers: {
                       "Content-Type": "application/json",
-                      "Access-Control-Allow-Origin": "*",
+                      ...getCorsHeaders(req),
                     },
                   }
                 );
@@ -251,7 +302,7 @@ serve(async (req: Request) => {
                 status: 200,
                 headers: {
                   "Content-Type": "application/json",
-                  "Access-Control-Allow-Origin": "*",
+                  ...getCorsHeaders(req),
                 },
               }
             );
@@ -267,7 +318,7 @@ serve(async (req: Request) => {
               status: 200,
               headers: {
                 "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
+                ...getCorsHeaders(req),
               },
             }
           );
@@ -289,7 +340,7 @@ serve(async (req: Request) => {
         status: 200,
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...getCorsHeaders(req),
         },
       }
     );
@@ -304,7 +355,7 @@ serve(async (req: Request) => {
         status: 500,
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...getCorsHeaders(req),
         },
       }
     );

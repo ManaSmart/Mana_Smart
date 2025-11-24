@@ -15,51 +15,122 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://console-mana.com",
+  "https://www.console-mana.com",
+  "https://mana-smart-scent.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const isAllowed = allowedOrigins.includes(origin);
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : allowedOrigins[0] || "*",
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  };
+}
 
 serve(async (req: Request) => {
-  // Handle CORS
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
+    return new Response("ok", { 
+      status: 200,
+      headers: getCorsHeaders(req) 
+    });
+  }
+
+  if (req.method !== "GET" && req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
       headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "authorization, content-type",
+        "Content-Type": "application/json",
+        ...getCorsHeaders(req),
       },
     });
   }
 
-  // Verify authentication
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return new Response(
-      JSON.stringify({ error: "Missing or invalid authorization header" }),
-      {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
+  // Verify user authentication for POST requests
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  let userId: string | null = null;
+  let body: any = {};
+  let limit = 5;
+
+  if (req.method === "POST") {
+    try {
+      body = await req.json();
+      userId = body.user_id || null;
+      limit = parseInt(body.limit || "5", 10);
+      
+      if (!userId) {
+        return new Response(
+          JSON.stringify({ error: "Authentication required. Please log in." }),
+          {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+              ...getCorsHeaders(req),
+            },
+          }
+        );
       }
-    );
-  }
 
-  const token = authHeader.replace("Bearer ", "");
-  if (token !== BACKUP_API_KEY) {
-    return new Response(JSON.stringify({ error: "Invalid API key" }), {
-      status: 403,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+      // Verify user exists and is active
+      const { data: user, error: userError } = await supabase
+        .from("system_users")
+        .select("user_id, status")
+        .eq("user_id", userId)
+        .single();
 
-  if (req.method !== "GET") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
-    });
+      if (userError || !user || user.status !== "active") {
+        return new Response(
+          JSON.stringify({ error: "User not found or account is not active" }),
+          {
+            status: 403,
+            headers: {
+              "Content-Type": "application/json",
+              ...getCorsHeaders(req),
+            },
+          }
+        );
+      }
+    } catch (parseError) {
+      return new Response(
+        JSON.stringify({ error: "Invalid request body" }),
+        {
+          status: 400,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+  } else {
+    // GET request - less strict, but still verify if user_id provided
+    const url = new URL(req.url);
+    limit = parseInt(url.searchParams.get("limit") || "5", 10);
+    userId = url.searchParams.get("user_id");
+    
+    // If user_id provided in GET, verify it
+    if (userId) {
+      const { data: user } = await supabase
+        .from("system_users")
+        .select("user_id, status")
+        .eq("user_id", userId)
+        .single();
+      
+      // Don't fail if user not found in GET, just ignore user_id
+      if (!user || user.status !== "active") {
+        userId = null;
+      }
+    }
   }
 
   try {
-    const url = new URL(req.url);
-    const limit = parseInt(url.searchParams.get("limit") || "5", 10);
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -77,7 +148,7 @@ serve(async (req: Request) => {
       status: 200,
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
+        ...getCorsHeaders(req),
       },
     });
   } catch (error) {
@@ -89,7 +160,10 @@ serve(async (req: Request) => {
       }),
       {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getCorsHeaders(req),
+        },
       }
     );
   }

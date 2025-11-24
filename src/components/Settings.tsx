@@ -43,6 +43,8 @@ import type { SystemSettings } from "../../supabase/models/system_settings";
 import { uploadFile, uploadLogoToS3, getFileUrl, deleteFile, getFilesByOwner } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { validateFile } from "../lib/storage";
+import { uploadLogoToS3WithFixedPath } from "../lib/s3Storage";
+import { loadLogoWithAllFallbacks, downloadLogoToLocalBackup, clearLocalLogoBackup } from "../lib/logoManager";
 import { ACCESS_AREAS, ACCESS_AREA_MAP } from "../config/access-areas";
 import type { AccessAction } from "../config/access-areas";
 import type { PageId } from "../config/page-map";
@@ -350,43 +352,37 @@ export function Settings({
           setSystemNameAr(data.company_name_ar ?? "");
           setSystemNameEn(data.company_name_en ?? "");
 
-          // Load logo and stamp from file storage
-          // Use the same simple pattern for both - exactly like stamp loading
+          // Fetch branding files first (needed for both logo and stamp)
           const brandingFiles = await getFilesByOwner(data.branding_id, 'branding');
+
+          // Load logo using enhanced logo manager with all fallbacks
+          const logoResult = await loadLogoWithAllFallbacks(data.branding_id);
           
-          // Load logo from file storage (secured/private logos use signed URLs)
-          const logoFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_LOGO);
-          if (logoFile) {
-            setLogoFileId(logoFile.id);
-            // Logos are now private/secured, so always use signed URLs (pass false for isPublic)
-            const logoUrl = await getFileUrl(
-              logoFile.bucket as any,
-              logoFile.path,
-              false // Private file, use signed URL
-            );
-            if (logoUrl) {
-              setLocalSystemLogo(logoUrl);
-              setSystemLogo(logoUrl);
+          if (logoResult.success && logoResult.url) {
+            setLocalSystemLogo(logoResult.url);
+            setSystemLogo(logoResult.url);
+            
+            // Save file metadata ID if available
+            if (logoResult.fileMetadata) {
+              setLogoFileId(logoResult.fileMetadata.id);
+            } else {
+              // Try to find file metadata from brandingFiles
+              const logoFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_LOGO);
+              if (logoFile) {
+                setLogoFileId(logoFile.id);
+              }
             }
           } else {
-            // No file in storage, check if stored value is old S3 URL
+            // Fallback to database stored value if available
             const logoValue = data.system_logo ?? "";
             if (logoValue) {
-              // Check if it's an old S3 URL that needs migration
-              if (logoValue.includes('s3.') || logoValue.includes('amazonaws.com')) {
-                console.warn('⚠️ Old S3 logo detected. Please re-upload logo to migrate to Supabase storage.');
-                // Still show it, but user should re-upload
-                setLocalSystemLogo(logoValue);
-                setSystemLogo(logoValue);
-              } else {
-                setLocalSystemLogo(logoValue);
-                setSystemLogo(logoValue);
-              }
+              setLocalSystemLogo(logoValue);
+              setSystemLogo(logoValue);
             }
           }
           setLogoLoading(false);
 
-          // Load stamp from file storage (reuse brandingFiles from above)
+          // Load stamp from file storage
           const stampFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_STAMP);
           if (stampFile) {
             setStampFileId(stampFile.id);
@@ -498,11 +494,6 @@ export function Settings({
         throw new Error('User not authenticated');
       }
 
-      // Delete old logo if exists
-      if (logoFileId) {
-        await deleteFile(logoFileId);
-      }
-
       // Ensure branding record exists first
       let currentBrandingId = brandingId;
       if (!currentBrandingId) {
@@ -524,132 +515,81 @@ export function Settings({
         setBrandingId(currentBrandingId);
       }
 
-      // Upload to S3 storage (always use S3 for logos with presigned URLs)
-      const result = await uploadLogoToS3({
-        file,
-        category: FILE_CATEGORIES.BRANDING_LOGO,
-        ownerId: currentBrandingId,
-        ownerType: 'branding',
-        description: 'Company logo for system branding (secured)',
-        userId: currentUserId,
-      });
+      // Delete old logo file metadata if exists (the S3 file will be overwritten automatically)
+      if (logoFileId) {
+        try {
+          await deleteFile(logoFileId);
+        } catch (error) {
+          console.warn('Failed to delete old logo metadata (non-critical):', error);
+        }
+      }
 
-      if (!result.success || !result.fileMetadata) {
+      // Upload to S3 using fixed path (allows overwriting)
+      const result = await uploadLogoToS3WithFixedPath(
+        file,
+        currentBrandingId,
+        currentUserId
+      );
+
+      if (!result.success) {
         throw new Error(result.error || 'Failed to upload logo');
       }
 
-      // Get signed URL (logos are now private/secured, so we need signed URLs)
+      // Get signed URL from result
       let logoUrl: string | undefined = result.signedUrl;
       
-      // If no signedUrl in result, wait a bit then fetch it from storage
-      // Supabase sometimes needs time after upload before URLs are available
-      if (!logoUrl) {
-        console.log('No signed URL in upload result, waiting before fetching...');
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
-        
-        const fetchedUrl = await getFileUrl(
+      if (!logoUrl && result.fileMetadata) {
+        // If no signed URL in result, fetch it
+        logoUrl = await getFileUrl(
           result.fileMetadata.bucket as any,
           result.fileMetadata.path,
           false, // Private file, use signed URL
-          3600 // 1 hour expiration
-        );
-        logoUrl = fetchedUrl ?? undefined; // Convert null to undefined
-        
-        if (logoUrl) {
-          console.log('Successfully fetched logo URL after upload');
-        } else {
-          console.warn('Failed to fetch logo URL, but file was uploaded successfully');
-        }
+          604800 // 7 days expiration for logos
+        ) ?? undefined;
       }
 
-      // Update local state first - save file metadata ID even if URL is not available yet
-      setLogoFileId(result.fileMetadata.id);
+      // Update local state
+      if (result.fileMetadata) {
+        setLogoFileId(result.fileMetadata.id);
+      }
       
       if (logoUrl) {
         setLocalSystemLogo(logoUrl);
-        // Immediately update system logo state so it shows in sidebar
         setSystemLogo(logoUrl);
         
-        // Force a re-render by updating the state again (ensures sync)
-        setTimeout(() => {
-          setSystemLogo(logoUrl);
-          setLocalSystemLogo(logoUrl);
-        }, 100);
-      } else {
-        // URL not available yet, but file is uploaded
-        // Try to fetch it one more time after a longer delay
-        console.log('Logo URL not available, will retry fetching in 2 seconds...');
-        setTimeout(async () => {
-          try {
-            const retryUrl = await getFileUrl(
-              result.fileMetadata.bucket as any,
-              result.fileMetadata.path,
-              false,
-              3600
-            );
-            if (retryUrl) {
-              setLocalSystemLogo(retryUrl);
-              setSystemLogo(retryUrl);
-              toast.success('Logo loaded successfully');
-            } else {
-              toast.warning('Logo uploaded successfully, but URL retrieval is delayed. Please refresh the page.');
-            }
-          } catch (error) {
-            console.error('Failed to fetch logo URL on retry:', error);
-            toast.warning('Logo uploaded successfully. The logo will appear after refreshing the page.');
-          }
-        }, 2000);
+        // Create local backup in background
+        downloadLogoToLocalBackup(logoUrl).catch(err => {
+          console.warn('Failed to create local backup:', err);
+        });
         
-        // Show success message even without URL
-        toast.success('Logo uploaded successfully. Loading image...');
-      }
-      
-      // Automatically save the logo URL to the database
-      try {
-        const updatePayload: Partial<CompanyBranding> = {
-          system_logo: logoUrl,
-        };
-
-        if (currentBrandingId) {
+        // Save signed URL to database
+        try {
           const { error: updateError } = await supabase
             .from("company_branding")
-            .update(updatePayload)
+            .update({ system_logo: logoUrl })
             .eq("branding_id", currentBrandingId);
           
           if (updateError) {
-            console.error('Error updating logo in database:', updateError);
-            throw updateError;
+            console.error('Error updating logo URL in database:', updateError);
+            // Don't fail - logo is uploaded and displayed
           }
-        } else {
-          // If branding doesn't exist, create it
-          const { data: newBranding, error: insertError } = await supabase
-            .from("company_branding")
-            .insert({
-              system_sidebar_name: localSystemName || "System",
-              company_name_ar: localSystemNameAr || "",
-              company_name_en: localSystemNameEn || "",
-              system_logo: logoUrl,
-            })
-            .select()
-            .maybeSingle<CompanyBranding>();
-          
-          if (insertError) {
-            console.error('Error creating branding record:', insertError);
-            throw insertError;
-          }
-          
-          if (newBranding) {
-            setBrandingId(newBranding.branding_id);
-          }
+        } catch (saveError: any) {
+          console.error('Error saving logo URL:', saveError);
+          // Don't fail - logo is uploaded and displayed
         }
-      } catch (saveError: any) {
-        console.error('Error auto-saving logo URL:', saveError);
-        toast.error(`Logo uploaded but failed to save: ${saveError.message || 'Unknown error'}`);
-        // Don't fail the upload if save fails, but show error
-        return;
+        
+        toast.success("Logo uploaded and saved successfully");
+      } else {
+        // URL not available, but file is uploaded - try to load with fallback
+        const loadResult = await loadLogoWithAllFallbacks(currentBrandingId);
+        if (loadResult.success && loadResult.url) {
+          setLocalSystemLogo(loadResult.url);
+          setSystemLogo(loadResult.url);
+          toast.success("Logo uploaded successfully");
+        } else {
+          toast.warning('Logo uploaded successfully, but URL retrieval is delayed. Please refresh the page.');
+        }
       }
-      
-      toast.success("Logo uploaded and saved successfully");
     } catch (error: any) {
       console.error('Error uploading logo:', error);
       toast.error(error.message || 'Failed to upload logo');
@@ -766,6 +706,8 @@ export function Settings({
       // If no file ID, just clear the local state (legacy base64)
       setLocalSystemLogo("");
       setSystemLogo("");
+      // Clear localStorage backup even if no file ID
+      clearLocalLogoBackup();
       return;
     }
 
@@ -775,6 +717,9 @@ export function Settings({
         setLocalSystemLogo("");
         setLogoFileId(null);
         setSystemLogo("");
+        
+        // Clear localStorage backup
+        clearLocalLogoBackup();
         
         // Update database
         if (brandingId) {
@@ -1400,6 +1345,9 @@ export function Settings({
                               src={localSystemLogo}
                               alt="System Logo Preview"
                               className="w-full h-full object-contain"
+                              brandingId={brandingId || undefined}
+                              autoRegenerate={true}
+                              maxRetries={2}
                             />
                           )}
                         </div>
@@ -1572,6 +1520,9 @@ export function Settings({
                           src={localSystemLogo}
                           alt="Logo Preview" 
                           className="h-10 w-10 object-contain rounded-lg"
+                          brandingId={brandingId || undefined}
+                          autoRegenerate={true}
+                          maxRetries={2}
                         />
                       ) : (
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-purple-600 to-purple-700 shadow-lg shadow-purple-500/50">

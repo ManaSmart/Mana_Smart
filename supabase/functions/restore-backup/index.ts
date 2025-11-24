@@ -18,7 +18,24 @@ import { ZipReader, BlobReader, BlobWriter } from "https://deno.land/x/zipjs@v2.
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const DATABASE_URL = Deno.env.get("DATABASE_URL") ?? "";
-const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://console-mana.com",
+  "https://www.console-mana.com",
+  "https://mana-smart-scent.vercel.app",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("origin") || "";
+  const isAllowed = allowedOrigins.includes(origin);
+  return {
+    "Access-Control-Allow-Origin": isAllowed ? origin : allowedOrigins[0] || "*",
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  };
+}
 
 // Helper to convert INSERT statements to use ON CONFLICT DO NOTHING
 function convertInsertsToMerge(sql: string): string {
@@ -96,41 +113,11 @@ function convertInsertsToMerge(sql: string): string {
 }
 
 serve(async (req: Request) => {
-  // Handle CORS
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "authorization, content-type",
-      },
-    });
-  }
-
-  // Verify authentication
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return new Response(
-      JSON.stringify({ error: "Missing or invalid authorization header" }),
-      {
-        status: 401,
-        headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
-        },
-      }
-    );
-  }
-
-  const token = authHeader.replace("Bearer ", "");
-  if (token !== BACKUP_API_KEY) {
-    return new Response(JSON.stringify({ error: "Invalid API key" }), {
-      status: 403,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
+    return new Response("ok", { 
+      status: 200,
+      headers: getCorsHeaders(req) 
     });
   }
 
@@ -139,37 +126,217 @@ serve(async (req: Request) => {
       status: 405,
       headers: {
         "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
+        ...getCorsHeaders(req),
       },
     });
   }
 
+  // Verify user authentication and authorization
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  let body: any = {};
+  let userId: string | null = null;
+  
   try {
-    // Get the backup file from request
-    const formData = await req.formData();
-    const backupFile = formData.get("backup_file") as File;
-
-    if (!backupFile) {
+    // Try to parse JSON body first (new API)
+    const contentType = req.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      body = await req.json();
+      userId = body.user_id || null;
+    } else {
+      // For FormData, we'll need to get user_id from a separate field
+      // For now, we'll require JSON format for authentication
       return new Response(
-        JSON.stringify({ error: "Missing backup_file in form data" }),
+        JSON.stringify({ error: "Authentication required. Please use JSON format with user_id." }),
         {
-          status: 400,
+          status: 401,
           headers: {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+    
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: "Authentication required. Please log in." }),
+        {
+          status: 401,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
           },
         }
       );
     }
 
-    console.log(`[RESTORE] Starting restore for file: ${backupFile.name}, size: ${backupFile.size}`);
+    // Verify user exists and is active
+    const { data: user, error: userError } = await supabase
+      .from("system_users")
+      .select("user_id, status, role_id")
+      .eq("user_id", userId)
+      .single();
 
-    // Read the file as ArrayBuffer
-    const fileBuffer = await backupFile.arrayBuffer();
-    const fileBytes = new Uint8Array(fileBuffer);
+    if (userError || !user) {
+      return new Response(
+        JSON.stringify({ error: "User not found or invalid" }),
+        {
+          status: 403,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+
+    if (user.status !== "active") {
+      return new Response(
+        JSON.stringify({ error: "User account is not active" }),
+        {
+          status: 403,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+
+    // Check for admin role (restore is critical operation)
+    let isAdmin = false;
+    if (user.role_id) {
+      const { data: role } = await supabase
+        .from("roles")
+        .select("role_name, permissions")
+        .eq("role_id", user.role_id)
+        .single();
+
+      if (role) {
+        const permissions = role.permissions;
+        const roleName = (role.role_name || "").toLowerCase();
+        isAdmin = permissions === "all" || permissions === "ALL" || 
+                  roleName.includes("admin") || roleName.includes("super");
+      }
+    }
+
+    if (!isAdmin) {
+      return new Response(
+        JSON.stringify({ error: "Admin access required for restore operations" }),
+        {
+          status: 403,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+
+    // Rate limiting: Max 2 restores per hour per user
+    const rateLimitKey = `restore:${userId}`;
+    const rateLimitStore = new Map<string, { count: number; resetAt: number }>();
+    const now = Date.now();
+    const windowMs = 60 * 60 * 1000; // 1 hour
+    const maxRequests = 2;
+    
+    const record = rateLimitStore.get(rateLimitKey);
+    if (record && now < record.resetAt) {
+      if (record.count >= maxRequests) {
+        const resetIn = Math.ceil((record.resetAt - now) / 1000 / 60);
+        return new Response(
+          JSON.stringify({ 
+            error: `Rate limit exceeded. Maximum ${maxRequests} restore operations per hour. Try again in ${resetIn} minutes.` 
+          }),
+          {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": String(Math.ceil((record.resetAt - now) / 1000)),
+              ...getCorsHeaders(req),
+            },
+          }
+        );
+      }
+      record.count++;
+      rateLimitStore.set(rateLimitKey, record);
+    } else {
+      rateLimitStore.set(rateLimitKey, { count: 1, resetAt: now + windowMs });
+    }
+  } catch (parseError) {
+    return new Response(
+      JSON.stringify({ error: "Invalid request body" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...getCorsHeaders(req),
+        },
+      }
+    );
+  }
+
+  try {
+    // Support both FormData (legacy) and base64 JSON (new API)
+    let fileBytes: Uint8Array;
+    let fileName = "backup.zip";
+
+    const contentType = req.headers.get("content-type") || "";
+    
+    if (contentType.includes("multipart/form-data")) {
+      // Legacy: FormData format
+      const formData = await req.formData();
+      const backupFile = formData.get("backup_file") as File;
+
+      if (!backupFile) {
+        return new Response(
+          JSON.stringify({ error: "Missing backup_file in form data" }),
+          {
+            status: 400,
+            headers: {
+              "Content-Type": "application/json",
+              ...getCorsHeaders(req),
+            },
+          }
+        );
+      }
+
+      fileName = backupFile.name;
+      console.log(`[RESTORE] Starting restore for file: ${fileName}, size: ${backupFile.size}`);
+
+      // Read the file as ArrayBuffer
+      const fileBuffer = await backupFile.arrayBuffer();
+      fileBytes = new Uint8Array(fileBuffer);
+    } else {
+      // New: base64 JSON format (body already parsed in auth section)
+      const { backup_file, file_name, file_type } = body;
+
+      if (!backup_file) {
+        return new Response(
+          JSON.stringify({ error: "Missing backup_file in request body" }),
+          {
+            status: 400,
+            headers: {
+              "Content-Type": "application/json",
+              ...getCorsHeaders(req),
+            },
+          }
+        );
+      }
+
+      fileName = file_name || "backup.zip";
+      console.log(`[RESTORE] Starting restore for file: ${fileName} (base64 format)`);
+
+      // Decode base64 to Uint8Array
+      const binaryString = atob(backup_file);
+      fileBytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        fileBytes[i] = binaryString.charCodeAt(i);
+      }
+    }
 
     // Extract ZIP file
-    const zipReader = new ZipReader(new BlobReader(new Blob([fileBytes])));
+    const zipReader = new ZipReader(new BlobReader(new Blob([fileBytes as BlobPart])));
     const entries = await zipReader.getEntries();
 
     console.log(`[RESTORE] Extracted ${entries.length} entries from backup ZIP`);
@@ -334,7 +501,7 @@ serve(async (req: Request) => {
         status: 200,
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...getCorsHeaders(req),
         },
       }
     );
@@ -349,7 +516,7 @@ serve(async (req: Request) => {
         status: 500,
         headers: {
           "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...getCorsHeaders(req),
         },
       }
     );

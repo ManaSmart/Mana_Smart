@@ -1,64 +1,75 @@
 /**
  * API helper for backup-related Edge Function calls
+ * Uses Supabase client's functions.invoke() for proper authentication and CORS handling
  */
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const BACKUP_API_KEY = import.meta.env.VITE_BACKUP_API_KEY as string;
+import { supabase } from './supabaseClient';
 
-if (!SUPABASE_URL) {
-  throw new Error('VITE_SUPABASE_URL is required');
+/**
+ * Get current user ID from localStorage (custom auth system)
+ */
+function getCurrentUserId(): string | null {
+  try {
+    const stored = localStorage.getItem('auth_user');
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    return parsed?.user_id || null;
+  } catch (error) {
+    console.error('Failed to get user ID from localStorage:', error);
+    return null;
+  }
 }
 
 /**
  * Call a Supabase Edge Function with authentication
+ * Uses supabase.functions.invoke() which automatically handles:
+ * - User session authentication
+ * - CORS headers
+ * - Proper error handling
+ * 
+ * Automatically includes user_id for authentication verification
  */
-async function callEdgeFunction(
+async function callEdgeFunction<T = any>(
   functionName: string,
   options: {
-    method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
     body?: unknown;
     headers?: Record<string, string>;
   } = {}
-): Promise<Response> {
-  const { method = 'GET', body, headers = {} } = options;
-
-  const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
-
-  const requestHeaders: HeadersInit = {
-    'Content-Type': 'application/json',
-    ...headers,
+): Promise<T> {
+  const { body, headers = {} } = options;
+  
+  // Get current user ID and include it in the request
+  const userId = getCurrentUserId();
+  const requestBody = {
+    ...(body as Record<string, unknown> || {}),
+    ...(userId ? { user_id: userId } : {}), // Include user_id for authentication
   };
 
-  // Add authentication header if API key is available
-  if (BACKUP_API_KEY) {
-    requestHeaders['Authorization'] = `Bearer ${BACKUP_API_KEY}`;
-  }
-
-  let response: Response;
   try {
-    response = await fetch(url, {
-      method,
-      headers: requestHeaders,
-      body: body ? JSON.stringify(body) : undefined,
+    const { data, error } = await supabase.functions.invoke(functionName, {
+      body: requestBody as any,
+      headers,
     });
-  } catch (fetchError) {
-    // Handle network errors (function not deployed, CORS, etc.)
-    if (fetchError instanceof TypeError && fetchError.message.includes('Failed to fetch')) {
+
+    if (error) {
       throw new Error(
-        `Edge Function '${functionName}' not found or not accessible. Please ensure it is deployed.`
+        `Edge Function ${functionName} failed: ${error.message || 'Unknown error'}`
       );
     }
-    throw fetchError;
-  }
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `Edge Function ${functionName} failed: ${response.status} ${response.statusText} - ${errorText}`
-    );
+    return data as T;
+  } catch (error) {
+    // Handle network errors (function not deployed, CORS, etc.)
+    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+      throw new Error(
+        `Edge Function '${functionName}' not found or not accessible. Please ensure it is deployed and CORS is configured.`
+      );
+    }
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error(`Unknown error calling Edge Function ${functionName}`);
   }
-
-  return response;
 }
 
 /**
@@ -66,12 +77,9 @@ async function callEdgeFunction(
  * @returns Dispatch ID for polling status
  */
 export async function triggerBackup(): Promise<{ dispatch_id: string; status_url: string }> {
-  const response = await callEdgeFunction('trigger-backup', {
-    method: 'POST',
+  return await callEdgeFunction<{ dispatch_id: string; status_url: string }>('trigger-backup', {
+    body: {},
   });
-
-  const data = await response.json();
-  return data;
 }
 
 /**
@@ -87,22 +95,14 @@ export async function getBackupStatus(
   error?: string;
   backup_id?: string;
 }> {
-  const url = `${SUPABASE_URL}/functions/v1/backup-status?dispatch_id=${encodeURIComponent(dispatchId)}`;
-  
-  const statusResponse = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(BACKUP_API_KEY ? { Authorization: `Bearer ${BACKUP_API_KEY}` } : {}),
-    },
+  return await callEdgeFunction<{
+    status: 'pending' | 'in_progress' | 'success' | 'failed';
+    signed_url?: string;
+    error?: string;
+    backup_id?: string;
+  }>('backup-status', {
+    body: { dispatch_id: dispatchId },
   });
-
-  if (!statusResponse.ok) {
-    const errorText = await statusResponse.text();
-    throw new Error(`Failed to get backup status: ${statusResponse.statusText} - ${errorText}`);
-  }
-
-  return await statusResponse.json();
 }
 
 /**
@@ -112,11 +112,12 @@ export async function getBackupSettings(): Promise<{
   backup_enabled: boolean;
   last_backup_at: string | null;
 }> {
-  const response = await callEdgeFunction('settings-toggle', {
-    method: 'GET',
+  return await callEdgeFunction<{
+    backup_enabled: boolean;
+    last_backup_at: string | null;
+  }>('settings-toggle', {
+    body: {},
   });
-
-  return await response.json();
 }
 
 /**
@@ -124,7 +125,6 @@ export async function getBackupSettings(): Promise<{
  */
 export async function updateBackupEnabled(enabled: boolean): Promise<void> {
   await callEdgeFunction('settings-toggle', {
-    method: 'POST',
     body: { backup_enabled: enabled },
   });
 }
@@ -143,22 +143,19 @@ export async function getBackupHistory(limit: number = 5): Promise<
     dispatch_id?: string | null;
   }>
 > {
-  const url = `${SUPABASE_URL}/functions/v1/backup-history?limit=${limit}`;
-  
-  const historyResponse = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(BACKUP_API_KEY ? { Authorization: `Bearer ${BACKUP_API_KEY}` } : {}),
-    },
+  return await callEdgeFunction<
+    Array<{
+      id: string;
+      s3_key: string | null;
+      created_at: string;
+      status: 'success' | 'failed' | 'cancelled' | 'in_progress';
+      size_bytes: number | null;
+      error_text: string | null;
+      dispatch_id?: string | null;
+    }>
+  >('backup-history', {
+    body: { limit },
   });
-
-  if (!historyResponse.ok) {
-    const errorText = await historyResponse.text();
-    throw new Error(`Failed to get backup history: ${historyResponse.statusText} - ${errorText}`);
-  }
-
-  return await historyResponse.json();
 }
 
 /**
@@ -171,14 +168,14 @@ export async function cancelBackup(
   backupId?: string,
   backupIds?: string[]
 ): Promise<{ success: boolean; message: string; cancelled_count: number }> {
-  const response = await callEdgeFunction('cancel-backup', {
-    method: 'POST',
-    body: backupIds 
-      ? { backup_ids: backupIds }
-      : { backup_id: backupId },
-  });
-
-  return await response.json();
+  return await callEdgeFunction<{ success: boolean; message: string; cancelled_count: number }>(
+    'cancel-backup',
+    {
+      body: backupIds 
+        ? { backup_ids: backupIds }
+        : { backup_id: backupId },
+    }
+  );
 }
 
 /**
@@ -189,12 +186,9 @@ export async function cancelBackup(
 export async function deleteBackup(
   backupId: string
 ): Promise<{ success: boolean; message: string }> {
-  const response = await callEdgeFunction('delete-backup', {
-    method: 'POST',
+  return await callEdgeFunction<{ success: boolean; message: string }>('delete-backup', {
     body: { backup_id: backupId },
   });
-
-  return await response.json();
 }
 
 /**
@@ -203,12 +197,9 @@ export async function deleteBackup(
  * @returns Pre-signed URL valid for 15 minutes
  */
 export async function generateSignedUrl(s3Key: string): Promise<{ signed_url: string }> {
-  const response = await callEdgeFunction('generate-signed-url', {
-    method: 'POST',
+  return await callEdgeFunction<{ signed_url: string }>('generate-signed-url', {
     body: { s3_key: s3Key },
   });
-
-  return await response.json();
 }
 
 /**
@@ -242,24 +233,41 @@ export async function restoreBackup(
     };
   };
 }> {
-  const formData = new FormData();
-  formData.append('backup_file', backupFile);
+  // Convert File to base64 for JSON transmission
+  // Note: For large files, you might want to use direct fetch with FormData
+  // but supabase.functions.invoke() works better for authentication
+  const arrayBuffer = await backupFile.arrayBuffer();
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
 
-  const url = `${SUPABASE_URL}/functions/v1/restore-backup`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      ...(BACKUP_API_KEY ? { Authorization: `Bearer ${BACKUP_API_KEY}` } : {}),
+  return await callEdgeFunction<{
+    success: boolean;
+    message: string;
+    results: {
+      database: {
+        restored: boolean;
+        message?: string;
+        sql_converted?: boolean;
+        sql_size?: number;
+        note?: string;
+        rows_affected?: number;
+      };
+      auth_users: {
+        restored: boolean;
+        users_merged: number;
+        users_skipped?: number;
+      };
+      storage: {
+        restored: boolean;
+        files_uploaded: number;
+        files_skipped?: number;
+      };
+    };
+  }>('restore-backup', {
+    body: {
+      backup_file: base64,
+      file_name: backupFile.name,
+      file_type: backupFile.type,
     },
-    body: formData,
   });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to restore backup: ${response.statusText} - ${errorText}`);
-  }
-
-  return await response.json();
 }
 

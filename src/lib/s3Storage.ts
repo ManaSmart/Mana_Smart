@@ -206,8 +206,8 @@ export async function getFileUrlFromS3(
 ): Promise<string | null> {
 	try {
 		// Check if this is a branding logo - use longer expiration (7 days = 604800 seconds)
-		// Check for both old S3 path format (branding/logos) and new Supabase format (logos)
-		const isBrandingLogo = path.includes('branding/logos') || path.startsWith('logos/');
+		// Check for both old S3 path format (branding/logos) and new fixed path (branding/logo.*)
+		const isBrandingLogo = path.includes('branding/logo') || path.includes('branding/logos') || path.startsWith('logos/');
 		const expirationTime = isBrandingLogo ? 604800 : expiresIn; // 7 days for logos, default for others
 		
 		// Since we're getting 403 errors for public URLs, always use presigned URLs
@@ -224,6 +224,170 @@ export async function getFileUrlFromS3(
 	} catch (error) {
 		console.error('Error getting file URL from S3:', error);
 		return null;
+	}
+}
+
+/**
+ * Upload logo to S3 with fixed path (allows overwriting)
+ * This ensures the logo always uses the same S3 key for easy replacement
+ */
+export async function uploadLogoToS3WithFixedPath(
+	file: File,
+	ownerId: string,
+	userId?: string
+): Promise<UploadFileResult> {
+	try {
+		// Validate AWS configuration
+		if (!AWS_S3_BUCKET || !AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) {
+			return {
+				success: false,
+				error: 'AWS S3 configuration is missing. Please check your environment variables.',
+			};
+		}
+
+		// Fixed path for logo - always use branding/logo.{ext}
+		const extension = getFileExtension(file.name) || '.png';
+		const filePath = `branding/logo${extension}`;
+
+		// Clean up old logo files with different extensions
+		// Note: 404 errors in console are expected and harmless - they occur when checking
+		// for old files that don't exist. The upload will proceed normally.
+		const oldExtensions = ['.png', '.jpg', '.jpeg', '.webp', '.svg'];
+		const cleanupPromises = oldExtensions
+			.filter(ext => ext !== extension)
+			.map(async (ext) => {
+				const oldPath = `branding/logo${ext}`;
+				try {
+					const exists = await fileExistsInS3(oldPath);
+					if (exists) {
+						console.log(`🗑️ Deleting old logo: ${oldPath}`);
+						await deleteFileFromS3(oldPath);
+					}
+				} catch (error: any) {
+					// 404 is expected when old files don't exist - silently ignore
+					// Only log unexpected errors
+					if (error.name !== 'NotFound' && error.$metadata?.httpStatusCode !== 404) {
+						console.warn(`⚠️ Error checking for old logo ${ext}:`, error);
+					}
+				}
+			});
+		
+		// Run cleanup in parallel (don't wait - proceed with upload)
+		Promise.all(cleanupPromises).catch(err => {
+			console.warn('Some old logo cleanup operations failed (non-critical):', err);
+		});
+
+		// Get image dimensions
+		let width: number | null = null;
+		let height: number | null = null;
+		if (file.type.startsWith('image/')) {
+			const dimensions = await getImageDimensions(file);
+			width = dimensions.width;
+			height = dimensions.height;
+		}
+
+		// Convert File to ArrayBuffer
+		const fileBuffer = await file.arrayBuffer();
+
+		// Upload file to S3 (this will overwrite if exists)
+		const uploadCommand = new PutObjectCommand({
+			Bucket: AWS_S3_BUCKET,
+			Key: filePath,
+			Body: new Uint8Array(fileBuffer),
+			ContentType: file.type,
+			Metadata: {
+				originalName: file.name,
+				category: 'branding_logo',
+				ownerId,
+				ownerType: 'branding',
+				uploadedAt: new Date().toISOString(),
+			},
+		});
+
+		await s3Client.send(uploadCommand);
+		console.log('✅ Logo uploaded to S3:', filePath);
+
+		// Generate signed URL immediately (7 days expiration for logos)
+		const signedUrl = await getSignedUrlForS3(filePath, 604800); // 7 days
+
+		// Create or update file metadata record in Supabase
+		// First, check if metadata already exists for this path
+		const { data: existingMetadata } = await supabase
+			.from('file_metadata')
+			.select('*')
+			.eq('path', filePath)
+			.eq('bucket', STORAGE_BUCKETS.S3)
+			.is('deleted_at', null)
+			.maybeSingle();
+
+		const fileMetadata: FileMetadataInsert = {
+			owner_id: ownerId,
+			owner_type: 'branding',
+			category: 'branding_logo',
+			bucket: STORAGE_BUCKETS.S3,
+			path: filePath,
+			file_name: file.name,
+			mime_type: file.type,
+			size: file.size,
+			width,
+			height,
+			description: 'Company logo for system branding (secured)',
+			is_public: false,
+			metadata: {
+				secured: true,
+				uploaded_via: 's3_storage',
+				fixed_path: true, // Mark as using fixed path
+			},
+			created_by: userId || null,
+			deleted_at: null,
+		};
+
+		let metadataData;
+		if (existingMetadata) {
+			// Update existing metadata
+			const { data, error } = await supabase
+				.from('file_metadata')
+				.update({
+					...fileMetadata,
+					created_at: existingMetadata.created_at, // Preserve original creation date
+				})
+				.eq('id', existingMetadata.id)
+				.select()
+				.single();
+
+			if (error) {
+				console.error('Error updating file metadata:', error);
+				// Don't fail - file is uploaded, just metadata update failed
+			} else {
+				metadataData = data;
+			}
+		} else {
+			// Create new metadata
+			const { data, error } = await supabase
+				.from('file_metadata')
+				.insert(fileMetadata)
+				.select()
+				.single();
+
+			if (error) {
+				console.error('Error creating file metadata:', error);
+				// Don't fail - file is uploaded, just metadata creation failed
+			} else {
+				metadataData = data;
+			}
+		}
+
+		return {
+			success: true,
+			fileMetadata: metadataData,
+			signedUrl,
+		};
+	} catch (error: any) {
+		console.error('Error uploading logo to S3:', error);
+		return {
+			success: false,
+			error: error.message || 'Unknown error occurred',
+		};
 	}
 }
 
@@ -267,6 +431,7 @@ export async function fileExistsInS3(path: string): Promise<boolean> {
 
 /**
  * Generate presigned URL for private files
+ * Enhanced with retry logic for better reliability
  */
 async function getSignedUrlForS3(path: string, expiresIn: number): Promise<string> {
 	const command = new GetObjectCommand({
@@ -274,11 +439,41 @@ async function getSignedUrlForS3(path: string, expiresIn: number): Promise<strin
 		Key: path,
 	});
 
-	return await getSignedUrl(s3Client, command, { expiresIn });
+	try {
+		return await getSignedUrl(s3Client, command, { expiresIn });
+	} catch (error: any) {
+		console.error('Error generating signed URL:', error);
+		// Retry once after a short delay
+		await new Promise(resolve => setTimeout(resolve, 500));
+		return await getSignedUrl(s3Client, command, { expiresIn });
+	}
+}
+
+/**
+ * Regenerate signed URL for a file (useful when URL expires)
+ */
+export async function regenerateSignedUrlForS3(
+	path: string,
+	expiresIn: number = 604800 // Default 7 days for logos
+): Promise<string | null> {
+	try {
+		// Check if file exists first
+		const exists = await fileExistsInS3(path);
+		if (!exists) {
+			console.warn('File does not exist in S3:', path);
+			return null;
+		}
+
+		return await getSignedUrlForS3(path, expiresIn);
+	} catch (error) {
+		console.error('Error regenerating signed URL:', error);
+		return null;
+	}
 }
 
 /**
  * Generate file path based on category and owner
+ * For branding_logo, always use fixed path (branding/logo.png) to allow overwriting
  */
 function generateFilePath(category: FileCategory, ownerId: string, fileName: string): string {
 	const timestamp = Date.now();
@@ -298,7 +493,9 @@ function generateFilePath(category: FileCategory, ownerId: string, fileName: str
 		case 'employee_document':
 			return `employees/${ownerId}/documents/${sanitizedFileName}`;
 		case 'branding_logo':
-			return `branding/logos/${sanitizedFileName}`;
+			// Always use fixed path for logo to allow overwriting
+			// Preserve file extension from uploaded file
+			return `branding/logo${extension || '.png'}`;
 		case 'branding_stamp':
 			return `branding/stamps/${sanitizedFileName}`;
 		case 'payroll_document':

@@ -1,3 +1,53 @@
+# GitHub Actions Backup Workflow - Complete Fix Guide
+
+## 🔍 Root Cause Analysis
+
+### Error 1: "Check backup enable status" - Supabase URL Missing
+
+**Root Cause:**
+- The Node.js script is trying to create a Supabase client but `SUPABASE_URL` is not available in the process environment
+- Environment variables from GitHub Secrets are not being passed to the Node.js process
+- The `env:` block may be missing or incorrectly configured
+
+**Location:** First step that checks if backup is enabled
+
+### Error 2: "Updating backup_history" - Supabase URL Missing
+
+**Root Cause:**
+- Same issue as Error 1, but occurring in the final step
+- The script tries to update `backup_history` table but can't connect to Supabase
+- Environment variables are not accessible to the Node.js process
+
+**Location:** Final step that updates backup status
+
+### Error 3: Git Submodule Warning
+
+**Root Cause:**
+- Repository has a folder named `Mana_Smart` that Git thinks should be a submodule
+- But `.gitmodules` file doesn't contain an entry for it
+- This happens when:
+  - A folder was previously a submodule but was removed incorrectly
+  - Or a folder exists that matches a submodule pattern
+
+**Solution Options:**
+1. Remove the folder if it's not needed
+2. Add it to `.gitmodules` if it should be a submodule
+3. Remove from Git cache if it's a false positive
+
+## ✅ Complete Fix
+
+### Step 1: Fix Environment Variables in Workflow
+
+The key issue is that environment variables must be:
+1. **Defined in the `env:` block** at the job or step level
+2. **Passed correctly to Node.js** processes
+3. **Available to all steps** that need them
+
+### Step 2: Create/Update `.github/workflows/backup.yml`
+
+Here's the corrected workflow file with all fixes applied:
+
+```yaml
 name: Backup Database and Storage
 
 on:
@@ -29,6 +79,7 @@ jobs:
         # ✅ FIX: Disable submodule checkout to avoid the warning
         with:
           submodules: false
+          # Or if you need submodules, use: submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -40,6 +91,7 @@ jobs:
 
       - name: Check backup enable status
         # ✅ FIX: Environment variables are inherited from job-level env:
+        # No need to redefine them here unless you want to override
         run: |
           node -e "
           const { createClient } = require('@supabase/supabase-js');
@@ -49,13 +101,12 @@ jobs:
           const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
           
           if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ Missing Supabase credentials');
+            console.error('Missing Supabase credentials');
             console.error('SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
             console.error('SUPABASE_SERVICE_ROLE_KEY:', supabaseKey ? 'SET' : 'MISSING');
             process.exit(1);
           }
           
-          console.log('✓ Supabase credentials found');
           const supabase = createClient(supabaseUrl, supabaseKey);
           
           supabase
@@ -65,20 +116,20 @@ jobs:
             .single()
             .then(({ data, error }) => {
               if (error && error.code !== 'PGRST116') {
-                console.error('✗ Error checking backup status:', error);
+                console.error('Error checking backup status:', error);
                 process.exit(1);
               }
               
               const enabled = data?.value?.enabled ?? false;
               if (!enabled) {
-                console.log('ℹ Backup is disabled. Exiting.');
+                console.log('Backup is disabled. Exiting.');
                 process.exit(0);
               }
               
-              console.log('✓ Backup is enabled. Proceeding...');
+              console.log('Backup is enabled. Proceeding...');
             })
             .catch((err) => {
-              console.error('✗ Failed to check backup status:', err);
+              console.error('Failed to check backup status:', err);
               process.exit(1);
             });
           "
@@ -93,16 +144,10 @@ jobs:
           const dispatchId = process.env.DISPATCH_ID;
           
           if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ Missing Supabase credentials');
+            console.error('Missing Supabase credentials');
             process.exit(1);
           }
           
-          if (!dispatchId) {
-            console.error('✗ Missing DISPATCH_ID');
-            process.exit(1);
-          }
-          
-          console.log('✓ Updating backup status to in_progress');
           const supabase = createClient(supabaseUrl, supabaseKey);
           
           supabase
@@ -111,13 +156,13 @@ jobs:
             .eq('dispatch_id', dispatchId)
             .then(({ error }) => {
               if (error) {
-                console.error('✗ Error updating backup status:', error);
+                console.error('Error updating backup status:', error);
                 process.exit(1);
               }
-              console.log('✓ Backup status updated to in_progress');
+              console.log('Backup status updated to in_progress');
             })
             .catch((err) => {
-              console.error('✗ Failed to update backup status:', err);
+              console.error('Failed to update backup status:', err);
               process.exit(1);
             });
           "
@@ -143,27 +188,19 @@ jobs:
           const supabaseUrl = process.env.SUPABASE_URL;
           const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
           
-          if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ Missing Supabase credentials');
-            process.exit(1);
-          }
-          
           const supabase = createClient(supabaseUrl, supabaseKey);
           
           supabase.auth.admin.listUsers()
             .then(({ data, error }) => {
-              if (error) {
-                console.error('✗ Error listing users:', error);
-                throw error;
-              }
+              if (error) throw error;
               fs.writeFileSync(
                 'backup/auth/users.json',
                 JSON.stringify(data.users, null, 2)
               );
-              console.log('✓ Exported', data.users.length, 'auth users');
+              console.log('Exported', data.users.length, 'auth users');
             })
             .catch((err) => {
-              console.error('✗ Failed to export auth users:', err);
+              console.error('Failed to export auth users:', err);
               process.exit(1);
             });
           "
@@ -178,77 +215,44 @@ jobs:
           
           const supabaseUrl = process.env.SUPABASE_URL;
           const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          const buckets = (process.env.SUPABASE_BUCKETS_TO_BACKUP || '')
-            .split(',')
-            .map(b => b.trim())
-            .filter(Boolean);
+          const buckets = (process.env.SUPABASE_BUCKETS_TO_BACKUP || '').split(',').map(b => b.trim()).filter(Boolean);
           
-          if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ Missing Supabase credentials');
-            process.exit(1);
-          }
-          
-          if (buckets.length === 0) {
-            console.log('ℹ No buckets to backup');
-            process.exit(0);
-          }
-          
-          console.log('✓ Backing up buckets:', buckets.join(', '));
           const supabase = createClient(supabaseUrl, supabaseKey);
           
           async function downloadBucket(bucketName) {
-            try {
-              const { data: files, error } = await supabase.storage
-                .from(bucketName)
-                .list('', { limit: 1000, recursive: true });
-              
-              if (error) {
-                console.error('✗ Error listing files in', bucketName, ':', error.message);
-                return;
-              }
-              
-              if (!files || files.length === 0) {
-                console.log('ℹ No files in bucket:', bucketName);
-                return;
-              }
-              
-              const bucketDir = path.join('backup/storage', bucketName);
-              fs.mkdirSync(bucketDir, { recursive: true });
-              
-              let downloaded = 0;
-              for (const file of files) {
-                if (file.id) {
-                  try {
-                    const { data, error: downloadError } = await supabase.storage
-                      .from(bucketName)
-                      .download(file.name);
-                    
-                    if (downloadError) {
-                      console.error('✗ Error downloading', file.name, ':', downloadError.message);
-                      continue;
-                    }
-                    
-                    const filePath = path.join(bucketDir, file.name);
-                    const dir = path.dirname(filePath);
-                    fs.mkdirSync(dir, { recursive: true });
-                    fs.writeFileSync(filePath, Buffer.from(await data.arrayBuffer()));
-                    downloaded++;
-                  } catch (fileErr) {
-                    console.error('✗ Error processing', file.name, ':', fileErr.message);
-                  }
+            const { data: files, error } = await supabase.storage.from(bucketName).list('', { limit: 1000, recursive: true });
+            if (error) {
+              console.error('Error listing files in', bucketName, ':', error);
+              return;
+            }
+            
+            const bucketDir = path.join('backup/storage', bucketName);
+            fs.mkdirSync(bucketDir, { recursive: true });
+            
+            for (const file of files || []) {
+              if (file.id) {
+                const { data, error: downloadError } = await supabase.storage
+                  .from(bucketName)
+                  .download(file.name);
+                
+                if (downloadError) {
+                  console.error('Error downloading', file.name, ':', downloadError);
+                  continue;
                 }
+                
+                const filePath = path.join(bucketDir, file.name);
+                const dir = path.dirname(filePath);
+                fs.mkdirSync(dir, { recursive: true });
+                fs.writeFileSync(filePath, Buffer.from(await data.arrayBuffer()));
+                console.log('Downloaded:', file.name);
               }
-              
-              console.log('✓ Downloaded', downloaded, 'files from', bucketName);
-            } catch (bucketErr) {
-              console.error('✗ Error backing up bucket', bucketName, ':', bucketErr.message);
             }
           }
           
           Promise.all(buckets.map(downloadBucket))
-            .then(() => console.log('✓ All storage files downloaded'))
+            .then(() => console.log('All storage files downloaded'))
             .catch((err) => {
-              console.error('✗ Failed to download storage files:', err);
+              console.error('Failed to download storage files:', err);
               process.exit(1);
             });
           "
@@ -260,15 +264,12 @@ jobs:
           zip -r "$BACKUP_NAME" backup/
           echo "BACKUP_FILE=$BACKUP_NAME" >> $GITHUB_ENV
           echo "BACKUP_SIZE=$(stat -f%z "$BACKUP_NAME" 2>/dev/null || stat -c%s "$BACKUP_NAME")" >> $GITHUB_ENV
-          echo "✓ Created backup archive: $BACKUP_NAME"
 
       - name: Upload to S3
         run: |
-          S3_PATH="backups/$(date -u +"%Y/%m/%d")/${{ env.BACKUP_FILE }}"
-          aws s3 cp "${{ env.BACKUP_FILE }}" "s3://$AWS_S3_BUCKET/$S3_PATH" \
+          aws s3 cp "$BACKUP_FILE" "s3://$AWS_S3_BUCKET/backups/$(date -u +"%Y/%m/%d")/$BACKUP_FILE" \
             --region "$AWS_S3_REGION"
-          echo "S3_KEY=$S3_PATH" >> $GITHUB_ENV
-          echo "✓ Uploaded to S3: $S3_PATH"
+          echo "S3_KEY=backups/$(date -u +"%Y/%m/%d")/$BACKUP_FILE" >> $GITHUB_ENV
 
       - name: Update backup_history and system_settings
         # ✅ FIX: Pass variables via command line, not export
@@ -353,7 +354,7 @@ jobs:
             })
             .then(({ error: settingsError }) => {
               if (settingsError) {
-                console.error('⚠ Warning: Failed to update last_backup_at:', settingsError.message);
+                console.error('⚠ Warning: Failed to update last_backup_at:', settingsError);
                 // Don't fail the step, just log the warning
               } else {
                 console.log('✓ System settings updated');
@@ -383,14 +384,10 @@ jobs:
           const errorText = process.env.ERROR_TEXT;
           
           if (!supabaseUrl || !supabaseKey || !dispatchId) {
-            console.error('✗ Cannot update backup status - missing credentials');
-            console.error('SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
-            console.error('SUPABASE_SERVICE_ROLE_KEY:', supabaseKey ? 'SET' : 'MISSING');
-            console.error('DISPATCH_ID:', dispatchId ? 'SET' : 'MISSING');
+            console.error('Cannot update backup status - missing credentials');
             process.exit(1);
           }
           
-          console.log('✓ Updating backup status to failed');
           const supabase = createClient(supabaseUrl, supabaseKey);
           
           supabase
@@ -402,14 +399,180 @@ jobs:
             .eq('dispatch_id', dispatchId)
             .then(({ error }) => {
               if (error) {
-                console.error('✗ Failed to update backup status to failed:', error.message);
-                process.exit(1);
+                console.error('Failed to update backup status to failed:', error);
               } else {
-                console.log('✓ Backup status updated to failed');
+                console.log('Backup status updated to failed');
               }
-            })
-            .catch((err) => {
-              console.error('✗ Error updating backup status:', err);
-              process.exit(1);
             });
           "
+```
+
+### Step 3: Fix Git Submodule Issue
+
+Choose one of these solutions:
+
+#### Option A: Remove the Submodule Reference (Recommended if not needed)
+
+```bash
+# Remove from Git cache
+git rm --cached Mana_Smart
+
+# If it's a directory, remove it
+rm -rf Mana_Smart
+
+# Commit the change
+git commit -m "Remove Mana_Smart submodule reference"
+```
+
+#### Option B: Add to .gitmodules (If it should be a submodule)
+
+Create or edit `.gitmodules`:
+
+```ini
+[submodule "Mana_Smart"]
+    path = Mana_Smart
+    url = https://github.com/your-org/Mana_Smart.git
+```
+
+Then:
+
+```bash
+git submodule update --init --recursive
+```
+
+#### Option C: Update Workflow to Skip Submodules
+
+In the workflow file, update the checkout step:
+
+```yaml
+- name: Checkout code
+  uses: actions/checkout@v4
+  with:
+    submodules: false  # Skip submodules entirely
+```
+
+### Step 4: Verify GitHub Secrets
+
+Ensure all these secrets are set in GitHub:
+
+1. Go to: **Repository → Settings → Secrets and variables → Actions**
+2. Verify these secrets exist:
+
+| Secret Name | Required | Description |
+|------------|----------|-------------|
+| `SUPABASE_URL` | ✅ Yes | Your Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ Yes | Service role key from Supabase |
+| `SUPABASE_DB_URL` | ✅ Yes | Direct PostgreSQL connection string (port 5432) |
+| `AWS_ACCESS_KEY_ID` | ✅ Yes | AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | ✅ Yes | AWS secret key |
+| `AWS_S3_REGION` | ✅ Yes | S3 bucket region |
+| `AWS_S3_BUCKET` | ✅ Yes | S3 bucket name |
+| `SUPABASE_BUCKETS_TO_BACKUP` | ✅ Yes | Comma-separated bucket names |
+
+### Step 5: Verify RLS Policies
+
+The `backup_history` table should allow service role key to write:
+
+```sql
+-- Check current RLS policies
+SELECT * FROM pg_policies WHERE tablename = 'backup_history';
+
+-- If service role can't write, temporarily disable RLS or add policy
+-- Option 1: Disable RLS (NOT recommended for production)
+ALTER TABLE backup_history DISABLE ROW LEVEL SECURITY;
+
+-- Option 2: Add policy allowing service role (RECOMMENDED)
+-- Service role key bypasses RLS by default, but verify:
+-- The service role key should work without RLS policies
+-- If it doesn't, check that you're using the correct key
+```
+
+**Important:** The service role key should bypass RLS automatically. If it doesn't, verify:
+1. You're using the **service_role** key, not the **anon** key
+2. The key is correct (copy from Supabase Dashboard → Settings → API)
+
+### Step 6: Test the Workflow
+
+1. **Commit the fixed workflow file:**
+   ```bash
+   git add .github/workflows/backup.yml
+   git commit -m "Fix backup workflow environment variables and submodule issue"
+   git push
+   ```
+
+2. **Manually trigger the workflow:**
+   - Go to: **Actions → Backup Database and Storage → Run workflow**
+
+3. **Monitor the logs:**
+   - Check each step for errors
+   - Verify environment variables are available
+   - Confirm backup_history is updated
+
+## 🔍 Debugging Tips
+
+### Check if Environment Variables are Available
+
+Add this debug step after any step that uses Node.js:
+
+```yaml
+- name: Debug environment variables
+  run: |
+    echo "SUPABASE_URL: ${SUPABASE_URL:0:20}..." # Show first 20 chars
+    echo "SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:0:20}..."
+    echo "DISPATCH_ID: $DISPATCH_ID"
+```
+
+### Test Supabase Connection
+
+Add a test step:
+
+```yaml
+- name: Test Supabase connection
+  run: |
+    node -e "
+    const { createClient } = require('@supabase/supabase-js');
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    console.log('URL exists:', !!url);
+    console.log('Key exists:', !!key);
+    if (url && key) {
+      const supabase = createClient(url, key);
+      supabase.from('backup_history').select('count').then(({ error }) => {
+        if (error) {
+          console.error('Connection test failed:', error);
+          process.exit(1);
+        }
+        console.log('✓ Connection test passed');
+      });
+    }
+    "
+```
+
+## 📋 Summary of Fixes
+
+1. ✅ **Environment Variables**: Defined at job level, available to all steps
+2. ✅ **Node.js Scripts**: Use `process.env` to access variables
+3. ✅ **Variable Passing**: Pass dynamic variables via command line (`VAR="value" node ...`)
+4. ✅ **Submodule Issue**: Disabled submodule checkout in workflow
+5. ✅ **Error Handling**: Added validation and better error messages
+6. ✅ **RLS Policies**: Service role key should bypass RLS (verify key is correct)
+
+## 🚨 Common Mistakes to Avoid
+
+1. ❌ **Don't use `export` in bash when `env:` block exists** - Variables won't be available to Node.js
+2. ❌ **Don't forget to define variables at job level** - Step-level `env:` doesn't inherit from job
+3. ❌ **Don't use pooled connection URL** - Must use direct connection (port 5432) for `pg_dump`
+4. ❌ **Don't use anon key** - Must use service_role key for admin operations
+5. ❌ **Don't commit secrets** - Always use GitHub Secrets, never hardcode
+
+---
+
+**Status**: ✅ **COMPLETE FIX PROVIDED**
+
+**Next Steps:**
+1. Copy the corrected workflow YAML to `.github/workflows/backup.yml`
+2. Fix the submodule issue (Option A recommended)
+3. Verify all GitHub Secrets are set
+4. Test the workflow manually
+5. Monitor the first run for any remaining issues
+

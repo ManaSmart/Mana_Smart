@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { regenerateLogoUrl } from '../../lib/logoManager'
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4KCg=='
@@ -6,15 +7,18 @@ const ERROR_IMG_SRC =
 interface ImageWithFallbackProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   onRefreshUrl?: () => void | Promise<void>; // Callback to refresh expired S3 URLs
   maxRetries?: number; // Maximum number of retry attempts
+  brandingId?: string; // Branding ID for automatic logo URL regeneration
+  autoRegenerate?: boolean; // Automatically regenerate expired URLs
 }
 
 export function ImageWithFallback(props: ImageWithFallbackProps) {
-  const { onRefreshUrl, maxRetries = 1, ...imgProps } = props;
+  const { onRefreshUrl, maxRetries = 2, brandingId, autoRegenerate = true, ...imgProps } = props;
   const [didError, setDidError] = useState(false)
   const [imageSrc, setImageSrc] = useState<string | undefined>(props.src)
   const retryCountRef = useRef(0)
   const isRetryingRef = useRef(false)
   const corsErrorDetectedRef = useRef(false) // Track if CORS error was detected
+  const lastRegenerateAttemptRef = useRef(0) // Track last regeneration attempt to prevent spam
 
   // Reset error state when src changes
   useEffect(() => {
@@ -60,23 +64,17 @@ export function ImageWithFallback(props: ImageWithFallbackProps) {
         const isLogo = img.currentSrc?.includes('branding') || img.currentSrc?.includes('logo');
         
         if (isLogo) {
-          errorInfo.helpMessage = 'Old S3 logo detected. Logos are now stored in Supabase. Please re-upload the logo in Settings to migrate to Supabase storage.';
-          console.error('🔴 Old S3 Logo Detected:', errorInfo.helpMessage);
-          console.error('📋 MIGRATION STEPS:');
-          console.error('   1. Go to Settings → Branding');
-          console.error('   2. Re-upload your logo (it will be saved to Supabase)');
-          console.error('   3. The new logo will be secured and use Supabase storage');
-          console.warn('ImageWithFallback: Old S3 logo detected - please migrate to Supabase by re-uploading in Settings.');
-        } else {
           errorInfo.helpMessage = 'CORS error detected. Configure CORS on your S3 bucket. See docs/S3_CORS_SETUP.md';
           console.error('🔴 CORS Configuration Required:', errorInfo.helpMessage);
           console.error('📋 QUICK FIX STEPS:');
-          console.error('   1. Go to AWS S3 Console → Your bucket (mana-smart-scent-files)');
+          console.error('   1. Go to AWS S3 Console → Your bucket');
           console.error('   2. Click "Permissions" tab → "Cross-origin resource sharing (CORS)" → "Edit"');
           console.error('   3. Paste the CORS configuration from docs/S3_CORS_SETUP.md');
           console.error('   4. Save changes and wait 1-2 minutes');
           console.error('   5. Clear browser cache and refresh');
           console.warn('ImageWithFallback: CORS error - will not retry. Fix CORS configuration on S3 bucket.');
+        } else {
+          console.warn('ImageWithFallback: CORS error detected');
         }
       } else {
         console.warn('ImageWithFallback: Failed to load image', errorInfo);
@@ -90,6 +88,34 @@ export function ImageWithFallback(props: ImageWithFallbackProps) {
       setDidError(true);
       isRetryingRef.current = false;
       return; // Exit immediately - don't retry on CORS errors
+    }
+
+    // Auto-regenerate URL if enabled and it's a logo with brandingId
+    if (autoRegenerate && brandingId && isS3Url && retryCountRef.current < maxRetries) {
+      const now = Date.now();
+      // Prevent spam - only regenerate once per 2 seconds
+      if (now - lastRegenerateAttemptRef.current > 2000) {
+        isRetryingRef.current = true;
+        retryCountRef.current += 1;
+        lastRegenerateAttemptRef.current = now;
+        
+        try {
+          console.log('Auto-regenerating logo URL...');
+          const newUrl = await regenerateLogoUrl(brandingId);
+          if (newUrl) {
+            setImageSrc(newUrl);
+            // Wait a bit for the URL to update, then reset error state
+            setTimeout(() => {
+              setDidError(false);
+              isRetryingRef.current = false;
+            }, 500);
+            return; // Don't set error state yet, wait for refresh
+          }
+        } catch (regenerateError) {
+          console.error('ImageWithFallback: Failed to auto-regenerate URL:', regenerateError);
+          isRetryingRef.current = false;
+        }
+      }
     }
 
     // Try to refresh S3 URL if it's an S3 URL and we have a refresh callback
