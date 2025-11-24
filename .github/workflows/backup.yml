@@ -4,13 +4,14 @@ on:
   workflow_dispatch:  # Allow manual triggers
     inputs:
       dispatch_id:
-        description: 'Dispatch ID for tracking backup'
+        description: 'Unique dispatch ID for tracking this backup'
         required: false
         type: string
       trigger_type:
         description: 'Type of trigger (manual or scheduled)'
         required: false
         type: string
+        default: 'manual'
   schedule:
     - cron: '0 2 * * *'  # Daily at 2:00 AM UTC
 
