@@ -1,0 +1,6 @@
+{
+  "note": "No Supabase Auth users to export",
+  "reason": "Application uses custom authentication system (system_users table)",
+  "message": "User data is stored in system_users table, which is already included in database backup",
+  "exported_at": "2025-11-24T09:59:17.295Z"
+}
