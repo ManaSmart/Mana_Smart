@@ -15,7 +15,7 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SUPABASE_DB_URL: ${{ secrets.DATABASE_URL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_S3_REGION: ${{ secrets.AWS_S3_REGION }}
@@ -76,6 +76,12 @@ jobs:
           const supabaseUrl = process.env.SUPABASE_URL;
           const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
           
+          // ✅ DEBUG: Validate URL format (without exposing full value)
+          console.log('Validating Supabase URL...');
+          console.log('URL length:', supabaseUrl ? supabaseUrl.length : 0);
+          console.log('URL starts with https://', supabaseUrl ? supabaseUrl.startsWith('https://') : false);
+          console.log('URL preview:', supabaseUrl ? supabaseUrl.substring(0, 30) + '...' : 'MISSING');
+          
           if (!supabaseUrl || !supabaseKey) {
             console.error('✗ Missing Supabase credentials');
             console.error('SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
@@ -83,8 +89,24 @@ jobs:
             process.exit(1);
           }
           
+          // ✅ FIX: Validate URL format
+          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+            console.error('✗ Invalid SUPABASE_URL format');
+            console.error('URL must start with http:// or https://');
+            console.error('Current value starts with:', supabaseUrl.substring(0, 20));
+            console.error('Expected format: https://xxxxx.supabase.co');
+            console.error('');
+            console.error('Please check your VITE_SUPABASE_URL secret in GitHub Settings');
+            console.error('It should be your Supabase project URL, not the database connection string');
+            process.exit(1);
+          }
+          
+          // ✅ FIX: Remove trailing slash if present
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          
           console.log('✓ Supabase credentials found');
-          const supabase = createClient(supabaseUrl, supabaseKey);
+          console.log('✓ URL format validated');
+          const supabase = createClient(cleanUrl, supabaseKey);
           
           supabase
             .from('system_settings_kv')
@@ -125,13 +147,24 @@ jobs:
             process.exit(1);
           }
           
+          // ✅ FIX: Validate URL format
+          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+            console.error('✗ Invalid SUPABASE_URL format');
+            console.error('URL must start with http:// or https://');
+            console.error('Current value preview:', supabaseUrl.substring(0, 50));
+            console.error('Expected format: https://xxxxx.supabase.co');
+            process.exit(1);
+          }
+          
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          
           if (!dispatchId) {
             console.error('✗ Missing DISPATCH_ID');
             process.exit(1);
           }
           
           console.log('✓ Updating backup status to in_progress');
-          const supabase = createClient(supabaseUrl, supabaseKey);
+          const supabase = createClient(cleanUrl, supabaseKey);
           
           supabase
             .from('backup_history')
@@ -203,7 +236,17 @@ jobs:
             process.exit(1);
           }
           
-          const supabase = createClient(supabaseUrl, supabaseKey);
+          // ✅ FIX: Validate URL format
+          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+            console.error('✗ Invalid SUPABASE_URL format');
+            console.error('URL must start with http:// or https://');
+            console.error('Current value preview:', supabaseUrl.substring(0, 50));
+            console.error('Expected format: https://xxxxx.supabase.co');
+            process.exit(1);
+          }
+          
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          const supabase = createClient(cleanUrl, supabaseKey);
           
           supabase.auth.admin.listUsers()
             .then(({ data, error }) => {
@@ -243,13 +286,24 @@ jobs:
             process.exit(1);
           }
           
+          // ✅ FIX: Validate URL format
+          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+            console.error('✗ Invalid SUPABASE_URL format');
+            console.error('URL must start with http:// or https://');
+            console.error('Current value preview:', supabaseUrl.substring(0, 50));
+            console.error('Expected format: https://xxxxx.supabase.co');
+            process.exit(1);
+          }
+          
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          
           if (buckets.length === 0) {
             console.log('ℹ No buckets to backup');
             process.exit(0);
           }
           
           console.log('✓ Backing up buckets:', buckets.join(', '));
-          const supabase = createClient(supabaseUrl, supabaseKey);
+          const supabase = createClient(cleanUrl, supabaseKey);
           
           async function downloadBucket(bucketName) {
             try {
@@ -359,19 +413,36 @@ jobs:
             process.exit(1);
           }
           
+          // ✅ FIX: Validate URL format
+          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+            console.error('✗ CRITICAL ERROR: Invalid SUPABASE_URL format');
+            console.error('URL must start with http:// or https://');
+            console.error('Current value preview:', supabaseUrl.substring(0, 50));
+            console.error('Expected format: https://xxxxx.supabase.co');
+            console.error('');
+            console.error('Please check your VITE_SUPABASE_URL secret in GitHub Settings');
+            console.error('It should be your Supabase project URL, NOT the database connection string');
+            console.error('Correct: https://rqssjgiunwyjeyutgkkp.supabase.co');
+            console.error('Wrong:   postgresql://postgres:password@db.xxxxx.supabase.co:5432/postgres');
+            process.exit(1);
+          }
+          
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          
           if (!dispatchId) {
             console.error('✗ CRITICAL ERROR: Missing DISPATCH_ID');
             process.exit(1);
           }
           
           console.log('✓ Supabase credentials validated');
+          console.log('✓ URL format validated');
           console.log('✓ Updating backup_history with:');
           console.log('  - dispatch_id:', dispatchId);
           console.log('  - status:', status);
           console.log('  - s3_key:', s3Key);
           console.log('  - size_bytes:', sizeBytes);
           
-          const supabase = createClient(supabaseUrl, supabaseKey);
+          const supabase = createClient(cleanUrl, supabaseKey);
           
           // Update backup_history
           supabase
@@ -462,8 +533,20 @@ jobs:
             process.exit(1);
           }
           
+          // ✅ FIX: Validate URL format
+          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+            console.error('✗ Invalid SUPABASE_URL format');
+            console.error('URL must start with http:// or https://');
+            console.error('Current value preview:', supabaseUrl.substring(0, 50));
+            console.error('Expected format: https://xxxxx.supabase.co');
+            process.exit(1);
+          }
+          
+          // ✅ FIX: Remove trailing slash if present
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          
           console.log('✓ Updating backup status to failed');
-          const supabase = createClient(supabaseUrl, supabaseKey);
+          const supabase = createClient(cleanUrl, supabaseKey);
           
           supabase
             .from('backup_history')
