@@ -43,7 +43,7 @@ interface BackupHistoryItem {
   dispatch_id?: string | null;
 }
 
-const POLL_INTERVAL_MS = 3000; // Poll every 3 seconds
+const POLL_INTERVAL_MS = 2000; // Poll every 2 seconds (faster detection)
 const MAX_POLL_ATTEMPTS = 1200; // Max 60 minutes of polling (1200 * 3s = 3600s = 60min) - matches workflow timeout
 
 interface BackupSettingsProps {
@@ -216,6 +216,63 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       setIsLoadingHistory(false);
     }
   };
+
+  // ✅ Monitor for new successful backups (especially from scheduled daily backups)
+  useEffect(() => {
+    if (!backupEnabled) return;
+
+    let lastCheckedBackupId: string | null = null;
+    
+    // Initialize with current latest backup ID
+    if (history.length > 0 && history[0].status === "success") {
+      lastCheckedBackupId = history[0].id;
+    }
+
+    // Check for new backups every 30 seconds
+    const checkInterval = setInterval(async () => {
+      try {
+        const historyData = await getBackupHistory(5);
+        const latestSuccess = historyData.find(b => b.status === "success");
+        
+        // If we have a new successful backup that we haven't seen before
+        if (latestSuccess && latestSuccess.id !== lastCheckedBackupId) {
+          // Check if this backup is recent (within last 5 minutes) to avoid old notifications
+          const backupTime = new Date(latestSuccess.created_at).getTime();
+          const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+          
+          if (backupTime > fiveMinutesAgo) {
+            lastCheckedBackupId = latestSuccess.id;
+            
+            // Show notification for new backup
+            toast.success("Daily backup completed!", {
+              description: `Backup created at ${formatDate(latestSuccess.created_at)}. Click to download.`,
+              duration: 10000,
+              action: latestSuccess.s3_key ? {
+                label: "Download",
+                onClick: async () => {
+                  try {
+                    const { signed_url } = await generateSignedUrl(latestSuccess.s3_key!);
+                    window.open(signed_url, "_blank");
+                  } catch (error) {
+                    toast.error("Failed to generate download URL");
+                  }
+                },
+              } : undefined,
+            });
+            
+            // Refresh history and settings
+            await Promise.all([loadHistory(), loadSettings()]);
+          }
+        }
+      } catch (error) {
+        console.error("[Backup] Error checking for new backups:", error);
+      }
+    }, 30000); // Check every 30 seconds
+
+    return () => {
+      clearInterval(checkInterval);
+    };
+  }, [backupEnabled]); // Only depend on backupEnabled, not history (to avoid infinite loops)
 
   // Background monitoring for timed-out backups
   const startBackgroundMonitoring = (dispatchId: string, backupId?: string | null) => {
@@ -523,6 +580,56 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           }
 
           console.log(`[Backup] Polling attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} for dispatch_id: ${dispatch_id}`);
+          
+          // ✅ IMPROVED: Check backup_history directly first (faster and more reliable)
+          // This avoids the delay of checking GitHub API when backup_history is already updated
+          try {
+            const historyData = await getBackupHistory(10);
+            const matchingBackup = historyData.find(b => 
+              b.dispatch_id === dispatch_id || 
+              (manualBackupProgress.backupId && b.id === manualBackupProgress.backupId)
+            );
+            
+            if (matchingBackup) {
+              // Store backup_id when we get it
+              if (matchingBackup.id && !manualBackupProgress.backupId) {
+                setManualBackupProgress((prev) => ({
+                  ...prev,
+                  backupId: matchingBackup.id,
+                }));
+              }
+              
+              // If backup is complete, return immediately
+              if (matchingBackup.status === "success" && matchingBackup.s3_key) {
+                console.log("[Backup] Backup completed! Found in history.");
+                setManualBackupProgress((prev) => ({
+                  ...prev,
+                  progress: 100,
+                }));
+                // Generate signed URL
+                const { signed_url } = await generateSignedUrl(matchingBackup.s3_key);
+                return signed_url;
+              } else if (matchingBackup.status === "failed") {
+                console.error("[Backup] Backup failed:", matchingBackup.error_text);
+                throw new Error(matchingBackup.error_text || "Backup failed");
+              } else if (matchingBackup.status === "cancelled") {
+                throw new Error("Backup was cancelled");
+              }
+              // Otherwise, still in progress, continue to status API check
+            }
+          } catch (historyError) {
+            // If it's a failure error, throw it
+            if (historyError instanceof Error && (
+              historyError.message.includes("Backup failed") || 
+              historyError.message.includes("cancelled")
+            )) {
+              throw historyError;
+            }
+            console.warn("[Backup] Could not check backup history directly:", historyError);
+            // Fall through to status API check
+          }
+          
+          // Fallback to status API if backup not found in history or still in progress
           const status = await getBackupStatus(dispatch_id);
           
           console.log(`[Backup] Poll attempt ${pollAttempts}/${MAX_POLL_ATTEMPTS} result:`, {
