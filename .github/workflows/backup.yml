@@ -153,13 +153,40 @@ jobs:
       - name: Export database
         run: |
           mkdir -p backup/db
-          pg_dump --dbname="$SUPABASE_DB_URL" \
+          
+          # ✅ FIX: Verify connection string is set
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "❌ ERROR: SUPABASE_DB_URL is not set"
+            echo "Please set SUPABASE_DB_URL secret in GitHub Settings"
+            exit 1
+          fi
+          
+          echo "✓ Starting database export..."
+          echo "Connection string format: ${SUPABASE_DB_URL%%@*}@***" # Show only user@host part
+          
+          # ✅ FIX: Use connection string directly (pg_dump will parse it)
+          # For Supabase free plan, ensure using direct connection (port 5432)
+          pg_dump "$SUPABASE_DB_URL" \
             --no-owner \
             --no-privileges \
             --format=plain \
             --blobs \
             --verbose \
-            --file=backup/db/backup.sql
+            --file=backup/db/backup.sql \
+            || {
+              echo "❌ pg_dump failed. Common issues:"
+              echo "1. Connection string format incorrect"
+              echo "2. Database password incorrect"
+              echo "3. Using pooled connection (port 6543) instead of direct (port 5432)"
+              echo "4. IP not whitelisted (Supabase free plan may require IP whitelisting)"
+              echo ""
+              echo "Verify SUPABASE_DB_URL format:"
+              echo "Correct: postgresql://postgres:password@db.xxxxx.supabase.co:5432/postgres"
+              echo "Wrong:   postgresql://postgres:password@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
+              exit 1
+            }
+          
+          echo "✓ Database export completed"
 
       - name: Export auth users
         run: |
@@ -395,10 +422,10 @@ jobs:
 
       - name: Handle backup failure
         if: failure()
-        # ✅ FIX: Ensure env variables are available in failure handler
+        # ✅ FIX: Use the same secret names as job-level env (VITE_ prefixed)
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
           DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
         run: |
           FINAL_STATUS="failed"
