@@ -13,8 +13,8 @@ jobs:
     # ✅ FIX: Define all environment variables at job level
     # This makes them available to ALL steps
     env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -29,6 +29,34 @@ jobs:
         # ✅ FIX: Disable submodule checkout to avoid the warning
         with:
           submodules: false
+
+      - name: Debug environment variables
+        # ✅ DEBUG: Check if secrets are available (without exposing values)
+        run: |
+          echo "Checking environment variables..."
+          echo "SUPABASE_URL: ${SUPABASE_URL:+SET (hidden)}${SUPABASE_URL:-MISSING}"
+          echo "SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:+SET (hidden)}${SUPABASE_SERVICE_ROLE_KEY:-MISSING}"
+          echo "SUPABASE_DB_URL: ${SUPABASE_DB_URL:+SET (hidden)}${SUPABASE_DB_URL:-MISSING}"
+          echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:+SET (hidden)}${AWS_ACCESS_KEY_ID:-MISSING}"
+          echo "AWS_S3_BUCKET: ${AWS_S3_BUCKET:+SET (hidden)}${AWS_S3_BUCKET:-MISSING}"
+          echo "DISPATCH_ID: $DISPATCH_ID"
+          
+          # Check if secrets are actually set
+          if [ -z "$SUPABASE_URL" ]; then
+            echo "❌ ERROR: SUPABASE_URL secret is not set in GitHub Secrets"
+            echo "Please go to: Repository → Settings → Secrets and variables → Actions"
+            echo "And add SUPABASE_URL secret"
+            exit 1
+          fi
+          
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "❌ ERROR: SUPABASE_SERVICE_ROLE_KEY secret is not set in GitHub Secrets"
+            echo "Please go to: Repository → Settings → Secrets and variables → Actions"
+            echo "And add SUPABASE_SERVICE_ROLE_KEY secret"
+            exit 1
+          fi
+          
+          echo "✓ All required secrets are set"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -367,9 +395,26 @@ jobs:
 
       - name: Handle backup failure
         if: failure()
+        # ✅ FIX: Ensure env variables are available in failure handler
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
         run: |
           FINAL_STATUS="failed"
           FINAL_ERROR_TEXT="Backup workflow failed. Check GitHub Actions logs for details."
+          
+          # Debug: Check if variables are available
+          echo "Debug: Checking environment variables in failure handler..."
+          echo "SUPABASE_URL: ${SUPABASE_URL:+SET (hidden)}${SUPABASE_URL:-MISSING}"
+          echo "SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:+SET (hidden)}${SUPABASE_SERVICE_ROLE_KEY:-MISSING}"
+          echo "DISPATCH_ID: $DISPATCH_ID"
+          
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ] || [ -z "$DISPATCH_ID" ]; then
+            echo "❌ Cannot update backup status - missing required variables"
+            echo "This is a critical error. Please check GitHub Secrets configuration."
+            exit 1
+          fi
           
           STATUS="$FINAL_STATUS" \
           ERROR_TEXT="$FINAL_ERROR_TEXT" \
