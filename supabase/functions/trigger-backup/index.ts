@@ -186,11 +186,48 @@ serve(async (req: Request) => {
   }
 
   try {
+    // Validate required environment variables
+    if (!GITHUB_TOKEN) {
+      console.error("GITHUB_TOKEN is not set");
+      return new Response(
+        JSON.stringify({
+          error: "GitHub token not configured",
+          message: "GITHUB_TOKEN environment variable is missing. Please configure it in Supabase Dashboard → Edge Functions → Secrets.",
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+
+    if (!GITHUB_OWNER || !GITHUB_REPO) {
+      console.error("GITHUB_OWNER or GITHUB_REPO is not set");
+      return new Response(
+        JSON.stringify({
+          error: "GitHub repository not configured",
+          message: "GITHUB_OWNER and GITHUB_REPO environment variables are required. Please configure them in Supabase Dashboard → Edge Functions → Secrets.",
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+            ...getCorsHeaders(req),
+          },
+        }
+      );
+    }
+
     // Generate a unique dispatch ID
     const dispatchId = crypto.randomUUID();
 
     // Trigger GitHub Actions workflow
     const workflowUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW_ID}/dispatches`;
+
+    console.log(`Triggering GitHub workflow: ${GITHUB_OWNER}/${GITHUB_REPO}/${GITHUB_WORKFLOW_ID}`);
 
     const workflowResponse = await fetch(workflowUrl, {
       method: "POST",
@@ -210,11 +247,42 @@ serve(async (req: Request) => {
 
     if (!workflowResponse.ok) {
       const errorText = await workflowResponse.text();
-      console.error("GitHub API error:", errorText);
+      let errorMessage = "Failed to trigger backup workflow";
+      let errorDetails = errorText;
+
+      // Parse GitHub API error for better messages
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.message) {
+          errorMessage = errorJson.message;
+        }
+        if (errorJson.errors && Array.isArray(errorJson.errors)) {
+          errorDetails = errorJson.errors.map((e: any) => e.message || e).join(", ");
+        }
+      } catch {
+        // If parsing fails, use the raw error text
+      }
+
+      console.error("GitHub API error:", {
+        status: workflowResponse.status,
+        statusText: workflowResponse.statusText,
+        error: errorText,
+      });
+
+      // Provide specific error messages based on status code
+      if (workflowResponse.status === 401 || workflowResponse.status === 403) {
+        errorMessage = "GitHub authentication failed. Please check GITHUB_TOKEN permissions.";
+      } else if (workflowResponse.status === 404) {
+        errorMessage = `Workflow not found. Please verify GITHUB_OWNER, GITHUB_REPO, and GITHUB_WORKFLOW_ID are correct.`;
+      } else if (workflowResponse.status === 422) {
+        errorMessage = "Workflow dispatch failed. The workflow file may not exist or may not be configured for manual triggers.";
+      }
+
       return new Response(
         JSON.stringify({
-          error: "Failed to trigger backup workflow",
-          details: errorText,
+          error: errorMessage,
+          details: errorDetails,
+          status_code: workflowResponse.status,
         }),
         {
           status: 500,
@@ -255,10 +323,24 @@ serve(async (req: Request) => {
     );
   } catch (error) {
     console.error("Error triggering backup:", error);
+    
+    // Provide more detailed error information
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    // Check for common issues
+    let userFriendlyMessage = "Internal server error";
+    if (errorMessage.includes("fetch")) {
+      userFriendlyMessage = "Failed to connect to GitHub API. Please check network connectivity and GitHub API status.";
+    } else if (errorMessage.includes("JSON")) {
+      userFriendlyMessage = "Failed to parse response from GitHub API.";
+    }
+
     return new Response(
       JSON.stringify({
-        error: "Internal server error",
-        message: error instanceof Error ? error.message : "Unknown error",
+        error: userFriendlyMessage,
+        message: errorMessage,
+        details: process.env.DENO_ENV === "development" ? errorStack : undefined,
       }),
       {
         status: 500,
