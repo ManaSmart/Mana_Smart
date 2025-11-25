@@ -37,6 +37,46 @@ jobs:
       BACKUP_S3_FILES: ${{ secrets.BACKUP_S3_FILES || 'true' }}
 
     steps:
+      - name: Update workflow_run_id in backup_history
+        # ✅ NEW: Update backup_history with workflow_run_id for progress tracking
+        run: |
+          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
+          
+          node --input-type=commonjs -e "
+          const { createClient } = require('@supabase/supabase-js');
+          
+          const supabaseUrl = process.env.SUPABASE_URL;
+          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+          const dispatchId = process.env.DISPATCH_ID;
+          const workflowRunId = process.env.WORKFLOW_RUN_ID;
+          
+          if (!supabaseUrl || !supabaseKey || !dispatchId || !workflowRunId) {
+            console.log('⚠ Skipping workflow_run_id update - missing variables');
+            process.exit(0);
+          }
+          
+          const cleanUrl = supabaseUrl.replace(/\\/$/, '');
+          const supabase = createClient(cleanUrl, supabaseKey);
+          
+          // Update backup_history with workflow_run_id
+          const { error } = await supabase
+            .from('backup_history')
+            .update({ workflow_run_id: workflowRunId })
+            .eq('dispatch_id', dispatchId);
+          
+          if (error) {
+            console.log('⚠ Could not update workflow_run_id:', error.message);
+          } else {
+            console.log('✓ Updated workflow_run_id:', workflowRunId);
+          }
+          "
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+
       - name: Checkout code
         uses: actions/checkout@v4
         # ✅ FIX: Disable submodule checkout to avoid the warning
@@ -972,17 +1012,50 @@ jobs:
           echo "✓ Created backup archive: $BACKUP_NAME"
 
       - name: Upload to S3
+        # ✅ FIX: Track upload progress and verify completion
         run: |
           S3_PATH="backups/$(date -u +"%Y/%m/%d")/${{ env.BACKUP_FILE }}"
+          
+          echo "📤 Starting S3 upload..."
+          echo "  Source: ${{ env.BACKUP_FILE }}"
+          echo "  Destination: s3://$AWS_S3_BUCKET/$S3_PATH"
+          echo "  Size: $(du -h "${{ env.BACKUP_FILE }}" | cut -f1)"
+          
+          # ✅ FIX: Upload with progress tracking
           aws s3 cp "${{ env.BACKUP_FILE }}" "s3://$AWS_S3_BUCKET/$S3_PATH" \
-            --region "$AWS_S3_REGION"
-          echo "S3_KEY=$S3_PATH" >> $GITHUB_ENV
-          echo "✓ Uploaded to S3: $S3_PATH"
+            --region "$AWS_S3_REGION" \
+            --no-progress 2>&1 | while IFS= read -r line; do
+              echo "$line"
+              # Track upload progress if available
+              if echo "$line" | grep -q "upload:"; then
+                echo "  → Upload in progress..."
+              fi
+            done
+          
+          # ✅ FIX: Verify upload completed successfully
+          echo "🔍 Verifying S3 upload..."
+          if aws s3 ls "s3://$AWS_S3_BUCKET/$S3_PATH" --region "$AWS_S3_REGION" > /dev/null 2>&1; then
+            UPLOADED_SIZE=$(aws s3 ls "s3://$AWS_S3_BUCKET/$S3_PATH" --region "$AWS_S3_REGION" --human-readable --summarize | grep "Total Size" | awk '{print $3, $4}')
+            echo "✓ Upload verified successfully"
+            echo "✓ Uploaded file size: $UPLOADED_SIZE"
+            echo "S3_KEY=$S3_PATH" >> $GITHUB_ENV
+            echo "UPLOAD_COMPLETED=true" >> $GITHUB_ENV
+          else
+            echo "❌ ERROR: Upload verification failed - file not found in S3"
+            echo "UPLOAD_COMPLETED=false" >> $GITHUB_ENV
+            exit 1
+          fi
 
       - name: Update backup_history and system_settings
-        # ✅ FIX: Pass variables via command line, not export
-        # Variables from env: are already available, but we pass STATUS/ERROR_TEXT explicitly
+        # ✅ FIX: Only update if upload completed successfully
         run: |
+          # ✅ FIX: Check if upload completed
+          if [ "${{ env.UPLOAD_COMPLETED }}" != "true" ]; then
+            echo "❌ ERROR: S3 upload did not complete successfully"
+            echo "❌ Cannot update backup_history - upload verification failed"
+            exit 1
+          fi
+          
           # Check if database backup failed (network issue)
           if [ -f backup/db/backup.sql ] && grep -q "DATABASE BACKUP FAILED" backup/db/backup.sql; then
             FINAL_STATUS="partial"
@@ -1007,6 +1080,7 @@ jobs:
           const supabaseUrl = process.env.SUPABASE_URL;
           const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
           const dispatchId = process.env.DISPATCH_ID;
+          const workflowRunId = process.env.GITHUB_RUN_ID || null; // ✅ NEW: Get workflow run ID
           const status = process.env.STATUS;
           const errorText = process.env.ERROR_TEXT || null;
           const s3Key = process.env.S3_KEY;
@@ -1041,10 +1115,14 @@ jobs:
             process.exit(1);
           }
           
+          // ✅ NEW: Get workflow run ID for progress tracking
+          const workflowRunId = process.env.GITHUB_RUN_ID || null;
+          
           console.log('✓ Supabase credentials validated');
           console.log('✓ URL format validated');
           console.log('✓ Updating backup_history with:');
           console.log('  - dispatch_id:', dispatchId);
+          console.log('  - workflow_run_id:', workflowRunId);
           console.log('  - status:', status);
           console.log('  - s3_key:', s3Key);
           console.log('  - size_bytes:', sizeBytes);
@@ -1052,14 +1130,21 @@ jobs:
           const supabase = createClient(cleanUrl, supabaseKey);
           
           // Update backup_history
+          const updateData = {
+            status: status,
+            s3_key: s3Key,
+            size_bytes: sizeBytes,
+            error_text: errorText,
+          };
+          
+          // ✅ NEW: Only update workflow_run_id if we have it and it's not already set
+          if (workflowRunId) {
+            updateData.workflow_run_id = workflowRunId;
+          }
+          
           supabase
             .from('backup_history')
-            .update({
-              status: status,
-              s3_key: s3Key,
-              size_bytes: sizeBytes,
-              error_text: errorText,
-            })
+            .update(updateData)
             .eq('dispatch_id', dispatchId)
             .then(({ data, error }) => {
               if (error) {

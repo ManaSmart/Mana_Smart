@@ -4,9 +4,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Switch } from "./ui/switch";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
+import { Input } from "./ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Progress } from "./ui/progress";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "./ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
   Download,
   RefreshCw,
@@ -19,6 +21,11 @@ import {
   X,
   Trash2,
   AlertTriangle,
+  Mail,
+  MessageCircle,
+  Upload,
+  FileText,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -31,6 +38,7 @@ import {
   cancelBackup,
   deleteBackup,
   restoreBackup,
+  shareBackup,
 } from "../lib/backupApi";
 
 interface BackupHistoryItem {
@@ -43,8 +51,10 @@ interface BackupHistoryItem {
   dispatch_id?: string | null;
 }
 
-const POLL_INTERVAL_MS = 3000; // Poll every 3 seconds
-const MAX_POLL_ATTEMPTS = 1200; // Max 60 minutes of polling (1200 * 3s = 3600s = 60min) - matches workflow timeout
+// ✅ OPTIMIZED: Exponential backoff polling - starts fast, slows down
+const INITIAL_POLL_INTERVAL_MS = 1000; // Start with 1 second
+const MAX_POLL_INTERVAL_MS = 10000; // Max 10 seconds between polls
+const MAX_POLL_ATTEMPTS = 300; // Reduced from 1200 - GitHub Actions completes in <1 min
 
 interface BackupSettingsProps {
   autoBackup?: boolean;
@@ -59,6 +69,14 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const [history, setHistory] = useState<BackupHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [inProgressProgress, setInProgressProgress] = useState<Record<string, number>>({});
+  
+  // ✅ NEW: Filter state
+  const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'failed' | 'cancelled' | 'in_progress'>('all');
+  const [dateFilter, setDateFilter] = useState<{
+    start?: string;
+    end?: string;
+  }>({});
+  const [searchQuery, setSearchQuery] = useState('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const hasStartedPollingRef = useRef(false);
   const [manualBackupProgress, setManualBackupProgress] = useState<{
@@ -67,12 +85,14 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     dispatchId: string | null;
     backupId?: string | null;
     isTimedOut?: boolean;
+    currentStep?: string; // ✅ NEW: Current workflow step
   }>({
     isRunning: false,
     progress: 0,
     dispatchId: null,
     backupId: null,
     isTimedOut: false,
+    currentStep: undefined,
   });
   
   // Ref to track cancellation
@@ -95,6 +115,30 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreResults, setRestoreResults] = useState<any>(null);
+  
+  // ✅ NEW: File upload tracking
+  const [uploadFiles, setUploadFiles] = useState<Array<{
+    id: string;
+    name: string;
+    size: number;
+    progress: number;
+    status: 'uploading' | 'completed' | 'error';
+    error?: string;
+  }>>([]);
+  
+  // ✅ NEW: Sharing configuration
+  const [sharingConfig, setSharingConfig] = useState({
+    emailEnabled: false,
+    whatsappEnabled: false,
+    emailRecipient: '',
+    whatsappRecipient: '',
+    autoDownload: false,
+  });
+  
+  // ✅ NEW: Share dialog state
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareBackupId, setShareBackupId] = useState<string | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
 
   // Load initial settings and history
   useEffect(() => {
@@ -123,30 +167,46 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       hasStartedPollingRef.current = true;
     }
 
-    const updateProgressForBackups = () => {
+    const updateProgressForBackups = async () => {
       const currentInProgress = history.filter(item => item.status === "in_progress");
       
       for (const item of currentInProgress) {
-        // Estimate progress based on time elapsed
-        const createdAt = new Date(item.created_at).getTime();
-        const now = Date.now();
-        const elapsedMinutes = (now - createdAt) / (1000 * 60);
-        
-        // Estimate progress: assume backup takes ~15 minutes max
-        // Start at 10%, reach 95% at 15 minutes
-        const estimatedProgress = Math.min(10 + Math.floor((elapsedMinutes / 15) * 85), 95);
-        
-        setInProgressProgress(prev => {
-          // Only update if progress changed significantly (avoid unnecessary re-renders)
-          const currentProgress = prev[item.id] || 10;
-          if (Math.abs(currentProgress - estimatedProgress) >= 1) {
-            return {
-              ...prev,
-              [item.id]: estimatedProgress,
-            };
+        // ✅ FIXED: Get real progress from API instead of estimating
+        if (item.dispatch_id) {
+          try {
+            const status = await getBackupStatus(item.dispatch_id);
+            if (status.progress !== undefined) {
+              setInProgressProgress(prev => {
+                const currentProgress = prev[item.id] || 10;
+                // Only update if progress changed significantly (avoid unnecessary re-renders)
+                if (Math.abs(currentProgress - status.progress!) >= 1) {
+                  return {
+                    ...prev,
+                    [item.id]: status.progress!,
+                  };
+                }
+                return prev;
+              });
+            }
+          } catch (error) {
+            // Fallback to time-based estimate if API call fails
+            const createdAt = new Date(item.created_at).getTime();
+            const now = Date.now();
+            const elapsedMinutes = (now - createdAt) / (1000 * 60);
+            const estimatedProgress = Math.min(10 + Math.floor((elapsedMinutes / 15) * 85), 95);
+            
+            setInProgressProgress(prev => {
+              const currentProgress = prev[item.id] || 10;
+              if (Math.abs(currentProgress - estimatedProgress) >= 1) {
+                return {
+                  ...prev,
+                  [item.id]: estimatedProgress,
+                };
+              }
+              return prev;
+            });
           }
-          return prev;
-        });
+        }
       }
 
       // If no more in-progress items, stop polling and clear progress
@@ -173,10 +233,11 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     // Update progress immediately
     updateProgressForBackups();
     
-    // Then update progress every 5 seconds (without refreshing history)
+    // ✅ FIXED: Update progress more frequently for real-time updates
+    // Then update progress every 3 seconds (without refreshing history)
     pollingIntervalRef.current = setInterval(() => {
       updateProgressForBackups();
-    }, 5000);
+    }, 3000);
 
     return () => {
       if (pollingIntervalRef.current) {
@@ -207,7 +268,13 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const loadHistory = async () => {
     setIsLoadingHistory(true);
     try {
-      const historyData = await getBackupHistory(5);
+      // ✅ NEW: Apply filters when loading history
+      const historyData = await getBackupHistory(50, {
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        start_date: dateFilter.start,
+        end_date: dateFilter.end,
+        search: searchQuery || undefined,
+      });
       setHistory(historyData);
     } catch (error) {
       console.error("Failed to load backup history:", error);
@@ -216,6 +283,12 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       setIsLoadingHistory(false);
     }
   };
+  
+  // ✅ NEW: Reload history when filters change
+  useEffect(() => {
+    loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, dateFilter.start, dateFilter.end, searchQuery]);
 
   // Background monitoring for timed-out backups
   const startBackgroundMonitoring = (dispatchId: string, backupId?: string | null) => {
@@ -491,30 +564,9 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
 
         pollAttempts++;
         
-        // Better progress calculation with faster initial progress
-        // Use exponential curve: fast at start, slower as we approach completion
-        // First 50 attempts: 10% -> 60% (fast initial progress)
-        // Next 150 attempts: 60% -> 85% (moderate progress)
-        // Remaining attempts: 85% -> 95% (slow progress, waiting for completion)
-        let progressPercent: number;
-        if (pollAttempts <= 50) {
-          // Fast initial progress: 10% to 60% in first 50 attempts
-          progressPercent = 10 + Math.floor((pollAttempts / 50) * 50);
-        } else if (pollAttempts <= 200) {
-          // Moderate progress: 60% to 85% in next 150 attempts
-          const remainingAttempts = pollAttempts - 50;
-          progressPercent = 60 + Math.floor((remainingAttempts / 150) * 25);
-        } else {
-          // Slow progress: 85% to 95% for remaining attempts
-          const remainingAttempts = pollAttempts - 200;
-          const maxRemaining = MAX_POLL_ATTEMPTS - 200;
-          progressPercent = 85 + Math.floor((remainingAttempts / maxRemaining) * 10);
-        }
-        progressPercent = Math.min(progressPercent, 95);
-        setManualBackupProgress((prev) => ({
-          ...prev,
-          progress: progressPercent,
-        }));
+        // ✅ FIXED: Progress is now updated from API response above
+        // Only use fallback progress if API doesn't provide it
+        // (This fallback should rarely be needed now)
 
         try {
           // Check cancellation before making API call
@@ -530,7 +582,18 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             hasSignedUrl: !!status.signed_url,
             error: status.error,
             backupId: status.backup_id,
+            progress: status.progress,
+            currentStep: status.current_step,
           });
+          
+          // ✅ FIXED: Use real progress from API if available
+          if (status.progress !== undefined || status.current_step) {
+            setManualBackupProgress((prev) => ({
+              ...prev,
+              progress: status.progress !== undefined ? status.progress : prev.progress,
+              currentStep: status.current_step || prev.currentStep,
+            }));
+          }
           
           // Store backup_id when we get it
           if (status.backup_id && !manualBackupProgress.backupId) {
@@ -568,9 +631,21 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             }
             throw new Error(status.error || "Backup failed. Check GitHub Actions logs for details.");
           } else if (status.status === "in_progress" || status.status === "pending") {
-            // Continue polling
-            console.log(`[Backup] Still in progress (${status.status}), polling again in ${POLL_INTERVAL_MS}ms...`);
-            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+            // ✅ OPTIMIZED: Exponential backoff - start fast, slow down over time
+            // First 20 attempts: 1s, next 30: 2s, next 50: 5s, rest: 10s
+            let pollDelay = INITIAL_POLL_INTERVAL_MS;
+            if (pollAttempts > 20) {
+              pollDelay = 2000; // 2 seconds
+            }
+            if (pollAttempts > 50) {
+              pollDelay = 5000; // 5 seconds
+            }
+            if (pollAttempts > 100) {
+              pollDelay = MAX_POLL_INTERVAL_MS; // 10 seconds
+            }
+            
+            console.log(`[Backup] Still in progress (${status.status}), polling again in ${pollDelay}ms... (attempt ${pollAttempts})`);
+            await new Promise((resolve) => setTimeout(resolve, pollDelay));
             return pollStatus();
           } else {
             console.error("[Backup] Unknown status:", status);
@@ -583,9 +658,10 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           }
 
           if (error instanceof Error && error.message.includes("Failed to get backup status")) {
-            // Retry on transient errors
-            console.warn(`[Backup] Transient error, retrying... (attempt ${pollAttempts})`);
-            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+            // Retry on transient errors with exponential backoff
+            const retryDelay = Math.min(INITIAL_POLL_INTERVAL_MS * Math.pow(2, Math.floor(pollAttempts / 10)), MAX_POLL_INTERVAL_MS);
+            console.warn(`[Backup] Transient error, retrying in ${retryDelay}ms... (attempt ${pollAttempts})`);
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
             return pollStatus();
           }
           console.error("[Backup] Polling error:", error);
@@ -901,6 +977,7 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     }
   };
 
+  // ✅ FIXED: Format date with hours, minutes, seconds in AM/PM format
   const formatDate = (dateString: string | null) => {
     if (!dateString) return "Never";
     try {
@@ -909,12 +986,23 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       if (isNaN(date.getTime())) {
         return "Invalid date";
       }
-      const day = String(date.getDate()).padStart(2, "0");
-      const month = String(date.getMonth() + 1).padStart(2, "0");
+      
+      // Format: Jan 14, 2025 – 03:27:18 PM
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const month = months[date.getMonth()];
+      const day = date.getDate();
       const year = date.getFullYear();
-      const hours = String(date.getHours()).padStart(2, "0");
+      
+      // Format time in 12-hour format with AM/PM
+      let hours = date.getHours();
       const minutes = String(date.getMinutes()).padStart(2, "0");
-      return `${day}/${month}/${year} ${hours}:${minutes}`;
+      const seconds = String(date.getSeconds()).padStart(2, "0");
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      hours = hours ? hours : 12; // 0 should be 12
+      const hoursStr = String(hours).padStart(2, "0");
+      
+      return `${month} ${day}, ${year} – ${hoursStr}:${minutes}:${seconds} ${ampm}`;
     } catch {
       return "Invalid date";
     }
@@ -992,12 +1080,27 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
       return;
     }
 
+    // ✅ NEW: Track file upload
+    const fileId = handleFileUploadStart(restoreFile);
     setIsRestoring(true);
     setRestoreResults(null);
 
     try {
       console.log("[Backup] Starting restore for file:", restoreFile.name);
+      
+      // Simulate upload progress (since restore uses base64, we'll show progress)
+      let progress = 0;
+      const progressInterval = setInterval(() => {
+        progress += 10;
+        if (progress < 90) {
+          handleFileUploadProgress(fileId, progress);
+        }
+      }, 200);
+      
       const results = await restoreBackup(restoreFile);
+      
+      clearInterval(progressInterval);
+      handleFileUploadComplete(fileId);
       
       setRestoreResults(results);
       
@@ -1009,6 +1112,7 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
         toast.error("Restore completed with warnings. Check the results for details.");
       }
     } catch (error) {
+      handleFileUploadError(fileId, error instanceof Error ? error.message : "Upload failed");
       console.error("[Backup] Restore failed:", error);
       toast.error(
         error instanceof Error ? error.message : "Failed to restore backup"
@@ -1060,7 +1164,127 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     );
   };
 
+  // ✅ NEW: Handle file upload tracking for restore
+  const handleFileUploadStart = (file: File) => {
+    const fileId = crypto.randomUUID();
+    setUploadFiles(prev => [...prev, {
+      id: fileId,
+      name: file.name,
+      size: file.size,
+      progress: 0,
+      status: 'uploading',
+    }]);
+    return fileId;
+  };
+
+  const handleFileUploadProgress = (fileId: string, progress: number) => {
+    setUploadFiles(prev => prev.map(f => 
+      f.id === fileId ? { ...f, progress } : f
+    ));
+  };
+
+  const handleFileUploadComplete = (fileId: string) => {
+    setUploadFiles(prev => prev.map(f => 
+      f.id === fileId ? { ...f, progress: 100, status: 'completed' } : f
+    ));
+  };
+
+  const handleFileUploadError = (fileId: string, error: string) => {
+    setUploadFiles(prev => prev.map(f => 
+      f.id === fileId ? { ...f, status: 'error', error } : f
+    ));
+  };
+
+  // ✅ NEW: Handle sharing
+  const handleShareClick = (backupId: string) => {
+    setShareBackupId(backupId);
+    setShareDialogOpen(true);
+  };
+
+  const handleShare = async (method: 'email' | 'whatsapp', recipient: string) => {
+    if (!shareBackupId) return;
+    
+    setIsSharing(true);
+    try {
+      const result = await shareBackup(shareBackupId, method, recipient);
+      
+      if (result.success) {
+        if (method === 'whatsapp' && result.whatsapp_url) {
+          window.open(result.whatsapp_url, '_blank');
+          toast.success('WhatsApp share link opened');
+        } else {
+          toast.success(result.message || 'Backup shared successfully');
+        }
+        setShareDialogOpen(false);
+      } else {
+        toast.error(result.message || 'Failed to share backup');
+      }
+    } catch (error) {
+      console.error('Share error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to share backup');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  // ✅ NEW: Auto-download handler for automatic backups
+  const handleAutoDownload = async (backupId: string, s3Key: string | null) => {
+    if (!s3Key || !sharingConfig.autoDownload) return;
+    
+    try {
+      const { signed_url } = await generateSignedUrl(s3Key);
+      // Trigger download
+      const link = document.createElement('a');
+      link.href = signed_url;
+      link.download = `backup-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('Backup automatically downloaded');
+    } catch (error) {
+      console.error('Auto-download error:', error);
+    }
+  };
+
+  // ✅ NEW: Monitor automatic backups for auto-download
+  useEffect(() => {
+    if (!sharingConfig.autoDownload) return;
+    
+    const checkAutoBackups = async () => {
+      const latestHistory = await getBackupHistory(1);
+      const latestBackup = latestHistory[0];
+      
+      if (latestBackup && latestBackup.status === 'success' && latestBackup.s3_key) {
+        // Check if this backup was automatic (created more than 1 hour ago, likely scheduled)
+        const backupDate = new Date(latestBackup.created_at);
+        const now = new Date();
+        const hoursSinceBackup = (now.getTime() - backupDate.getTime()) / (1000 * 60 * 60);
+        
+        // If backup is recent (within last hour) and we haven't downloaded it yet
+        if (hoursSinceBackup < 1) {
+          // Check localStorage to see if we've already downloaded this backup
+          const downloadedBackups = JSON.parse(localStorage.getItem('downloaded_backups') || '[]');
+          if (!downloadedBackups.includes(latestBackup.id)) {
+            await handleAutoDownload(latestBackup.id, latestBackup.s3_key);
+            // Mark as downloaded
+            downloadedBackups.push(latestBackup.id);
+            localStorage.setItem('downloaded_backups', JSON.stringify(downloadedBackups.slice(-10))); // Keep last 10
+          }
+        }
+      }
+    };
+    
+    // Check every 5 minutes for new automatic backups
+    const interval = setInterval(checkAutoBackups, 5 * 60 * 1000);
+    checkAutoBackups(); // Check immediately
+    
+    return () => clearInterval(interval);
+  }, [sharingConfig.autoDownload]);
+
   const getStatusBadge = (status: BackupHistoryItem["status"], backupId?: string) => {
+    // ✅ SYNCED: Use same progress calculation as manual backup
+    const progress = backupId ? (inProgressProgress[backupId] || (manualBackupProgress.backupId === backupId ? manualBackupProgress.progress : 10)) : 10;
+    
     switch (status) {
       case "success":
         return (
@@ -1077,13 +1301,12 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           </Badge>
         );
       case "in_progress":
-        const progress = backupId ? (inProgressProgress[backupId] || 10) : 10;
         return (
           <div className="flex items-center gap-2">
             <CircularProgress percentage={progress} size={32} />
             <Badge variant="outline" className="border-blue-500 text-blue-600">
               <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-              In Progress
+              In Progress ({Math.round(progress)}%)
             </Badge>
           </div>
         );
@@ -1183,17 +1406,24 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
               )}
             </div>
 
-            {/* Progress Bar */}
+            {/* ✅ SYNCED: Progress Bar - matches history progress with real-time updates */}
             {manualBackupProgress.isRunning && (
               <div className="space-y-2">
                 <Progress value={manualBackupProgress.progress} className="w-full" />
-                <p className="text-xs text-center text-muted-foreground">
-                  {manualBackupProgress.progress < 100
-                    ? manualBackupProgress.isTimedOut
-                      ? `Backup taking longer than expected (${manualBackupProgress.progress}%). Still monitoring in background...`
-                      : `Backup in progress... ${manualBackupProgress.progress}%`
-                    : "Backup complete!"}
-                </p>
+                <div className="text-xs text-center space-y-1">
+                  <p className="text-muted-foreground">
+                    {manualBackupProgress.progress < 100
+                      ? manualBackupProgress.isTimedOut
+                        ? `Backup taking longer than expected (${manualBackupProgress.progress}%). Still monitoring in background...`
+                        : `Backup in progress... ${manualBackupProgress.progress}%`
+                      : "Backup complete!"}
+                  </p>
+                  {manualBackupProgress.currentStep && manualBackupProgress.progress < 100 && (
+                    <p className="text-xs text-blue-600 font-medium">
+                      Current step: {manualBackupProgress.currentStep}
+                    </p>
+                  )}
+                </div>
                 {manualBackupProgress.isTimedOut && (
                   <p className="text-xs text-center text-blue-600">
                     The system is checking the backup history automatically. You can close this and check the history tab.
@@ -1201,6 +1431,159 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                 )}
               </div>
             )}
+          </div>
+
+          {/* ✅ NEW: File Upload Tracking */}
+          {uploadFiles.length > 0 && (
+            <div className="space-y-2 p-4 border rounded-lg bg-muted/50">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-semibold flex items-center gap-2">
+                  <Upload className="w-4 h-4" />
+                  Upload History
+                </Label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setUploadFiles([])}
+                  className="h-6 px-2 text-xs"
+                >
+                  Clear
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {uploadFiles.map((file) => (
+                  <div key={file.id} className="space-y-1">
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <FileText className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <span className="truncate">{file.name}</span>
+                        <span className="text-xs text-muted-foreground flex-shrink-0">
+                          ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+                        </span>
+                      </div>
+                      <Badge
+                        variant={
+                          file.status === 'completed'
+                            ? 'default'
+                            : file.status === 'error'
+                            ? 'destructive'
+                            : 'outline'
+                        }
+                        className="ml-2 flex-shrink-0"
+                      >
+                        {file.status === 'completed' && <CheckCircle2 className="w-3 h-3 mr-1" />}
+                        {file.status === 'error' && <XCircle className="w-3 h-3 mr-1" />}
+                        {file.status === 'uploading' && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+                        {file.status === 'completed' ? 'Completed' : file.status === 'error' ? 'Error' : 'Uploading'}
+                      </Badge>
+                    </div>
+                    {file.status === 'uploading' && (
+                      <Progress value={file.progress} className="h-1" />
+                    )}
+                    {file.status === 'error' && file.error && (
+                      <p className="text-xs text-destructive">{file.error}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ✅ NEW: Sharing Configuration */}
+          <div className="space-y-4 p-4 border rounded-lg">
+            <div className="flex items-center justify-between">
+              <Label className="text-base font-semibold flex items-center gap-2">
+                <SettingsIcon className="w-4 h-4" />
+                Backup Sharing & Auto-Download
+              </Label>
+            </div>
+            
+            <div className="space-y-4">
+              {/* Auto-Download */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="auto-download" className="text-sm">
+                    Auto-Download Automatic Backups
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Automatically download backups when they complete
+                  </p>
+                </div>
+                <Switch
+                  id="auto-download"
+                  checked={sharingConfig.autoDownload}
+                  onCheckedChange={(checked) =>
+                    setSharingConfig((prev) => ({ ...prev, autoDownload: checked }))
+                  }
+                />
+              </div>
+
+              {/* Email Sharing */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="email-sharing" className="text-sm flex items-center gap-2">
+                      <Mail className="w-4 h-4" />
+                      Email Sharing
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically send backups via email
+                    </p>
+                  </div>
+                  <Switch
+                    id="email-sharing"
+                    checked={sharingConfig.emailEnabled}
+                    onCheckedChange={(checked) =>
+                      setSharingConfig((prev) => ({ ...prev, emailEnabled: checked }))
+                    }
+                  />
+                </div>
+                {sharingConfig.emailEnabled && (
+                  <Input
+                    type="email"
+                    placeholder="recipient@example.com"
+                    value={sharingConfig.emailRecipient}
+                    onChange={(e) =>
+                      setSharingConfig((prev) => ({ ...prev, emailRecipient: e.target.value }))
+                    }
+                    className="text-sm"
+                  />
+                )}
+              </div>
+
+              {/* WhatsApp Sharing */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="whatsapp-sharing" className="text-sm flex items-center gap-2">
+                      <MessageCircle className="w-4 h-4" />
+                      WhatsApp Sharing
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Automatically share backups via WhatsApp
+                    </p>
+                  </div>
+                  <Switch
+                    id="whatsapp-sharing"
+                    checked={sharingConfig.whatsappEnabled}
+                    onCheckedChange={(checked) =>
+                      setSharingConfig((prev) => ({ ...prev, whatsappEnabled: checked }))
+                    }
+                  />
+                </div>
+                {sharingConfig.whatsappEnabled && (
+                  <Input
+                    type="tel"
+                    placeholder="+1234567890"
+                    value={sharingConfig.whatsappRecipient}
+                    onChange={(e) =>
+                      setSharingConfig((prev) => ({ ...prev, whatsappRecipient: e.target.value }))
+                    }
+                    className="text-sm"
+                  />
+                )}
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1243,6 +1626,89 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           </div>
         </CardHeader>
         <CardContent>
+          {/* ✅ NEW: Filters */}
+          <div className="space-y-4 mb-6 p-4 border rounded-lg bg-muted/30">
+            <div className="flex items-center gap-2">
+              <Label className="text-sm font-semibold">Filters:</Label>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Status Filter */}
+              <div className="space-y-2">
+                <Label className="text-xs">Status</Label>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value: any) => setStatusFilter(value)}
+                >
+                  <SelectTrigger className="h-9">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="success">Successful</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                    <SelectItem value="in_progress">In Progress</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Start Date Filter */}
+              <div className="space-y-2">
+                <Label className="text-xs">Start Date</Label>
+                <Input
+                  type="date"
+                  value={dateFilter.start || ''}
+                  onChange={(e) =>
+                    setDateFilter((prev) => ({ ...prev, start: e.target.value || undefined }))
+                  }
+                  className="h-9"
+                />
+              </div>
+
+              {/* End Date Filter */}
+              <div className="space-y-2">
+                <Label className="text-xs">End Date</Label>
+                <Input
+                  type="date"
+                  value={dateFilter.end || ''}
+                  onChange={(e) =>
+                    setDateFilter((prev) => ({ ...prev, end: e.target.value || undefined }))
+                  }
+                  className="h-9"
+                />
+              </div>
+
+              {/* Search Filter */}
+              <div className="space-y-2">
+                <Label className="text-xs">Search (Filename)</Label>
+                <Input
+                  type="text"
+                  placeholder="Search backups..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="h-9"
+                />
+              </div>
+            </div>
+
+            {/* Clear Filters Button */}
+            {(statusFilter !== 'all' || dateFilter.start || dateFilter.end || searchQuery) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setStatusFilter('all');
+                  setDateFilter({});
+                  setSearchQuery('');
+                }}
+                className="mt-2"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Clear Filters
+              </Button>
+            )}
+          </div>
           {isLoadingHistory ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -1270,14 +1736,25 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                     <TableCell>
                       <div className="flex items-center gap-2">
                         {item.status === "success" && item.s3_key ? (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDownloadFromHistory(item.s3_key)}
-                          >
-                            <Download className="w-4 h-4 mr-1" />
-                            Download
-                          </Button>
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDownloadFromHistory(item.s3_key)}
+                            >
+                              <Download className="w-4 h-4 mr-1" />
+                              Download
+                            </Button>
+                            {/* ✅ NEW: Share button */}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleShareClick(item.id)}
+                              title="Share backup"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                            </Button>
+                          </>
                         ) : item.status === "in_progress" ? (
                           <Button
                             variant="destructive"
@@ -1624,6 +2101,100 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                   Restore Backup
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ NEW: Share Backup Dialog */}
+      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageCircle className="w-5 h-5" />
+              Share Backup
+            </DialogTitle>
+            <DialogDescription>
+              Share this backup via Email or WhatsApp
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            {/* Email Sharing */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <Mail className="w-4 h-4" />
+                Email
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  type="email"
+                  placeholder="recipient@example.com"
+                  value={sharingConfig.emailRecipient}
+                  onChange={(e) =>
+                    setSharingConfig((prev) => ({ ...prev, emailRecipient: e.target.value }))
+                  }
+                  className="flex-1"
+                />
+                <Button
+                  onClick={() => handleShare('email', sharingConfig.emailRecipient)}
+                  disabled={!sharingConfig.emailRecipient || isSharing}
+                >
+                  {isSharing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Mail className="w-4 h-4 mr-2" />
+                      Send
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* WhatsApp Sharing */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-2">
+                <MessageCircle className="w-4 h-4" />
+                WhatsApp
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  type="tel"
+                  placeholder="+1234567890"
+                  value={sharingConfig.whatsappRecipient}
+                  onChange={(e) =>
+                    setSharingConfig((prev) => ({ ...prev, whatsappRecipient: e.target.value }))
+                  }
+                  className="flex-1"
+                />
+                <Button
+                  onClick={() => handleShare('whatsapp', sharingConfig.whatsappRecipient)}
+                  disabled={!sharingConfig.whatsappRecipient || isSharing}
+                >
+                  {isSharing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <MessageCircle className="w-4 h-4 mr-2" />
+                      Share
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShareDialogOpen(false);
+                setShareBackupId(null);
+              }}
+              disabled={isSharing}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

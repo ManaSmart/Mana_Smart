@@ -131,20 +131,72 @@ serve(async (req: Request) => {
   }
 
   try {
-
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    const { data, error } = await supabase
+    // ✅ NEW: Get filter parameters
+    const statusFilter = body.status || url.searchParams.get("status");
+    const startDate = body.start_date || url.searchParams.get("start_date");
+    const endDate = body.end_date || url.searchParams.get("end_date");
+    const searchQuery = body.search || url.searchParams.get("search"); // For filename search
+
+    // Build query - ✅ FIXED: Get all columns including workflow_run_id
+    let query = supabase
       .from("backup_history")
-      .select("id, s3_key, created_at, status, size_bytes, error_text, dispatch_id")
-      .order("created_at", { ascending: false })
-      .limit(limit);
+      .select("id, s3_key, created_at, status, size_bytes, error_text, dispatch_id, workflow_run_id")
+      .order("created_at", { ascending: false });
+
+    // ✅ NEW: Apply status filter
+    if (statusFilter && statusFilter !== "all") {
+      query = query.eq("status", statusFilter);
+    }
+
+    // ✅ NEW: Apply date filters
+    if (startDate) {
+      query = query.gte("created_at", startDate);
+    }
+    if (endDate) {
+      // Add 23:59:59 to end date to include the full day
+      const endDateTime = new Date(endDate);
+      endDateTime.setHours(23, 59, 59, 999);
+      query = query.lte("created_at", endDateTime.toISOString());
+    }
+
+    // Apply limit (increase if filtering to show more results)
+    const queryLimit = statusFilter || startDate || endDate ? Math.min(limit * 3, 100) : limit;
+    query = query.limit(queryLimit);
+
+    const { data, error } = await query;
 
     if (error) {
       throw error;
     }
 
-    return new Response(JSON.stringify(data || []), {
+    let results = data || [];
+
+    // ✅ NEW: Apply search filter (filename search) on client side for flexibility
+    if (searchQuery && searchQuery.trim()) {
+      const searchLower = searchQuery.toLowerCase();
+      results = results.filter((item) => {
+        // Search in S3 key (filename)
+        if (item.s3_key && item.s3_key.toLowerCase().includes(searchLower)) {
+          return true;
+        }
+        // Search in error text
+        if (item.error_text && item.error_text.toLowerCase().includes(searchLower)) {
+          return true;
+        }
+        // Search in dispatch_id
+        if (item.dispatch_id && item.dispatch_id.toLowerCase().includes(searchLower)) {
+          return true;
+        }
+        return false;
+      });
+    }
+
+    // ✅ NEW: Limit results after filtering
+    results = results.slice(0, limit);
+
+    return new Response(JSON.stringify(results), {
       status: 200,
       headers: {
         "Content-Type": "application/json",

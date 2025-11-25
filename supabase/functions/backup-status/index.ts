@@ -212,22 +212,96 @@ serve(async (req: Request) => {
       );
     }
 
-    // If still in progress, check GitHub Actions status
+    // If still in progress, check GitHub Actions status and get detailed progress
     if (backupEntry.workflow_run_id) {
       const workflowUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${backupEntry.workflow_run_id}`;
+      const jobsUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${backupEntry.workflow_run_id}/jobs`;
 
       try {
-        const workflowResponse = await fetch(workflowUrl, {
-          headers: {
-            "Authorization": `token ${GITHUB_TOKEN}`,
-            "Accept": "application/vnd.github.v3+json",
-          },
-        });
+        const [workflowResponse, jobsResponse] = await Promise.all([
+          fetch(workflowUrl, {
+            headers: {
+              "Authorization": `token ${GITHUB_TOKEN}`,
+              "Accept": "application/vnd.github.v3+json",
+            },
+          }),
+          fetch(jobsUrl, {
+            headers: {
+              "Authorization": `token ${GITHUB_TOKEN}`,
+              "Accept": "application/vnd.github.v3+json",
+            },
+          }),
+        ]);
 
         if (workflowResponse.ok) {
           const workflowData = await workflowResponse.json();
           const workflowStatus = workflowData.status; // queued, in_progress, completed
-          // Note: workflowConclusion (success, failure, cancelled) is checked via backup_history status
+          
+          // ✅ FIXED: Calculate progress based on actual workflow steps
+          let progressPercent = 10; // Start at 10%
+          let currentStep = "Initializing";
+          
+          if (jobsResponse.ok) {
+            const jobsData = await jobsResponse.json();
+            const jobs = jobsData.jobs || [];
+            
+            // ✅ FIXED: Define workflow steps matching actual step names in backup.yml
+            const workflowSteps = [
+              { keywords: ["checkout"], progress: 5, name: "Checkout code" },
+              { keywords: ["setup", "node"], progress: 10, name: "Setup Node.js" },
+              { keywords: ["install", "dependencies"], progress: 15, name: "Install dependencies" },
+              { keywords: ["export", "database"], progress: 40, name: "Export database" },
+              { keywords: ["export", "auth"], progress: 50, name: "Export auth users" },
+              { keywords: ["download", "supabase", "storage"], progress: 60, name: "Download Supabase Storage" },
+              { keywords: ["download", "s3", "storage"], progress: 70, name: "Download S3 Storage" },
+              { keywords: ["create", "backup", "archive"], progress: 80, name: "Create backup archive" },
+              { keywords: ["upload", "s3"], progress: 90, name: "Upload to S3" },
+              { keywords: ["update", "backup_history"], progress: 95, name: "Update backup history" },
+            ];
+            
+            // Find completed and in-progress steps
+            let highestCompletedProgress = 10;
+            let inProgressStep = null;
+            
+            for (const job of jobs) {
+              const jobName = (job.name || "").toLowerCase();
+              
+              if (job.status === "completed") {
+                // Find matching step
+                for (const step of workflowSteps) {
+                  const matches = step.keywords.every(keyword => jobName.includes(keyword));
+                  if (matches) {
+                    highestCompletedProgress = Math.max(highestCompletedProgress, step.progress);
+                    currentStep = step.name;
+                    break;
+                  }
+                }
+              } else if (job.status === "in_progress" || job.status === "queued") {
+                // Find matching in-progress step
+                for (const step of workflowSteps) {
+                  const matches = step.keywords.every(keyword => jobName.includes(keyword));
+                  if (matches) {
+                    // If step is in progress, show progress between current and next step
+                    const stepIndex = workflowSteps.findIndex(s => s.name === step.name);
+                    const nextStep = workflowSteps[stepIndex + 1];
+                    if (nextStep) {
+                      progressPercent = step.progress + (nextStep.progress - step.progress) * 0.6; // 60% through current step
+                    } else {
+                      progressPercent = step.progress;
+                    }
+                    currentStep = step.name + " (in progress)";
+                    inProgressStep = step;
+                    break;
+                  }
+                }
+              }
+            }
+            
+            // If no in-progress step found, use highest completed progress
+            if (!inProgressStep) {
+              progressPercent = highestCompletedProgress;
+            }
+          }
 
           if (workflowStatus === "completed") {
             // Workflow finished - re-check backup_history as it should be updated now
@@ -312,6 +386,8 @@ serve(async (req: Request) => {
             JSON.stringify({
               status: workflowStatus === "in_progress" || workflowStatus === "queued" ? "in_progress" : "pending",
               message: `Workflow status: ${workflowStatus}`,
+              progress: Math.min(Math.round(progressPercent), 95), // Cap at 95% until complete
+              current_step: currentStep,
               backup_id: backupEntry.id,
             }),
             {

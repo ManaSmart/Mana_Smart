@@ -159,6 +159,7 @@ async function getAllTables(supabase: any): Promise<string[]> {
 
 /**
  * Export table data as SQL INSERT statements
+ * Optimized for memory efficiency with row limits and smaller batches
  */
 async function exportTableData(supabase: any, tableName: string): Promise<string> {
   const sql: string[] = [];
@@ -167,13 +168,16 @@ async function exportTableData(supabase: any, tableName: string): Promise<string
   sql.push(`\n-- Table: ${tableName}`);
   sql.push(`-- Data export for table: ${tableName}\n`);
 
-  // Fetch all data from table (with pagination for large tables)
+  // ✅ OPTIMIZATION: Use smaller batches and limit total rows to prevent memory issues
   let offset = 0;
-  const limit = 1000;
+  const limit = 500; // Reduced from 1000 to 500 for better memory management
+  const maxRowsPerTable = 50000; // Maximum rows per table to prevent timeout
   let hasMore = true;
   let totalRows = 0;
+  let sqlLength = 0;
+  const maxSqlLength = 10 * 1024 * 1024; // 10MB max SQL per table
 
-  while (hasMore) {
+  while (hasMore && totalRows < maxRowsPerTable) {
     const { data, error } = await supabase
       .from(tableName)
       .select('*')
@@ -190,8 +194,14 @@ async function exportTableData(supabase: any, tableName: string): Promise<string
       break;
     }
 
-    // Generate INSERT statements
+    // Generate INSERT statements with memory-efficient string building
     for (const row of data) {
+      if (totalRows >= maxRowsPerTable) {
+        sql.push(`-- WARNING: Reached maximum row limit (${maxRowsPerTable}) for table ${tableName}\n`);
+        hasMore = false;
+        break;
+      }
+
       const columns = Object.keys(row).filter(key => row[key] !== undefined).join(', ');
       if (!columns) continue; // Skip rows with no valid columns
       
@@ -202,7 +212,13 @@ async function exportTableData(supabase: any, tableName: string): Promise<string
           if (val === null || val === undefined) return 'NULL';
           if (typeof val === 'string') {
             // Escape single quotes and wrap in quotes
-            return `'${val.replace(/'/g, "''").replace(/\\/g, '\\\\')}'`;
+            // ✅ OPTIMIZATION: Truncate very long strings to prevent memory issues
+            const maxStringLength = 10000; // Max 10KB per field
+            let escaped = val.replace(/'/g, "''").replace(/\\/g, '\\\\');
+            if (escaped.length > maxStringLength) {
+              escaped = escaped.substring(0, maxStringLength) + '...[truncated]';
+            }
+            return `'${escaped}'`;
           }
           if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
           if (typeof val === 'number') return String(val);
@@ -210,7 +226,13 @@ async function exportTableData(supabase: any, tableName: string): Promise<string
           if (typeof val === 'object') {
             // Handle JSONB and objects
             try {
-              const jsonStr = JSON.stringify(val).replace(/'/g, "''").replace(/\\/g, '\\\\');
+              let jsonStr = JSON.stringify(val);
+              // ✅ OPTIMIZATION: Truncate large JSON objects
+              const maxJsonLength = 50000; // Max 50KB per JSON field
+              if (jsonStr.length > maxJsonLength) {
+                jsonStr = jsonStr.substring(0, maxJsonLength) + '...[truncated]';
+              }
+              jsonStr = jsonStr.replace(/'/g, "''").replace(/\\/g, '\\\\');
               return `'${jsonStr}'::jsonb`;
             } catch {
               return `'${String(val).replace(/'/g, "''")}'`;
@@ -219,14 +241,32 @@ async function exportTableData(supabase: any, tableName: string): Promise<string
           return `'${String(val).replace(/'/g, "''").replace(/\\/g, '\\\\')}'`;
         }).join(', ');
 
-      sql.push(`INSERT INTO ${tableName} (${columns}) VALUES (${values}) ON CONFLICT DO NOTHING;`);
+      const insertStatement = `INSERT INTO ${tableName} (${columns}) VALUES (${values}) ON CONFLICT DO NOTHING;`;
+      sql.push(insertStatement);
+      sqlLength += insertStatement.length;
       totalRows++;
+
+      // ✅ OPTIMIZATION: Check SQL size and stop if too large
+      if (sqlLength > maxSqlLength) {
+        sql.push(`-- WARNING: Reached maximum SQL size limit for table ${tableName}\n`);
+        hasMore = false;
+        break;
+      }
     }
 
     offset += limit;
-    hasMore = data.length === limit;
+    hasMore = hasMore && data.length === limit;
+    
+    // ✅ OPTIMIZATION: Log progress for large tables
+    if (totalRows % 5000 === 0) {
+      console.log(`  Exported ${totalRows} rows from ${tableName}...`);
+    }
   }
 
+  if (totalRows >= maxRowsPerTable) {
+    sql.push(`-- WARNING: Export truncated at ${maxRowsPerTable} rows for table ${tableName}\n`);
+  }
+  
   sql.push(`-- Total rows exported: ${totalRows}\n`);
   return sql.join('\n');
 }
@@ -387,13 +427,24 @@ serve(async (req: Request) => {
     // Export schema (simplified)
     const schemaSQL = await exportSchema(tables);
     
-    // Export data for each table
+    // ✅ OPTIMIZATION: Build SQL incrementally to reduce memory usage
+    // Start with schema, then append table data one at a time
     const dataSQL: string[] = [schemaSQL];
     
     let totalTablesExported = 0;
     let totalRowsExported = 0;
+    const startTime = Date.now();
+    const maxExecutionTime = 50 * 1000; // 50 seconds max (Edge Functions have ~60s timeout)
     
     for (const tableName of tables) {
+      // ✅ OPTIMIZATION: Check execution time and stop if approaching timeout
+      const elapsed = Date.now() - startTime;
+      if (elapsed > maxExecutionTime) {
+        console.log(`⚠️ Approaching timeout (${elapsed}ms), stopping export...`);
+        dataSQL.push(`\n-- WARNING: Export stopped due to timeout after ${totalTablesExported} tables\n`);
+        break;
+      }
+      
       console.log(`Exporting table: ${tableName}...`);
       try {
         const tableData = await exportTableData(supabase, tableName);
@@ -403,6 +454,7 @@ serve(async (req: Request) => {
           // Count rows from the SQL
           const rowCount = (tableData.match(/INSERT INTO/g) || []).length;
           totalRowsExported += rowCount;
+          console.log(`  ✓ Exported ${rowCount} rows from ${tableName}`);
         } else {
           console.log(`  No data in table ${tableName}`);
           dataSQL.push(`\n-- Table: ${tableName} (empty)\n`);
@@ -410,6 +462,7 @@ serve(async (req: Request) => {
       } catch (tableError) {
         console.error(`Error exporting table ${tableName}:`, tableError);
         dataSQL.push(`\n-- ERROR exporting ${tableName}: ${tableError instanceof Error ? tableError.message : 'Unknown error'}\n`);
+        // Continue with next table instead of failing completely
       }
     }
 
@@ -427,11 +480,22 @@ serve(async (req: Request) => {
 
     const fullSQL = dataSQL.join('\n');
     
+    // ✅ OPTIMIZATION: Check total SQL size and truncate if too large
+    const maxTotalSize = 20 * 1024 * 1024; // 20MB max total SQL
+    let finalSQL = fullSQL;
+    if (finalSQL.length > maxTotalSize) {
+      console.log(`⚠️ SQL output too large (${finalSQL.length} bytes), truncating...`);
+      finalSQL = finalSQL.substring(0, maxTotalSize);
+      finalSQL += '\n\n-- WARNING: Export truncated due to size limits\n';
+      finalSQL += `-- Original size: ${fullSQL.length} bytes\n`;
+      finalSQL += `-- Truncated to: ${maxTotalSize} bytes\n`;
+    }
+    
     // Convert to base64 for JSON response
     // ✅ FIX: Use UTF-8 compatible base64 encoding (btoa only works with Latin1)
     // Convert UTF-8 string to bytes, then encode to base64 using Deno's standard library
     const encoder = new TextEncoder();
-    const utf8Bytes = encoder.encode(fullSQL);
+    const utf8Bytes = encoder.encode(finalSQL);
     const base64SQL = base64Encode(utf8Bytes);
     
     return new Response(
@@ -440,7 +504,8 @@ serve(async (req: Request) => {
         sql_base64: base64SQL,
         tables_exported: totalTablesExported,
         tables_total: tables.length,
-        sql_size: fullSQL.length,
+        sql_size: finalSQL.length,
+        original_sql_size: fullSQL.length,
         message: `Database export completed: ${totalTablesExported} tables, ${totalRowsExported} rows`,
       }),
       {

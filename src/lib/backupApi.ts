@@ -134,12 +134,16 @@ export async function getBackupStatus(
   signed_url?: string;
   error?: string;
   backup_id?: string;
+  progress?: number; // ✅ NEW: Real-time progress percentage
+  current_step?: string; // ✅ NEW: Current workflow step
 }> {
   return await callEdgeFunction<{
     status: 'pending' | 'in_progress' | 'success' | 'failed';
     signed_url?: string;
     error?: string;
     backup_id?: string;
+    progress?: number;
+    current_step?: string;
   }>('backup-status', {
     body: { dispatch_id: dispatchId },
   });
@@ -171,8 +175,18 @@ export async function updateBackupEnabled(enabled: boolean): Promise<void> {
 
 /**
  * Get backup history (last N entries)
+ * @param limit Maximum number of entries to return
+ * @param filters Optional filters (status, start_date, end_date, search)
  */
-export async function getBackupHistory(limit: number = 5): Promise<
+export async function getBackupHistory(
+  limit: number = 5,
+  filters?: {
+    status?: 'success' | 'failed' | 'cancelled' | 'in_progress' | 'all';
+    start_date?: string; // ISO date string
+    end_date?: string; // ISO date string
+    search?: string; // Search query for filename
+  }
+): Promise<
   Array<{
     id: string;
     s3_key: string | null;
@@ -194,7 +208,10 @@ export async function getBackupHistory(limit: number = 5): Promise<
       dispatch_id?: string | null;
     }>
   >('backup-history', {
-    body: { limit },
+    body: { 
+      limit,
+      ...(filters || {}),
+    },
   });
 }
 
@@ -307,6 +324,37 @@ export async function restoreBackup(
       backup_file: base64,
       file_name: backupFile.name,
       file_type: backupFile.type,
+    },
+  });
+}
+
+/**
+ * Share a backup via Email or WhatsApp
+ * @param backupId The backup ID to share
+ * @param method Sharing method: 'email' or 'whatsapp'
+ * @param recipient Email address or WhatsApp number
+ * @returns Success status and share URL (for WhatsApp)
+ */
+export async function shareBackup(
+  backupId: string,
+  method: 'email' | 'whatsapp',
+  recipient: string
+): Promise<{
+  success: boolean;
+  message: string;
+  whatsapp_url?: string;
+  note?: string;
+}> {
+  return await callEdgeFunction<{
+    success: boolean;
+    message: string;
+    whatsapp_url?: string;
+    note?: string;
+  }>('share-backup', {
+    body: {
+      backup_id: backupId,
+      method,
+      recipient,
     },
   });
 }
