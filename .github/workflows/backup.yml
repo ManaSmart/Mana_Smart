@@ -361,23 +361,29 @@ jobs:
                   "    console.error('✓ Created backup note file');" \
                   "    process.exit(0);" \
                   "  }" \
-                  "})();" > /tmp/export-db.js
+                  "})();" > ./export-db.js
                 
                 echo "Running Edge Function export script..."
-                echo "DEBUG: Script file location: /tmp/export-db.js"
-                echo "DEBUG: Script file exists: $([ -f /tmp/export-db.js ] && echo 'YES' || echo 'NO')"
-                if [ -f /tmp/export-db.js ]; then
-                  echo "DEBUG: Script file size: $(wc -l < /tmp/export-db.js) lines"
+                echo "DEBUG: Script file location: ./export-db.js"
+                echo "DEBUG: Script file exists: $([ -f ./export-db.js ] && echo 'YES' || echo 'NO')"
+                if [ -f ./export-db.js ]; then
+                  echo "DEBUG: Script file size: $(wc -l < ./export-db.js) lines"
+                  echo "DEBUG: Current directory: $(pwd)"
+                  echo "DEBUG: node_modules exists: $([ -d ./node_modules ] && echo 'YES' || echo 'NO')"
+                  echo "DEBUG: @supabase/supabase-js exists: $([ -d ./node_modules/@supabase/supabase-js ] && echo 'YES' || echo 'NO')"
                 fi
                 
-                # Run the script and show all output in real-time
+                # Run the script from project root so it can find node_modules
                 echo "=== Starting Edge Function Script ==="
                 set +e  # Don't exit on error, we'll check manually
-                node --input-type=commonjs /tmp/export-db.js
+                node --input-type=commonjs ./export-db.js
                 EDGE_FUNC_EXIT=$?
                 set -e  # Re-enable exit on error
                 echo "=== Edge Function Script Finished ==="
                 echo "Script exit code: $EDGE_FUNC_EXIT"
+                
+                # Clean up script file
+                rm -f ./export-db.js
                 
                 # Check if backup file was created
                 sleep 1  # Give file system a moment to sync
