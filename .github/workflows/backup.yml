@@ -327,9 +327,16 @@ jobs:
                   "  }" \
                   "})();" > /tmp/export-db.js
                 
-                node --input-type=commonjs /tmp/export-db.js
+                echo "Running Edge Function export script..."
+                if node --input-type=commonjs /tmp/export-db.js 2>&1; then
+                  EDGE_FUNC_EXIT=$?
+                  echo "Edge Function script completed with exit code: $EDGE_FUNC_EXIT"
+                else
+                  EDGE_FUNC_EXIT=$?
+                  echo "Edge Function script failed with exit code: $EDGE_FUNC_EXIT"
+                fi
                 
-                if [ $? -eq 0 ] && [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
+                if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
                   echo "✓ Database backup completed via Edge Function"
                   echo "✓ File size: $(du -h backup/db/backup.sql | cut -f1)"
                   echo "✓ Line count: $(wc -l < backup/db/backup.sql) lines"
@@ -339,8 +346,18 @@ jobs:
                   if [ -f backup/db/backup.sql ]; then
                     echo "⚠️ File exists but is empty or invalid"
                     echo "⚠️ File size: $(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo 'unknown') bytes"
+                    echo "⚠️ First 10 lines of file:"
+                    head -n 10 backup/db/backup.sql || echo "Could not read file"
                   else
                     echo "⚠️ Backup file was not created"
+                    echo "⚠️ Checking if script file exists..."
+                    if [ -f /tmp/export-db.js ]; then
+                      echo "✓ Script file exists"
+                      echo "⚠️ First 20 lines of script:"
+                      head -n 20 /tmp/export-db.js
+                    else
+                      echo "✗ Script file was not created"
+                    fi
                   fi
                   exit 1
                 fi
@@ -520,37 +537,39 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           
-          const supabaseUrl = process.env.SUPABASE_URL;
-          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          
-          // ✅ FIX: Auto-detect buckets if SUPABASE_BUCKETS_TO_BACKUP is not set
-          let buckets = (process.env.SUPABASE_BUCKETS_TO_BACKUP || '')
-            .split(',')
-            .map(b => b.trim())
-            .filter(Boolean);
-          
-          if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ Missing Supabase credentials');
-            process.exit(1);
-          }
-          
-          // ✅ FIX: Validate URL format
-          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
-            console.error('✗ Invalid SUPABASE_URL format');
-            console.error('URL must start with http:// or https://');
-            console.error('Current value preview:', supabaseUrl.substring(0, 50));
-            console.error('Expected format: https://xxxxx.supabase.co');
-            process.exit(1);
-          }
-          
-          const cleanUrl = supabaseUrl.replace(/\/$/, '');
-          const supabase = createClient(cleanUrl, supabaseKey);
-          
-          // ✅ FIX: Auto-detect buckets if not specified
-          if (buckets.length === 0) {
-            console.log('ℹ SUPABASE_BUCKETS_TO_BACKUP not set, auto-detecting buckets...');
+          (async () => {
             try {
-              const { data: allBuckets, error: listError } = await supabase.storage.listBuckets();
+              const supabaseUrl = process.env.SUPABASE_URL;
+              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+              
+              // ✅ FIX: Auto-detect buckets if SUPABASE_BUCKETS_TO_BACKUP is not set
+              let buckets = (process.env.SUPABASE_BUCKETS_TO_BACKUP || '')
+                .split(',')
+                .map(b => b.trim())
+                .filter(Boolean);
+              
+              if (!supabaseUrl || !supabaseKey) {
+                console.error('✗ Missing Supabase credentials');
+                process.exit(1);
+              }
+              
+              // ✅ FIX: Validate URL format
+              if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+                console.error('✗ Invalid SUPABASE_URL format');
+                console.error('URL must start with http:// or https://');
+                console.error('Current value preview:', supabaseUrl.substring(0, 50));
+                console.error('Expected format: https://xxxxx.supabase.co');
+                process.exit(1);
+              }
+              
+              const cleanUrl = supabaseUrl.replace(/\/$/, '');
+              const supabase = createClient(cleanUrl, supabaseKey);
+              
+              // ✅ FIX: Auto-detect buckets if not specified
+              if (buckets.length === 0) {
+                console.log('ℹ SUPABASE_BUCKETS_TO_BACKUP not set, auto-detecting buckets...');
+                try {
+                  const { data: allBuckets, error: listError } = await supabase.storage.listBuckets();
               if (listError) {
                 console.error('✗ Error listing buckets:', listError.message);
                 throw listError;
@@ -667,8 +686,10 @@ jobs:
               // Check if any buckets had errors
               const bucketsWithErrors = results.filter(r => r.error);
               if (bucketsWithErrors.length > 0) {
-                console.error('  ✗ Errors in buckets:', bucketsWithErrors.map(r => r.bucket).join(', '));
-                throw new Error(`Failed to backup ${bucketsWithErrors.length} bucket(s): ${bucketsWithErrors.map(r => r.bucket + ' (' + r.error + ')').join(', ')}`);
+                const errorBuckets = bucketsWithErrors.map(r => r.bucket).join(', ');
+                const errorDetails = bucketsWithErrors.map(r => r.bucket + ' (' + r.error + ')').join(', ');
+                console.error('  ✗ Errors in buckets:', errorBuckets);
+                throw new Error('Failed to backup ' + bucketsWithErrors.length + ' bucket(s): ' + errorDetails);
               }
               
               // Create a summary file
@@ -699,6 +720,17 @@ jobs:
               );
               throw err; // Fail the workflow
             });
+            } catch (err) {
+              console.error('✗ Failed to download storage files:', err);
+              console.error('✗ Error details:', err.message);
+              fs.writeFileSync(
+                'backup/storage/error_note.txt',
+                'Storage backup failed: ' + err.message + '\\n' +
+                'File metadata is still available in the database backup (file_metadata table).'
+              );
+              process.exit(1);
+            }
+          })();
           "
 
       - name: Download S3 Storage files
@@ -711,183 +743,130 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           
-          const supabaseUrl = process.env.SUPABASE_URL;
-          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
-          const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-          const awsRegion = process.env.AWS_S3_REGION || 'us-east-1';
-          const awsBucket = process.env.AWS_S3_BUCKET;
-          const backupS3Files = process.env.BACKUP_S3_FILES !== 'false'; // Default to true
-          
-          if (!backupS3Files) {
-            console.log('ℹ S3 file backup is disabled (BACKUP_S3_FILES=false)');
-            fs.writeFileSync(
-              'backup/storage/s3/note.txt',
-              'S3 file backup is disabled.\\n' +
-              'Set BACKUP_S3_FILES=true in GitHub Secrets to enable S3 file backup.'
-            );
-            process.exit(0);
-          }
-          
-          if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ Missing Supabase credentials');
-            process.exit(1);
-          }
-          
-          if (!awsAccessKeyId || !awsSecretAccessKey || !awsBucket) {
-            console.log('ℹ AWS S3 credentials not configured');
-            console.log('ℹ S3 files will not be backed up, but file metadata is in database backup');
-            fs.writeFileSync(
-              'backup/storage/s3/note.txt',
-              'AWS S3 credentials not configured in GitHub Secrets.\\n' +
-              'Required secrets:\\n' +
-              '  - AWS_ACCESS_KEY_ID\\n' +
-              '  - AWS_SECRET_ACCESS_KEY\\n' +
-              '  - AWS_S3_BUCKET\\n' +
-              '  - AWS_S3_REGION (optional, defaults to us-east-1)\\n' +
-              '\\n' +
-              'File metadata (paths, names, sizes) is still included in the database backup.'
-            );
-            process.exit(0);
-          }
-          
-          // ✅ FIX: Validate URL format
-          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
-            console.error('✗ Invalid SUPABASE_URL format');
-            process.exit(1);
-          }
-          
-          const cleanUrl = supabaseUrl.replace(/\/$/, '');
-          const supabase = createClient(cleanUrl, supabaseKey);
-          
-          // Initialize S3 client
-          const s3Client = new S3Client({
-            region: awsRegion,
-            credentials: {
-              accessKeyId: awsAccessKeyId,
-              secretAccessKey: awsSecretAccessKey,
-            },
-          });
-          
-          console.log('✓ Fetching S3 file list from file_metadata table...');
-          
-          // Get all files from file_metadata where bucket = 's3' and not deleted
-          let offset = 0;
-          const limit = 1000;
-          let allFiles = [];
-          let hasMore = true;
-          
-          while (hasMore) {
-            const { data: files, error } = await supabase
-              .from('file_metadata')
-              .select('id, path, file_name, mime_type, size, category, owner_id, owner_type, created_at')
-              .eq('bucket', 's3')
-              .is('deleted_at', null)
-              .range(offset, offset + limit - 1)
-              .order('created_at', { ascending: false });
-            
-            if (error) {
-              console.error('✗ Error fetching file metadata:', error.message);
-              throw error;
-            }
-            
-            if (!files || files.length === 0) {
-              hasMore = false;
-              break;
-            }
-            
-            allFiles = allFiles.concat(files);
-            offset += limit;
-            hasMore = files.length === limit;
-          }
-          
-          if (allFiles.length === 0) {
-            console.log('ℹ No S3 files found in file_metadata table');
-            fs.writeFileSync(
-              'backup/storage/s3/note.txt',
-              'No S3 files found in file_metadata table.\\n' +
-              'All files may be stored in Supabase Storage instead of S3.'
-            );
-            process.exit(0);
-          }
-          
-          console.log('✓ Found', allFiles.length, 'S3 files to backup');
-          console.log('  → Starting download from S3 bucket:', awsBucket);
-          
-          let downloaded = 0;
-          let failed = 0;
-          const failedFiles = [];
-          
-          for (const file of allFiles) {
+          (async () => {
             try {
-              const s3Key = file.path; // The path stored in file_metadata is the S3 key
+              const supabaseUrl = process.env.SUPABASE_URL;
+              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+              const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+              const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+              const awsRegion = process.env.AWS_S3_REGION || 'us-east-1';
+              const awsBucket = process.env.AWS_S3_BUCKET;
+              const backupS3Files = process.env.BACKUP_S3_FILES !== 'false';
               
-              // Download file from S3
-              const getObjectCommand = new GetObjectCommand({
-                Bucket: awsBucket,
-                Key: s3Key,
+              if (!backupS3Files) {
+                console.log('ℹ S3 file backup is disabled (BACKUP_S3_FILES=false)');
+                fs.writeFileSync('backup/storage/s3/note.txt', 'S3 file backup is disabled.\\nSet BACKUP_S3_FILES=true in GitHub Secrets to enable S3 file backup.');
+                process.exit(0);
+              }
+              
+              if (!supabaseUrl || !supabaseKey) {
+                console.error('✗ Missing Supabase credentials');
+                process.exit(1);
+              }
+              
+              if (!awsAccessKeyId || !awsSecretAccessKey || !awsBucket) {
+                console.log('ℹ AWS S3 credentials not configured');
+                fs.writeFileSync('backup/storage/s3/note.txt', 'AWS S3 credentials not configured. File metadata is still included in the database backup.');
+                process.exit(0);
+              }
+              
+              if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+                console.error('✗ Invalid SUPABASE_URL format');
+                process.exit(1);
+              }
+              
+              const cleanUrl = supabaseUrl.replace(/\/\$/, '');
+              const supabase = createClient(cleanUrl, supabaseKey);
+              const s3Client = new S3Client({
+                region: awsRegion,
+                credentials: { accessKeyId: awsAccessKeyId, secretAccessKey: awsSecretAccessKey },
               });
               
-              const response = await s3Client.send(getObjectCommand);
+              console.log('✓ Fetching S3 file list from file_metadata table...');
               
-              // Read the file stream
-              const chunks = [];
-              for await (const chunk of response.Body) {
-                chunks.push(chunk);
+              let offset = 0;
+              const limit = 1000;
+              let allFiles = [];
+              let hasMore = true;
+              
+              while (hasMore) {
+                const { data: files, error } = await supabase
+                  .from('file_metadata')
+                  .select('id, path, file_name, mime_type, size, category, owner_id, owner_type, created_at')
+                  .eq('bucket', 's3')
+                  .is('deleted_at', null)
+                  .range(offset, offset + limit - 1)
+                  .order('created_at', { ascending: false });
+                
+                if (error) {
+                  console.error('✗ Error fetching file metadata:', error.message);
+                  throw error;
+                }
+                
+                if (!files || files.length === 0) {
+                  hasMore = false;
+                  break;
+                }
+                
+                allFiles = allFiles.concat(files);
+                offset += limit;
+                hasMore = files.length === limit;
               }
-              const fileBuffer = Buffer.concat(chunks);
               
-              // Save to backup directory, preserving the path structure
-              const backupPath = path.join('backup/storage/s3', s3Key);
-              const backupDir = path.dirname(backupPath);
-              fs.mkdirSync(backupDir, { recursive: true });
-              fs.writeFileSync(backupPath, fileBuffer);
-              
-              downloaded++;
-              
-              if (downloaded % 10 === 0) {
-                console.log('  → Downloaded', downloaded, '/', allFiles.length, 'files...');
+              if (allFiles.length === 0) {
+                console.log('ℹ No S3 files found in file_metadata table');
+                fs.writeFileSync('backup/storage/s3/note.txt', 'No S3 files found in file_metadata table.');
+                process.exit(0);
               }
-            } catch (fileErr) {
-              failed++;
-              failedFiles.push({
-                path: file.path,
-                file_name: file.file_name,
-                error: fileErr.message
-              });
-              console.error('  ✗ Failed to download', file.path, ':', fileErr.message);
+              
+              console.log('✓ Found', allFiles.length, 'S3 files to backup');
+              let downloaded = 0;
+              let failed = 0;
+              const failedFiles = [];
+              
+              for (const file of allFiles) {
+                try {
+                  const getObjectCommand = new GetObjectCommand({ Bucket: awsBucket, Key: file.path });
+                  const response = await s3Client.send(getObjectCommand);
+                  const chunks = [];
+                  for await (const chunk of response.Body) chunks.push(chunk);
+                  const fileBuffer = Buffer.concat(chunks);
+                  const backupPath = path.join('backup/storage/s3', file.path);
+                  fs.mkdirSync(path.dirname(backupPath), { recursive: true });
+                  fs.writeFileSync(backupPath, fileBuffer);
+                  downloaded++;
+                  if (downloaded % 10 === 0) console.log('  → Downloaded', downloaded, '/', allFiles.length, 'files...');
+                } catch (fileErr) {
+                  failed++;
+                  failedFiles.push({ path: file.path, file_name: file.file_name, error: fileErr.message });
+                  console.error('  ✗ Failed to download', file.path, ':', fileErr.message);
+                }
+              }
+              
+              console.log('✓ S3 backup completed');
+              console.log('  - Files downloaded:', downloaded, '/', allFiles.length);
+              if (failed > 0) console.log('  - Failed downloads:', failed);
+              
+              fs.writeFileSync('backup/storage/s3/backup_summary.json', JSON.stringify({
+                exported_at: new Date().toISOString(),
+                total_files: allFiles.length,
+                downloaded: downloaded,
+                failed: failed,
+                s3_bucket: awsBucket,
+                s3_region: awsRegion,
+                failed_files: failedFiles
+              }, null, 2));
+              
+              if (failed > 0) {
+                fs.writeFileSync('backup/storage/s3/failed_files.json', JSON.stringify(failedFiles, null, 2));
+                console.log('  ⚠ Created failed_files.json with', failed, 'failed downloads');
+              }
+            } catch (err) {
+              console.error('✗ S3 backup failed:', err.message);
+              fs.writeFileSync('backup/storage/s3/error_note.txt', 'S3 backup failed: ' + err.message);
+              process.exit(0);
             }
-          }
-          
-          console.log('✓ S3 backup completed');
-          console.log('  - Files downloaded:', downloaded, '/', allFiles.length);
-          if (failed > 0) {
-            console.log('  - Failed downloads:', failed);
-          }
-          
-          // Create summary file
-          fs.writeFileSync(
-            'backup/storage/s3/backup_summary.json',
-            JSON.stringify({
-              exported_at: new Date().toISOString(),
-              total_files: allFiles.length,
-              downloaded: downloaded,
-              failed: failed,
-              s3_bucket: awsBucket,
-              s3_region: awsRegion,
-              failed_files: failedFiles,
-              note: 'S3 files backed up from file_metadata table. File metadata is also in database backup.'
-            }, null, 2)
-          );
-          
-          if (failed > 0) {
-            // Create failed files list
-            fs.writeFileSync(
-              'backup/storage/s3/failed_files.json',
-              JSON.stringify(failedFiles, null, 2)
-            );
-            console.log('  ⚠ Created failed_files.json with', failed, 'failed downloads');
-          }
+          })();
           "
 
       - name: Create backup archive
