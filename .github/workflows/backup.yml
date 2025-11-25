@@ -22,6 +22,7 @@ jobs:
     
     # ✅ FIX: Define all environment variables at job level
     # This makes them available to ALL steps
+    # Note: Using VITE_ prefixed secrets to match current GitHub Secrets configuration
     env:
       SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
@@ -55,16 +56,16 @@ jobs:
           
           # Check if secrets are actually set
           if [ -z "$SUPABASE_URL" ]; then
-            echo "❌ ERROR: SUPABASE_URL secret is not set in GitHub Secrets"
+            echo "❌ ERROR: VITE_SUPABASE_URL secret is not set in GitHub Secrets"
             echo "Please go to: Repository → Settings → Secrets and variables → Actions"
-            echo "And add SUPABASE_URL secret"
+            echo "And add VITE_SUPABASE_URL secret"
             exit 1
           fi
           
           if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo "❌ ERROR: SUPABASE_SERVICE_ROLE_KEY secret is not set in GitHub Secrets"
+            echo "❌ ERROR: VITE_SUPABASE_SERVICE_ROLE_KEY secret is not set in GitHub Secrets"
             echo "Please go to: Repository → Settings → Secrets and variables → Actions"
-            echo "And add SUPABASE_SERVICE_ROLE_KEY secret"
+            echo "And add VITE_SUPABASE_SERVICE_ROLE_KEY secret"
             exit 1
           fi
           
@@ -396,7 +397,7 @@ jobs:
                 echo "3. Using pooled connection (port 6543) instead of direct (port 5432)"
                 echo "4. IP not whitelisted (Supabase free plan may require IP whitelisting)"
                 echo ""
-                echo "Verify DATABASE_URL format:"
+                echo "Verify SUPABASE_DB_URL format:"
                 echo "Correct: postgresql://postgres:password@db.xxxxx.supabase.co:5432/postgres"
                 echo "Wrong:   postgresql://postgres:password@aws-1-eu-west-1.pooler.supabase.com:6543/postgres"
                 # Exit with error for other issues (not network)
@@ -917,6 +918,8 @@ jobs:
             console.log('  ⚠ Created failed_files.json with', failed, 'failed downloads');
           }
           "
+
+      - name: Create backup archive
         run: |
           TIMESTAMP=$(date -u +"%Y-%m-%d-%H-%M-UTC")
           BACKUP_NAME="backup-$TIMESTAMP.zip"
@@ -1054,7 +1057,7 @@ jobs:
 
       - name: Handle backup failure
         if: failure()
-        # ✅ FIX: Use the same secret names as job-level env (VITE_ prefixed)
+        # ✅ FIX: Use the same secret names as job-level env
         env:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
