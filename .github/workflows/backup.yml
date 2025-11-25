@@ -233,196 +233,99 @@ jobs:
                 echo ""
                 
                 # ✅ FIX: Use Edge Function to export database via API
-                # Create a temporary script file to avoid quote escaping issues
-                cat > /tmp/export-db.js << 'SCRIPT_END'
-                const { createClient } = require('@supabase/supabase-js');
-                const fs = require('fs');
-                
-                (async () => {
-                  try {
-                    const supabaseUrl = process.env.SUPABASE_URL;
-                    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-                    
-                    if (!supabaseUrl || !supabaseKey) {
-                      console.error('✗ Cannot use Edge Function export - missing credentials');
-                      process.exit(1);
-                    }
-                    
-                    if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
-                      console.error('✗ Invalid SUPABASE_URL format');
-                      process.exit(1);
-                    }
-                    
-                    const cleanUrl = supabaseUrl.replace(/\/$/, '');
-                    const supabase = createClient(cleanUrl, supabaseKey);
-                    
-                    console.log('✓ Getting admin user for Edge Function authentication...');
-                    
-                    // Get a valid admin user_id from system_users
-                    const { data: adminUsers, error: adminError } = await supabase
-                      .from('system_users')
-                      .select('user_id, email, status, role_id')
-                      .eq('status', 'active')
-                      .limit(1);
-                    
-                    let userId = null;
-                    
-                    if (!adminError && adminUsers && adminUsers.length > 0) {
-                      // Try to find a user with admin role
-                      const { data: roles } = await supabase
-                        .from('roles')
-                        .select('role_id, role_name, permissions');
-                      
-                      if (roles) {
-                        const adminRoleIds = roles
-                          .filter(r => {
-                            const perms = (r.permissions || '').toLowerCase();
-                            const name = (r.role_name || '').toLowerCase();
-                            return perms === 'all' || name.includes('admin') || name.includes('super');
-                          })
-                          .map(r => r.role_id);
-                        
-                        const adminUser = adminUsers.find(u => adminRoleIds.includes(u.role_id));
-                        if (adminUser) {
-                          userId = adminUser.user_id;
-                          console.log('✓ Found admin user:', adminUser.email);
-                        } else {
-                          userId = adminUsers[0].user_id;
-                          console.log('✓ Using active user:', adminUsers[0].email);
-                        }
-                      } else {
-                        userId = adminUsers[0].user_id;
-                        console.log('✓ Using active user:', adminUsers[0].email);
-                      }
-                    }
-                    
-                    if (!userId) {
-                      throw new Error('No active admin user found in system_users table. Cannot authenticate Edge Function.');
-                    }
-                    
-                    console.log('✓ Calling export-database Edge Function...');
-                    console.log('  Note: This uses Supabase API (no IP restrictions)');
-                    
-                    // Call the Edge Function using fetch
-                    const functionUrl = cleanUrl + '/functions/v1/export-database';
-                    console.log('  → Calling Edge Function:', functionUrl);
-                    console.log('  → User ID:', userId);
-                    console.log('  → Supabase URL:', cleanUrl);
-                    
-                    // First, verify the Edge Function exists
-                    try {
-                      const healthCheck = await fetch(functionUrl, {
-                        method: 'OPTIONS',
-                        headers: {
-                          'Authorization': 'Bearer ' + supabaseKey,
-                          'apikey': supabaseKey,
-                        }
-                      });
-                      if (healthCheck.status === 404) {
-                        throw new Error('Edge Function "export-database" not found. Please deploy it using: supabase functions deploy export-database --no-verify-jwt');
-                      }
-                    } catch (healthErr) {
-                      if (healthErr.message.includes('not found')) {
-                        throw healthErr;
-                      }
-                      // Ignore other health check errors
-                    }
-                    
-                    const response = await fetch(functionUrl, {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + supabaseKey,
-                        'apikey': supabaseKey,
-                      },
-                      body: JSON.stringify({ user_id: userId })
-                    });
-                    
-                    console.log('  → Edge Function response status:', response.status);
-                    
-                    if (!response.ok) {
-                      const errorText = await response.text();
-                      console.error('  ✗ Edge Function error response:', errorText);
-                      throw new Error('Edge Function returned ' + response.status + ': ' + errorText);
-                    }
-                    
-                    const result = await response.json();
-                    console.log('  → Edge Function result:', JSON.stringify({
-                      success: result.success,
-                      tables_exported: result.tables_exported,
-                      tables_total: result.tables_total,
-                      sql_size: result.sql_size,
-                      message: result.message
-                    }));
-                    
-                    if (result.error || !result.success) {
-                      throw new Error(result.error?.message || result.message || 'Export failed');
-                    }
-                    
-                    if (!result.sql_base64) {
-                      throw new Error('Edge Function returned no SQL data');
-                    }
-                    
-                    // Decode base64 SQL
-                    const sql = Buffer.from(result.sql_base64, 'base64').toString('utf-8');
-                    
-                    if (!sql || sql.length === 0) {
-                      throw new Error('Decoded SQL is empty');
-                    }
-                    
-                    // Write to file
-                    fs.writeFileSync('backup/db/backup.sql', sql);
-                    
-                    console.log('✓ Database exported via Edge Function');
-                    console.log('  - Tables exported:', result.tables_exported, '/', result.tables_total || '?');
-                    console.log('  - SQL size:', (result.sql_size / 1024).toFixed(2), 'KB');
-                    console.log('  - SQL file size:', (sql.length / 1024).toFixed(2), 'KB');
-                    console.log('  - Message:', result.message || 'Export completed');
-                    console.log('⚠️ Note: This is a data-only export (INSERT statements)');
-                    console.log('⚠️ Schema (CREATE TABLE, functions, triggers) is NOT included');
-                    console.log('⚠️ For complete backup with schema, use pg_dump (requires Pro plan or IP whitelisting)');
-                  } catch (err) {
-                    console.error('✗ Failed to export via Edge Function:', err.message);
-                    console.error('');
-                    console.error('📋 Alternative solutions:');
-                    console.error('1. Enable IP whitelisting in Supabase Dashboard');
-                    console.error('2. Upgrade to Supabase Pro Plan');
-                    console.error('3. Use Supabase Dashboard backup feature');
-                    console.error('');
-                    console.error('Creating backup note file...');
-                    
-                    // Create note file
-                    const note = '-- ⚠️ DATABASE BACKUP FAILED - Network Connection Issue\n' +
-                      '-- \n' +
-                      '-- Error: Network is unreachable\n' +
-                      '-- Cause: Supabase Free Plan blocks external database connections\n' +
-                      '-- \n' +
-                      '-- Attempted solutions:\n' +
-                      '-- 1. Direct pg_dump connection: FAILED (network blocked)\n' +
-                      '-- 2. Edge Function export: FAILED (' + err.message + ')\n' +
-                      '-- \n' +
-                      '-- Solutions:\n' +
-                      '-- 1. Enable IP whitelisting in Supabase Dashboard:\n' +
-                      '--    Settings → Database → Network Restrictions → Add IPs\n' +
-                      '--    (May not be available on free plan)\n' +
-                      '-- \n' +
-                      '-- 2. Upgrade to Supabase Pro Plan ($25/month):\n' +
-                      '--    Includes IP whitelisting and external connection support\n' +
-                      '-- \n' +
-                      '-- 3. Use Supabase Dashboard backup (if available):\n' +
-                      '--    Dashboard → Database → Backups → Create backup\n' +
-                      '-- \n' +
-                      '-- This backup file is empty because database export could not be completed.\n' +
-                      '-- Other backups (auth users, storage files) may still be available.\n' +
-                      '-- \n' +
-                      '-- For production use, upgrade to Pro Plan for reliable backups.\n';
-                    
-                    fs.writeFileSync('backup/db/backup.sql', note);
-                    console.error('✓ Created backup note file');
-                    process.exit(0);
-                  }
-                })();
-                SCRIPT_END
+                # Write script to file using printf to avoid heredoc issues
+                printf '%s\n' \
+                  "const { createClient } = require('@supabase/supabase-js');" \
+                  "const fs = require('fs');" \
+                  "" \
+                  "(async () => {" \
+                  "  try {" \
+                  "    const supabaseUrl = process.env.SUPABASE_URL;" \
+                  "    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;" \
+                  "" \
+                  "    if (!supabaseUrl || !supabaseKey) {" \
+                  "      console.error('✗ Cannot use Edge Function export - missing credentials');" \
+                  "      process.exit(1);" \
+                  "    }" \
+                  "" \
+                  "    if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {" \
+                  "      console.error('✗ Invalid SUPABASE_URL format');" \
+                  "      process.exit(1);" \
+                  "    }" \
+                  "" \
+                  "    const cleanUrl = supabaseUrl.replace(/\\/$/, '');" \
+                  "    const supabase = createClient(cleanUrl, supabaseKey);" \
+                  "" \
+                  "    console.log('✓ Getting admin user for Edge Function authentication...');" \
+                  "" \
+                  "    const { data: adminUsers, error: adminError } = await supabase" \
+                  "      .from('system_users')" \
+                  "      .select('user_id, email, status, role_id')" \
+                  "      .eq('status', 'active')" \
+                  "      .limit(1);" \
+                  "" \
+                  "    let userId = null;" \
+                  "" \
+                  "    if (!adminError && adminUsers && adminUsers.length > 0) {" \
+                  "      const { data: roles } = await supabase.from('roles').select('role_id, role_name, permissions');" \
+                  "      if (roles) {" \
+                  "        const adminRoleIds = roles.filter(r => {" \
+                  "          const perms = (r.permissions || '').toLowerCase();" \
+                  "          const name = (r.role_name || '').toLowerCase();" \
+                  "          return perms === 'all' || name.includes('admin') || name.includes('super');" \
+                  "        }).map(r => r.role_id);" \
+                  "        const adminUser = adminUsers.find(u => adminRoleIds.includes(u.role_id));" \
+                  "        userId = adminUser ? adminUser.user_id : adminUsers[0].user_id;" \
+                  "        console.log('✓ Found user:', adminUser ? adminUser.email : adminUsers[0].email);" \
+                  "      } else {" \
+                  "        userId = adminUsers[0].user_id;" \
+                  "        console.log('✓ Using active user:', adminUsers[0].email);" \
+                  "      }" \
+                  "    }" \
+                  "" \
+                  "    if (!userId) throw new Error('No active admin user found');" \
+                  "" \
+                  "    console.log('✓ Calling export-database Edge Function...');" \
+                  "    const functionUrl = cleanUrl + '/functions/v1/export-database';" \
+                  "    console.log('  → Function URL:', functionUrl);" \
+                  "" \
+                  "    const response = await fetch(functionUrl, {" \
+                  "      method: 'POST'," \
+                  "      headers: {" \
+                  "        'Content-Type': 'application/json'," \
+                  "        'Authorization': 'Bearer ' + supabaseKey," \
+                  "        'apikey': supabaseKey," \
+                  "      }," \
+                  "      body: JSON.stringify({ user_id: userId })" \
+                  "    });" \
+                  "" \
+                  "    if (!response.ok) {" \
+                  "      const errorText = await response.text();" \
+                  "      throw new Error('Edge Function returned ' + response.status + ': ' + errorText);" \
+                  "    }" \
+                  "" \
+                  "    const result = await response.json();" \
+                  "    if (result.error || !result.success) {" \
+                  "      throw new Error(result.error?.message || result.message || 'Export failed');" \
+                  "    }" \
+                  "" \
+                  "    if (!result.sql_base64) throw new Error('Edge Function returned no SQL data');" \
+                  "" \
+                  "    const sql = Buffer.from(result.sql_base64, 'base64').toString('utf-8');" \
+                  "    if (!sql || sql.length === 0) throw new Error('Decoded SQL is empty');" \
+                  "" \
+                  "    fs.writeFileSync('backup/db/backup.sql', sql);" \
+                  "    console.log('✓ Database exported via Edge Function');" \
+                  "    console.log('  - Tables exported:', result.tables_exported, '/', result.tables_total || '?');" \
+                  "    console.log('  - SQL size:', (result.sql_size / 1024).toFixed(2), 'KB');" \
+                  "  } catch (err) {" \
+                  "    console.error('✗ Failed to export via Edge Function:', err.message);" \
+                  "    const note = '-- ⚠️ DATABASE BACKUP FAILED\\n-- Error: ' + err.message + '\\n';" \
+                  "    fs.writeFileSync('backup/db/backup.sql', note);" \
+                  "    console.error('✓ Created backup note file');" \
+                  "    process.exit(0);" \
+                  "  }" \
+                  "})();" > /tmp/export-db.js
                 
                 node --input-type=commonjs /tmp/export-db.js
                 
