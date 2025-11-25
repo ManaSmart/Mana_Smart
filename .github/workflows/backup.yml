@@ -215,18 +215,26 @@ jobs:
           # ✅ FIX: Try pg_dump, handle network errors gracefully
           echo "Attempting direct database connection via pg_dump..."
           set +e  # Don't exit on error, we'll handle it
+          
+          # Use a different approach to capture both output and exit code
           pg_dump "$SUPABASE_DB_URL" \
             --no-owner \
             --no-privileges \
             --format=plain \
             --blobs \
             --verbose \
-            --file=backup/db/backup.sql \
-            2>&1 | tee /tmp/pg_dump_output.log
+            --file=backup/db/backup.sql > /tmp/pg_dump_output.log 2>&1
           PG_DUMP_EXIT=$?
-          set -e  # Re-enable exit on error
+          
+          # Also save output for debugging
+          cat /tmp/pg_dump_output.log | tee /dev/stderr
+          
+          echo ""
+          echo "DEBUG: pg_dump exit code: $PG_DUMP_EXIT"
+          echo "DEBUG: Checking if error handler should run..."
           
           if [ $PG_DUMP_EXIT -ne 0 ]; then
+            echo "DEBUG: ✓ Entering error handler for pg_dump failure"
             PG_DUMP_ERROR=$(cat /tmp/pg_dump_output.log)
             
             echo ""
@@ -420,23 +428,42 @@ jobs:
             fi
           
           # Final check - if file doesn't exist or is empty, it's an error
-          if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
-            echo "✓ Database export completed successfully"
-            FILE_SIZE=$(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo '0')
-            if [ "$FILE_SIZE" -lt 100 ]; then
-              echo "⚠️ WARNING: Backup file is very small ($FILE_SIZE bytes) - might be an error note"
-              echo "⚠️ First 10 lines:"
-              head -n 10 backup/db/backup.sql
+          # Only check if pg_dump succeeded (exit code 0)
+          if [ $PG_DUMP_EXIT -eq 0 ]; then
+            if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
+              echo "✓ Database export completed successfully via pg_dump"
+              FILE_SIZE=$(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo '0')
+              if [ "$FILE_SIZE" -lt 100 ]; then
+                echo "⚠️ WARNING: Backup file is very small ($FILE_SIZE bytes) - might be an error note"
+                echo "⚠️ First 10 lines:"
+                head -n 10 backup/db/backup.sql
+              fi
+            else
+              echo "❌ CRITICAL: pg_dump reported success but backup file is missing or empty"
+              exit 1
             fi
           else
-            echo "❌ CRITICAL: Database export file is empty or missing"
-            echo "❌ This means the database backup failed completely"
-            if [ $PG_DUMP_EXIT -ne 0 ]; then
+            # pg_dump failed - check if Edge Function fallback created the file
+            if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
+              FILE_SIZE=$(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo '0')
+              if [ "$FILE_SIZE" -gt 100 ]; then
+                echo "✓ Database export completed via Edge Function fallback"
+                echo "✓ File size: $(du -h backup/db/backup.sql | cut -f1)"
+              else
+                echo "❌ CRITICAL: Edge Function fallback created file but it's too small ($FILE_SIZE bytes)"
+                echo "❌ First 20 lines:"
+                head -n 20 backup/db/backup.sql
+                exit 1
+              fi
+            else
+              echo "❌ CRITICAL: Database export file is empty or missing"
               echo "❌ pg_dump failed and Edge Function fallback did not create a backup file"
-              echo "❌ Please check the Edge Function logs above"
+              echo "❌ Please check the Edge Function logs above for errors"
+              exit 1
             fi
-            exit 1
           fi
+          
+          set -e  # Re-enable exit on error after handling pg_dump
 
       - name: Export auth users and system_users
         continue-on-error: true  # ✅ Continue even if auth export fails (app uses custom auth)
