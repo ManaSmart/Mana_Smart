@@ -37,46 +37,6 @@ jobs:
       BACKUP_S3_FILES: ${{ secrets.BACKUP_S3_FILES || 'true' }}
 
     steps:
-      - name: Update workflow_run_id in backup_history
-        # ✅ NEW: Update backup_history with workflow_run_id for progress tracking
-        run: |
-          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
-          WORKFLOW_RUN_ID="${{ github.run_id }}"
-          
-          node --input-type=commonjs -e "
-          const { createClient } = require('@supabase/supabase-js');
-          
-          const supabaseUrl = process.env.SUPABASE_URL;
-          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          const dispatchId = process.env.DISPATCH_ID;
-          const workflowRunId = process.env.WORKFLOW_RUN_ID;
-          
-          if (!supabaseUrl || !supabaseKey || !dispatchId || !workflowRunId) {
-            console.log('⚠ Skipping workflow_run_id update - missing variables');
-            process.exit(0);
-          }
-          
-          const cleanUrl = supabaseUrl.replace(/\\/$/, '');
-          const supabase = createClient(cleanUrl, supabaseKey);
-          
-          // Update backup_history with workflow_run_id
-          const { error } = await supabase
-            .from('backup_history')
-            .update({ workflow_run_id: workflowRunId })
-            .eq('dispatch_id', dispatchId);
-          
-          if (error) {
-            console.log('⚠ Could not update workflow_run_id:', error.message);
-          } else {
-            console.log('✓ Updated workflow_run_id:', workflowRunId);
-          }
-          "
-        env:
-          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
-          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
-          WORKFLOW_RUN_ID: ${{ github.run_id }}
-
       - name: Checkout code
         uses: actions/checkout@v4
         # ✅ FIX: Disable submodule checkout to avoid the warning
@@ -118,6 +78,54 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Update workflow_run_id in backup_history
+        # ✅ NEW: Update backup_history with workflow_run_id for progress tracking
+        # ✅ FIX: Run after npm install so @supabase/supabase-js is available
+        run: |
+          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
+          
+          node --input-type=commonjs -e "
+          (async () => {
+            try {
+              const { createClient } = require('@supabase/supabase-js');
+              
+              const supabaseUrl = process.env.SUPABASE_URL;
+              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+              const dispatchId = process.env.DISPATCH_ID;
+              const workflowRunId = process.env.WORKFLOW_RUN_ID;
+              
+              if (!supabaseUrl || !supabaseKey || !dispatchId || !workflowRunId) {
+                console.log('⚠ Skipping workflow_run_id update - missing variables');
+                process.exit(0);
+              }
+              
+              const cleanUrl = supabaseUrl.replace(/\\/$/, '');
+              const supabase = createClient(cleanUrl, supabaseKey);
+              
+              // Update backup_history with workflow_run_id
+              const { error } = await supabase
+                .from('backup_history')
+                .update({ workflow_run_id: workflowRunId })
+                .eq('dispatch_id', dispatchId);
+              
+              if (error) {
+                console.log('⚠ Could not update workflow_run_id:', error.message);
+              } else {
+                console.log('✓ Updated workflow_run_id:', workflowRunId);
+              }
+            } catch (err) {
+              console.log('⚠ Error updating workflow_run_id:', err.message);
+              // Don't fail the workflow if this step fails
+            }
+          })();
+          "
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
 
       - name: Check backup enable status
         # ✅ FIX: Environment variables are inherited from job-level env:
@@ -1218,57 +1226,119 @@ jobs:
             exit 1
           fi
           
+          # ✅ FIX: Install dependencies if not already installed (failure handler runs even if earlier steps fail)
+          USE_FETCH_FALLBACK=false
+          if [ ! -d "node_modules/@supabase" ]; then
+            echo "Installing @supabase/supabase-js..."
+            if ! npm install @supabase/supabase-js --no-save 2>/dev/null; then
+              echo "⚠ Failed to install @supabase/supabase-js, will use fetch API fallback..."
+              USE_FETCH_FALLBACK=true
+            fi
+          fi
+          
+          # ✅ FIX: Use fetch API if npm install failed or module still not available
+          if [ "$USE_FETCH_FALLBACK" = "true" ] || [ ! -d "node_modules/@supabase" ]; then
+            echo "Using fetch API to update backup status..."
+            STATUS="$FINAL_STATUS" \
+            ERROR_TEXT="$FINAL_ERROR_TEXT" \
+            node --input-type=commonjs -e "
+            (async () => {
+              try {
+                const supabaseUrl = (process.env.SUPABASE_URL || '').replace(/\\/$/, '');
+                const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+                const dispatchId = process.env.DISPATCH_ID;
+                const status = process.env.STATUS;
+                const errorText = process.env.ERROR_TEXT;
+                
+                if (!supabaseUrl || !supabaseKey || !dispatchId) {
+                  console.error('✗ Missing required variables for fetch API fallback');
+                  process.exit(1);
+                }
+                
+                // Use direct REST API call instead of supabase-js
+                const response = await fetch(supabaseUrl + '/rest/v1/backup_history?dispatch_id=eq.' + encodeURIComponent(dispatchId), {
+                  method: 'PATCH',
+                  headers: {
+                    'apikey': supabaseKey,
+                    'Authorization': 'Bearer ' + supabaseKey,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=minimal'
+                  },
+                  body: JSON.stringify({
+                    status: status,
+                    error_text: errorText
+                  })
+                });
+                
+                if (response.ok) {
+                  console.log('✓ Backup status updated to failed via REST API');
+                } else {
+                  const errorText = await response.text();
+                  console.error('✗ Failed to update backup status:', errorText);
+                  process.exit(1);
+                }
+              } catch (err) {
+                console.error('✗ Error updating backup status:', err.message);
+                process.exit(1);
+              }
+            })();
+            "
+            exit 0
+          fi
+          
           STATUS="$FINAL_STATUS" \
           ERROR_TEXT="$FINAL_ERROR_TEXT" \
           node --input-type=commonjs -e "
-          const { createClient } = require('@supabase/supabase-js');
-          
-          const supabaseUrl = process.env.SUPABASE_URL;
-          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          const dispatchId = process.env.DISPATCH_ID;
-          const status = process.env.STATUS;
-          const errorText = process.env.ERROR_TEXT;
-          
-          if (!supabaseUrl || !supabaseKey || !dispatchId) {
-            console.error('✗ Cannot update backup status - missing credentials');
-            console.error('SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
-            console.error('SUPABASE_SERVICE_ROLE_KEY:', supabaseKey ? 'SET' : 'MISSING');
-            console.error('DISPATCH_ID:', dispatchId ? 'SET' : 'MISSING');
-            process.exit(1);
-          }
-          
-          // ✅ FIX: Validate URL format
-          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
-            console.error('✗ Invalid SUPABASE_URL format');
-            console.error('URL must start with http:// or https://');
-            console.error('Current value preview:', supabaseUrl.substring(0, 50));
-            console.error('Expected format: https://xxxxx.supabase.co');
-            process.exit(1);
-          }
-          
-          // ✅ FIX: Remove trailing slash if present
-          const cleanUrl = supabaseUrl.replace(/\/$/, '');
-          
-          console.log('✓ Updating backup status to failed');
-          const supabase = createClient(cleanUrl, supabaseKey);
-          
-          supabase
-            .from('backup_history')
-            .update({
-              status: status,
-              error_text: errorText,
-            })
-            .eq('dispatch_id', dispatchId)
-            .then(({ error }) => {
+          (async () => {
+            try {
+              const { createClient } = require('@supabase/supabase-js');
+              
+              const supabaseUrl = process.env.SUPABASE_URL;
+              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+              const dispatchId = process.env.DISPATCH_ID;
+              const status = process.env.STATUS;
+              const errorText = process.env.ERROR_TEXT;
+              
+              if (!supabaseUrl || !supabaseKey || !dispatchId) {
+                console.error('✗ Cannot update backup status - missing credentials');
+                console.error('SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
+                console.error('SUPABASE_SERVICE_ROLE_KEY:', supabaseKey ? 'SET' : 'MISSING');
+                console.error('DISPATCH_ID:', dispatchId ? 'SET' : 'MISSING');
+                process.exit(1);
+              }
+              
+              // ✅ FIX: Validate URL format
+              if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
+                console.error('✗ Invalid SUPABASE_URL format');
+                console.error('URL must start with http:// or https://');
+                console.error('Current value preview:', supabaseUrl.substring(0, 50));
+                console.error('Expected format: https://xxxxx.supabase.co');
+                process.exit(1);
+              }
+              
+              // ✅ FIX: Remove trailing slash if present
+              const cleanUrl = supabaseUrl.replace(/\\/$/, '');
+              
+              console.log('✓ Updating backup status to failed');
+              const supabase = createClient(cleanUrl, supabaseKey);
+              
+              const { error } = await supabase
+                .from('backup_history')
+                .update({
+                  status: status,
+                  error_text: errorText,
+                })
+                .eq('dispatch_id', dispatchId);
+              
               if (error) {
                 console.error('✗ Failed to update backup status to failed:', error.message);
                 process.exit(1);
               } else {
                 console.log('✓ Backup status updated to failed');
               }
-            })
-            .catch((err) => {
+            } catch (err) {
               console.error('✗ Error updating backup status:', err);
               process.exit(1);
-            });
+            }
+          })();
           "
