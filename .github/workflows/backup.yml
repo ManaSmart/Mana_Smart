@@ -223,8 +223,12 @@ jobs:
             2>&1 | tee /tmp/pg_dump_output.log || {
               PG_DUMP_ERROR=$(cat /tmp/pg_dump_output.log)
               
+              echo "DEBUG: pg_dump failed, checking error type..."
+              echo "DEBUG: Full error output saved to /tmp/pg_dump_output.log"
+              
               # Check if it's a network/unreachable error (Supabase free plan issue)
-              if echo "$PG_DUMP_ERROR" | grep -q "Network is unreachable\|Connection refused\|timeout\|unreachable"; then
+              # Use case-insensitive grep with extended regex
+              if echo "$PG_DUMP_ERROR" | grep -qiE "(Network is unreachable|Connection refused|timeout|unreachable)"; then
                 echo ""
                 echo "⚠️ WARNING: Direct database connection failed (Network unreachable)"
                 echo "This is common with Supabase Free Plan - external connections are blocked"
@@ -328,36 +332,48 @@ jobs:
                   "})();" > /tmp/export-db.js
                 
                 echo "Running Edge Function export script..."
-                if node --input-type=commonjs /tmp/export-db.js 2>&1; then
-                  EDGE_FUNC_EXIT=$?
-                  echo "Edge Function script completed with exit code: $EDGE_FUNC_EXIT"
-                else
-                  EDGE_FUNC_EXIT=$?
-                  echo "Edge Function script failed with exit code: $EDGE_FUNC_EXIT"
+                echo "DEBUG: Script file location: /tmp/export-db.js"
+                echo "DEBUG: Script file exists: $([ -f /tmp/export-db.js ] && echo 'YES' || echo 'NO')"
+                if [ -f /tmp/export-db.js ]; then
+                  echo "DEBUG: Script file size: $(wc -l < /tmp/export-db.js) lines"
                 fi
                 
-                if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
-                  echo "✓ Database backup completed via Edge Function"
-                  echo "✓ File size: $(du -h backup/db/backup.sql | cut -f1)"
-                  echo "✓ Line count: $(wc -l < backup/db/backup.sql) lines"
+                # Run the script and show all output in real-time
+                echo "=== Starting Edge Function Script ==="
+                set +e  # Don't exit on error, we'll check manually
+                node --input-type=commonjs /tmp/export-db.js
+                EDGE_FUNC_EXIT=$?
+                set -e  # Re-enable exit on error
+                echo "=== Edge Function Script Finished ==="
+                echo "Script exit code: $EDGE_FUNC_EXIT"
+                
+                # Check if backup file was created
+                sleep 1  # Give file system a moment to sync
+                if [ -f backup/db/backup.sql ]; then
+                  FILE_SIZE=$(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo '0')
+                  echo "DEBUG: Backup file exists, size: $FILE_SIZE bytes"
+                  
+                  if [ "$FILE_SIZE" -gt 100 ]; then
+                    echo "✓ Database backup completed via Edge Function"
+                    echo "✓ File size: $(du -h backup/db/backup.sql | cut -f1)"
+                    echo "✓ Line count: $(wc -l < backup/db/backup.sql) lines"
+                  else
+                    echo "⚠️ Backup file exists but is very small ($FILE_SIZE bytes)"
+                    echo "⚠️ First 20 lines of file:"
+                    head -n 20 backup/db/backup.sql || echo "Could not read file"
+                    echo "❌ Database backup via Edge Function FAILED - file too small"
+                    exit 1
+                  fi
                 else
                   echo "❌ Database backup via Edge Function FAILED"
-                  echo "❌ This is a critical error - database backup is required"
-                  if [ -f backup/db/backup.sql ]; then
-                    echo "⚠️ File exists but is empty or invalid"
-                    echo "⚠️ File size: $(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo 'unknown') bytes"
-                    echo "⚠️ First 10 lines of file:"
-                    head -n 10 backup/db/backup.sql || echo "Could not read file"
+                  echo "❌ Backup file was not created"
+                  echo "DEBUG: Checking script file..."
+                  if [ -f /tmp/export-db.js ]; then
+                    echo "✓ Script file exists ($(wc -l < /tmp/export-db.js) lines)"
+                    echo "DEBUG: First 30 lines of script:"
+                    head -n 30 /tmp/export-db.js
                   else
-                    echo "⚠️ Backup file was not created"
-                    echo "⚠️ Checking if script file exists..."
-                    if [ -f /tmp/export-db.js ]; then
-                      echo "✓ Script file exists"
-                      echo "⚠️ First 20 lines of script:"
-                      head -n 20 /tmp/export-db.js
-                    else
-                      echo "✗ Script file was not created"
-                    fi
+                    echo "✗ Script file was not created"
                   fi
                   exit 1
                 fi
