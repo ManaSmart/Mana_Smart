@@ -1123,8 +1123,7 @@ jobs:
             process.exit(1);
           }
           
-          // ✅ NEW: Get workflow run ID for progress tracking
-          const workflowRunId = process.env.GITHUB_RUN_ID || null;
+          // ✅ FIX: workflowRunId already declared above, no need to redeclare
           
           console.log('✓ Supabase credentials validated');
           console.log('✓ URL format validated');
