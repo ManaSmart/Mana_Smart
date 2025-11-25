@@ -213,6 +213,8 @@ jobs:
           echo "Connection string format: ${SUPABASE_DB_URL%%@*}@***" # Show only user@host part
           
           # ✅ FIX: Try pg_dump, handle network errors gracefully
+          echo "Attempting direct database connection via pg_dump..."
+          set +e  # Don't exit on error, we'll handle it
           pg_dump "$SUPABASE_DB_URL" \
             --no-owner \
             --no-privileges \
@@ -220,15 +222,37 @@ jobs:
             --blobs \
             --verbose \
             --file=backup/db/backup.sql \
-            2>&1 | tee /tmp/pg_dump_output.log || {
-              PG_DUMP_ERROR=$(cat /tmp/pg_dump_output.log)
-              
-              echo "DEBUG: pg_dump failed, checking error type..."
-              echo "DEBUG: Full error output saved to /tmp/pg_dump_output.log"
-              
-              # Check if it's a network/unreachable error (Supabase free plan issue)
-              # Use case-insensitive grep with extended regex
-              if echo "$PG_DUMP_ERROR" | grep -qiE "(Network is unreachable|Connection refused|timeout|unreachable)"; then
+            2>&1 | tee /tmp/pg_dump_output.log
+          PG_DUMP_EXIT=$?
+          set -e  # Re-enable exit on error
+          
+          if [ $PG_DUMP_EXIT -ne 0 ]; then
+            PG_DUMP_ERROR=$(cat /tmp/pg_dump_output.log)
+            
+            echo ""
+            echo "DEBUG: pg_dump failed with exit code: $PG_DUMP_EXIT"
+            echo "DEBUG: Error output saved to /tmp/pg_dump_output.log"
+            echo "DEBUG: Checking error type..."
+            echo "DEBUG: Error contains 'Network': $(echo "$PG_DUMP_ERROR" | grep -ci "Network" || echo "0")"
+            echo "DEBUG: Error contains 'unreachable': $(echo "$PG_DUMP_ERROR" | grep -ci "unreachable" || echo "0")"
+            echo "DEBUG: Full error for debugging:"
+            echo "$PG_DUMP_ERROR" | head -n 5
+            
+            # Check if it's a network/unreachable error (Supabase free plan issue)
+            # Match "Network is unreachable" (the exact error message)
+            if echo "$PG_DUMP_ERROR" | grep -qi "Network is unreachable"; then
+              NETWORK_MATCH="yes"
+            elif echo "$PG_DUMP_ERROR" | grep -qi "unreachable"; then
+              NETWORK_MATCH="yes"
+            elif echo "$PG_DUMP_ERROR" | grep -qiE "(Connection refused|timeout|could not connect)"; then
+              NETWORK_MATCH="yes"
+            else
+              NETWORK_MATCH="no"
+            fi
+            
+            echo "DEBUG: Network error match result: $NETWORK_MATCH"
+            
+            if [ "$NETWORK_MATCH" = "yes" ]; then
                 echo ""
                 echo "⚠️ WARNING: Direct database connection failed (Network unreachable)"
                 echo "This is common with Supabase Free Plan - external connections are blocked"
@@ -395,10 +419,23 @@ jobs:
               fi
             }
           
+          # Final check - if file doesn't exist or is empty, it's an error
           if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
             echo "✓ Database export completed successfully"
+            FILE_SIZE=$(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo '0')
+            if [ "$FILE_SIZE" -lt 100 ]; then
+              echo "⚠️ WARNING: Backup file is very small ($FILE_SIZE bytes) - might be an error note"
+              echo "⚠️ First 10 lines:"
+              head -n 10 backup/db/backup.sql
+            fi
           else
-            echo "⚠️ Database export file is empty or missing"
+            echo "❌ CRITICAL: Database export file is empty or missing"
+            echo "❌ This means the database backup failed completely"
+            if [ $PG_DUMP_EXIT -ne 0 ]; then
+              echo "❌ pg_dump failed and Edge Function fallback did not create a backup file"
+              echo "❌ Please check the Edge Function logs above"
+            fi
+            exit 1
           fi
 
       - name: Export auth users and system_users
@@ -998,6 +1035,9 @@ jobs:
               console.log('✓ Backup history updated successfully');
               
               // Update system_settings_kv
+              // Note: Service role key should bypass RLS, but RLS policy requires auth.role() = 'service_role'
+              // When using service_role key directly, we need to ensure it's recognized
+              // If this fails, it's not critical - the backup itself succeeded
               return supabase
                 .from('system_settings_kv')
                 .upsert({
@@ -1005,14 +1045,23 @@ jobs:
                   value: new Date().toISOString(),
                 }, {
                   onConflict: 'key',
-                });
+                })
+                .select();
             })
-            .then(({ error: settingsError }) => {
+            .then(({ data: settingsData, error: settingsError }) => {
               if (settingsError) {
                 console.error('⚠ Warning: Failed to update last_backup_at:', settingsError.message);
+                console.error('⚠ Error code:', settingsError.code);
+                console.error('⚠ Error details:', settingsError.details);
+                console.error('⚠ This is not critical - backup completed successfully');
+                console.error('⚠ The RLS policy might be blocking service_role updates');
+                console.error('⚠ To fix: Update the RLS policy to allow service_role, or disable RLS for this table');
                 // Don't fail the step, just log the warning
               } else {
                 console.log('✓ System settings updated');
+                if (settingsData) {
+                  console.log('✓ Updated last_backup_at timestamp');
+                }
               }
             })
             .catch((err) => {
