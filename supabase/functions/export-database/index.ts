@@ -13,6 +13,8 @@ declare const Deno: {
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 // @ts-ignore - Deno handles URL-based imports at runtime
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+// @ts-ignore - Deno handles URL-based imports at runtime
+import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -426,7 +428,11 @@ serve(async (req: Request) => {
     const fullSQL = dataSQL.join('\n');
     
     // Convert to base64 for JSON response
-    const base64SQL = btoa(fullSQL);
+    // ✅ FIX: Use UTF-8 compatible base64 encoding (btoa only works with Latin1)
+    // Convert UTF-8 string to bytes, then encode to base64 using Deno's standard library
+    const encoder = new TextEncoder();
+    const utf8Bytes = encoder.encode(fullSQL);
+    const base64SQL = base64Encode(utf8Bytes);
     
     return new Response(
       JSON.stringify({
