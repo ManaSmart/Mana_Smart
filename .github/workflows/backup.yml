@@ -197,7 +197,7 @@ jobs:
           "
 
       - name: Export database
-        continue-on-error: true  # ✅ Continue workflow even if pg_dump fails
+        continue-on-error: false  # ✅ Fail if database export fails (critical step)
         run: |
           mkdir -p backup/db
           
@@ -302,6 +302,29 @@ jobs:
                 
                 // Call the Edge Function using fetch (more reliable in GitHub Actions)
                 const functionUrl = cleanUrl + '/functions/v1/export-database';
+                console.log('  → Calling Edge Function:', functionUrl);
+                console.log('  → User ID:', userId);
+                console.log('  → Supabase URL:', cleanUrl);
+                
+                // First, verify the Edge Function exists by checking if it's accessible
+                try {
+                  const healthCheck = await fetch(functionUrl, {
+                    method: 'OPTIONS',
+                    headers: {
+                      'Authorization': 'Bearer ' + supabaseKey,
+                      'apikey': supabaseKey,
+                    }
+                  });
+                  if (healthCheck.status === 404) {
+                    throw new Error('Edge Function "export-database" not found. Please deploy it using: supabase functions deploy export-database --no-verify-jwt');
+                  }
+                } catch (healthErr) {
+                  if (healthErr.message.includes('not found')) {
+                    throw healthErr;
+                  }
+                  // Ignore other health check errors, proceed with actual call
+                }
+                
                 const response = await fetch(functionUrl, {
                   method: 'POST',
                   headers: {
@@ -312,19 +335,37 @@ jobs:
                   body: JSON.stringify({ user_id: userId })
                 });
                 
+                console.log('  → Edge Function response status:', response.status);
+                
                 if (!response.ok) {
                   const errorText = await response.text();
+                  console.error('  ✗ Edge Function error response:', errorText);
                   throw new Error('Edge Function returned ' + response.status + ': ' + errorText);
                 }
                 
                 const result = await response.json();
+                console.log('  → Edge Function result:', JSON.stringify({
+                  success: result.success,
+                  tables_exported: result.tables_exported,
+                  tables_total: result.tables_total,
+                  sql_size: result.sql_size,
+                  message: result.message
+                }));
                 
                 if (result.error || !result.success) {
                   throw new Error(result.error?.message || result.message || 'Export failed');
                 }
                 
+                if (!result.sql_base64) {
+                  throw new Error('Edge Function returned no SQL data');
+                }
+                
                 // Decode base64 SQL
                 const sql = Buffer.from(result.sql_base64, 'base64').toString('utf-8');
+                
+                if (!sql || sql.length === 0) {
+                  throw new Error('Decoded SQL is empty');
+                }
                 
                 // Write to file
                 fs.writeFileSync('backup/db/backup.sql', sql);
@@ -332,6 +373,7 @@ jobs:
                 console.log('✓ Database exported via Edge Function');
                 console.log('  - Tables exported:', result.tables_exported, '/', result.tables_total || '?');
                 console.log('  - SQL size:', (result.sql_size / 1024).toFixed(2), 'KB');
+                console.log('  - SQL file size:', (sql.length / 1024).toFixed(2), 'KB');
                 console.log('  - Message:', result.message || 'Export completed');
                 console.log('⚠️ Note: This is a data-only export (INSERT statements)');
                 console.log('⚠️ Schema (CREATE TABLE, functions, triggers) is NOT included');
@@ -381,12 +423,19 @@ jobs:
                 
                 if [ $? -eq 0 ] && [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
                   echo "✓ Database backup completed via Edge Function"
+                  echo "✓ File size: $(du -h backup/db/backup.sql | cut -f1)"
+                  echo "✓ Line count: $(wc -l < backup/db/backup.sql) lines"
                 else
-                  echo "⚠️ Database backup via Edge Function also failed"
-                  echo "⚠️ Workflow will continue with other backups (auth users, storage)"
+                  echo "❌ Database backup via Edge Function FAILED"
+                  echo "❌ This is a critical error - database backup is required"
+                  if [ -f backup/db/backup.sql ]; then
+                    echo "⚠️ File exists but is empty or invalid"
+                    echo "⚠️ File size: $(stat -f%z backup/db/backup.sql 2>/dev/null || stat -c%s backup/db/backup.sql 2>/dev/null || echo 'unknown') bytes"
+                  else
+                    echo "⚠️ Backup file was not created"
+                  fi
+                  exit 1
                 fi
-                # Don't exit with error - let workflow continue
-                exit 0
               else
                 echo "❌ pg_dump failed with error:"
                 echo "$PG_DUMP_ERROR"
@@ -555,7 +604,7 @@ jobs:
           "
 
       - name: Download Supabase Storage files
-        continue-on-error: true  # ✅ Continue even if storage backup fails
+        continue-on-error: false  # ✅ Fail if storage backup fails (important data)
         run: |
           mkdir -p backup/storage
           node -e "
@@ -699,10 +748,19 @@ jobs:
             .then((results) => {
               const totalDownloaded = results.reduce((sum, r) => sum + (r.downloaded || 0), 0);
               const totalFailed = results.reduce((sum, r) => sum + (r.failed || 0), 0);
+              
               console.log('✓ Storage backup completed');
+              console.log('  - Buckets processed:', buckets.length);
               console.log('  - Total files downloaded:', totalDownloaded);
               if (totalFailed > 0) {
-                console.log('  - Failed downloads:', totalFailed);
+                console.log('  ⚠️ Failed downloads:', totalFailed);
+              }
+              
+              // Check if any buckets had errors
+              const bucketsWithErrors = results.filter(r => r.error);
+              if (bucketsWithErrors.length > 0) {
+                console.error('  ✗ Errors in buckets:', bucketsWithErrors.map(r => r.bucket).join(', '));
+                throw new Error(`Failed to backup ${bucketsWithErrors.length} bucket(s): ${bucketsWithErrors.map(r => r.bucket + ' (' + r.error + ')').join(', ')}`);
               }
               
               // Create a summary file
@@ -717,16 +775,21 @@ jobs:
                   note: 'Supabase Storage buckets backed up. S3 files are backed up in a separate step (backup/storage/s3/).'
                 }, null, 2)
               );
+              
+              if (totalDownloaded === 0 && buckets.length > 0) {
+                console.log('  ℹ️ No files found in any buckets (this may be normal if buckets are empty)');
+              }
             })
             .catch((err) => {
               console.error('✗ Failed to download storage files:', err);
+              console.error('✗ Error details:', err.message);
               // Create error note
               fs.writeFileSync(
                 'backup/storage/error_note.txt',
                 'Storage backup failed: ' + err.message + '\\n' +
                 'File metadata is still available in the database backup (file_metadata table).'
               );
-              process.exit(0); // Don't fail the workflow
+              throw err; // Fail the workflow
             });
           "
 
