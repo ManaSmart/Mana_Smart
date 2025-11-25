@@ -82,7 +82,7 @@ jobs:
       - name: Check backup enable status
         # ✅ FIX: Environment variables are inherited from job-level env:
         run: |
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           
           // ✅ FIX: Get from process.env (automatically available from job env:)
@@ -148,7 +148,7 @@ jobs:
 
       - name: Update backup status (in progress)
         run: |
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           
           const supabaseUrl = process.env.SUPABASE_URL;
@@ -233,7 +233,7 @@ jobs:
                 echo ""
                 
                 # ✅ FIX: Use Edge Function to export database via API
-                node -e "
+                node --input-type=commonjs -e "
                 const { createClient } = require('@supabase/supabase-js');
                 const fs = require('fs');
                 
@@ -464,7 +464,7 @@ jobs:
         continue-on-error: true  # ✅ Continue even if auth export fails (app uses custom auth)
         run: |
           mkdir -p backup/auth
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           
@@ -607,7 +607,7 @@ jobs:
         continue-on-error: false  # ✅ Fail if storage backup fails (important data)
         run: |
           mkdir -p backup/storage
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = require('path');
@@ -797,7 +797,7 @@ jobs:
         continue-on-error: true  # ✅ Continue even if S3 backup fails
         run: |
           mkdir -p backup/storage/s3
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
           const fs = require('fs');
@@ -1020,7 +1020,7 @@ jobs:
           ERROR_TEXT="$FINAL_ERROR_TEXT" \
           S3_KEY="$S3_KEY" \
           BACKUP_SIZE="$BACKUP_SIZE" \
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           
           // ✅ FIX: Get all variables from process.env
@@ -1143,7 +1143,7 @@ jobs:
           
           STATUS="$FINAL_STATUS" \
           ERROR_TEXT="$FINAL_ERROR_TEXT" \
-          node -e "
+          node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           
           const supabaseUrl = process.env.SUPABASE_URL;
