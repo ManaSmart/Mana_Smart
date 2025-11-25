@@ -306,9 +306,15 @@ jobs:
                   "      const { data: roles } = await supabase.from('roles').select('role_id, role_name, permissions');" \
                   "      if (roles) {" \
                   "        const adminRoleIds = roles.filter(r => {" \
-                  "          const perms = (r.permissions || '').toLowerCase();" \
+                  "          // Handle permissions as string, object, or array" \
+                  "          let permsStr = '';" \
+                  "          if (typeof r.permissions === 'string') {" \
+                  "            permsStr = r.permissions.toLowerCase();" \
+                  "          } else if (r.permissions) {" \
+                  "            permsStr = JSON.stringify(r.permissions).toLowerCase();" \
+                  "          }" \
                   "          const name = (r.role_name || '').toLowerCase();" \
-                  "          return perms === 'all' || name.includes('admin') || name.includes('super');" \
+                  "          return permsStr === 'all' || permsStr.includes('\"all\"') || name.includes('admin') || name.includes('super');" \
                   "        }).map(r => r.role_id);" \
                   "        const adminUser = adminUsers.find(u => adminRoleIds.includes(u.role_id));" \
                   "        userId = adminUser ? adminUser.user_id : adminUsers[0].user_id;" \
