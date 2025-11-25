@@ -161,8 +161,10 @@ serve(async (req: Request) => {
       query = query.lte("created_at", endDateTime.toISOString());
     }
 
-    // Apply limit (increase if filtering to show more results)
-    const queryLimit = statusFilter || startDate || endDate ? Math.min(limit * 3, 100) : limit;
+    // ✅ FIX: Apply limit (increase significantly if filtering/searching to ensure accurate results)
+    // When searching, we need to fetch more results to search through, then filter and limit
+    const hasFilters = statusFilter || startDate || endDate || (searchQuery && searchQuery.trim());
+    const queryLimit = hasFilters ? Math.min(limit * 10, 500) : limit; // Fetch 10x more when filtering/searching
     query = query.limit(queryLimit);
 
     const { data, error } = await query;
@@ -173,7 +175,7 @@ serve(async (req: Request) => {
 
     let results = data || [];
 
-    // ✅ NEW: Apply search filter (filename search) on client side for flexibility
+    // ✅ FIX: Apply search filter BEFORE final limiting for accurate results
     if (searchQuery && searchQuery.trim()) {
       const searchLower = searchQuery.toLowerCase();
       results = results.filter((item) => {
@@ -193,7 +195,7 @@ serve(async (req: Request) => {
       });
     }
 
-    // ✅ NEW: Limit results after filtering
+    // ✅ FIX: Limit results AFTER all filtering is complete
     results = results.slice(0, limit);
 
     return new Response(JSON.stringify(results), {

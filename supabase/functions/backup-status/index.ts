@@ -18,6 +18,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "
 const GITHUB_TOKEN = Deno.env.get("GITHUB_TOKEN") ?? "";
 const GITHUB_OWNER = Deno.env.get("GITHUB_OWNER") ?? "";
 const GITHUB_REPO = Deno.env.get("GITHUB_REPO") ?? "";
+const GITHUB_WORKFLOW_ID = Deno.env.get("GITHUB_WORKFLOW_ID") ?? "backup.yml";
 const BACKUP_API_KEY = Deno.env.get("BACKUP_API_KEY") ?? "";
 
 const allowedOrigins = [
@@ -36,6 +37,53 @@ function getCorsHeaders(req: Request) {
       "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   };
+}
+
+async function findWorkflowRunId(dispatchId: string | null): Promise<string | null> {
+  if (!dispatchId || !GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
+    return null;
+  }
+
+  try {
+    const workflowRunsUrl =
+      `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW_ID}/runs?per_page=50&event=workflow_dispatch`;
+
+    const response = await fetch(workflowRunsUrl, {
+      headers: {
+        "Authorization": `token ${GITHUB_TOKEN}`,
+        "Accept": "application/vnd.github.v3+json",
+      },
+    });
+
+    if (!response.ok) {
+      console.error("Failed to list workflow runs:", response.status, await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    const runs = data.workflow_runs || [];
+
+    const normalizedDispatchId = dispatchId.toLowerCase();
+
+    const matchingRun = runs.find((run: any) => {
+      const displayTitle = (run.display_title || "").toLowerCase();
+      const name = (run.name || "").toLowerCase();
+      const headCommitMsg = (run.head_commit?.message || "").toLowerCase();
+      return (
+        displayTitle.includes(normalizedDispatchId) ||
+        name.includes(normalizedDispatchId) ||
+        headCommitMsg.includes(normalizedDispatchId)
+      );
+    });
+
+    if (matchingRun) {
+      return String(matchingRun.id);
+    }
+  } catch (error) {
+    console.error("Error searching for workflow run:", error);
+  }
+
+  return null;
 }
 
 serve(async (req: Request) => {
@@ -213,9 +261,22 @@ serve(async (req: Request) => {
     }
 
     // If still in progress, check GitHub Actions status and get detailed progress
-    if (backupEntry.workflow_run_id) {
-      const workflowUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${backupEntry.workflow_run_id}`;
-      const jobsUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${backupEntry.workflow_run_id}/jobs`;
+    let workflowRunId = backupEntry.workflow_run_id;
+
+    if (!workflowRunId) {
+      workflowRunId = await findWorkflowRunId(dispatchId);
+      if (workflowRunId) {
+        // Update DB so subsequent calls are faster
+        await supabase
+          .from("backup_history")
+          .update({ workflow_run_id: workflowRunId })
+          .eq("id", backupEntry.id);
+      }
+    }
+
+    if (workflowRunId) {
+      const workflowUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${workflowRunId}`;
+      const jobsUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/runs/${workflowRunId}/jobs`;
 
       try {
         const [workflowResponse, jobsResponse] = await Promise.all([
@@ -259,39 +320,59 @@ serve(async (req: Request) => {
               { keywords: ["update", "backup_history"], progress: 95, name: "Update backup history" },
             ];
             
+            const matchesKeywords = (text: string | null | undefined, keywords: string[]) => {
+              if (!text) return false;
+              const normalized = text.toLowerCase();
+              return keywords.every((keyword) => normalized.includes(keyword));
+            };
+            
             // Find completed and in-progress steps
             let highestCompletedProgress = 10;
             let inProgressStep = null;
             
             for (const job of jobs) {
-              const jobName = (job.name || "").toLowerCase();
-              
-              if (job.status === "completed") {
-                // Find matching step
-                for (const step of workflowSteps) {
-                  const matches = step.keywords.every(keyword => jobName.includes(keyword));
-                  if (matches) {
-                    highestCompletedProgress = Math.max(highestCompletedProgress, step.progress);
-                    currentStep = step.name;
-                    break;
+              const jobSteps = job.steps || [];
+
+              if (jobSteps.length > 0) {
+                for (const jobStep of jobSteps) {
+                  for (const step of workflowSteps) {
+                    if (matchesKeywords(jobStep.name, step.keywords)) {
+                      if (jobStep.status === "completed") {
+                        highestCompletedProgress = Math.max(highestCompletedProgress, step.progress);
+                        currentStep = step.name;
+                      } else if (jobStep.status === "in_progress" || jobStep.status === "queued") {
+                        const stepIndex = workflowSteps.findIndex((s) => s.name === step.name);
+                        const nextStep = workflowSteps[stepIndex + 1];
+                        let newProgress = step.progress;
+                        if (nextStep) {
+                          newProgress = step.progress + (nextStep.progress - step.progress) * 0.6;
+                        }
+                        progressPercent = Math.max(progressPercent, newProgress);
+                        currentStep = `${step.name} (in progress)`;
+                        inProgressStep = step;
+                      }
+                      break;
+                    }
                   }
                 }
-              } else if (job.status === "in_progress" || job.status === "queued") {
-                // Find matching in-progress step
-                for (const step of workflowSteps) {
-                  const matches = step.keywords.every(keyword => jobName.includes(keyword));
-                  if (matches) {
-                    // If step is in progress, show progress between current and next step
-                    const stepIndex = workflowSteps.findIndex(s => s.name === step.name);
+              } else {
+                const jobName = job.name || "";
+                const matchingStep = workflowSteps.find((step) => matchesKeywords(jobName, step.keywords));
+
+                if (matchingStep) {
+                  if (job.status === "completed") {
+                    highestCompletedProgress = Math.max(highestCompletedProgress, matchingStep.progress);
+                    currentStep = matchingStep.name;
+                  } else if (job.status === "in_progress" || job.status === "queued") {
+                    const stepIndex = workflowSteps.findIndex((s) => s.name === matchingStep.name);
                     const nextStep = workflowSteps[stepIndex + 1];
+                    let newProgress = matchingStep.progress;
                     if (nextStep) {
-                      progressPercent = step.progress + (nextStep.progress - step.progress) * 0.6; // 60% through current step
-                    } else {
-                      progressPercent = step.progress;
+                      newProgress = matchingStep.progress + (nextStep.progress - matchingStep.progress) * 0.6;
                     }
-                    currentStep = step.name + " (in progress)";
-                    inProgressStep = step;
-                    break;
+                    progressPercent = Math.max(progressPercent, newProgress);
+                    currentStep = `${matchingStep.name} (in progress)`;
+                    inProgressStep = matchingStep;
                   }
                 }
               }
@@ -365,11 +446,14 @@ serve(async (req: Request) => {
               }
             }
 
-            // Workflow completed but backup_history not updated yet - wait a bit
+            // ✅ FIX: Workflow completed but backup_history not updated yet - return 100% progress
+            // This ensures the UI shows completion even if database update is delayed
             return new Response(
               JSON.stringify({
-                status: "in_progress",
+                status: "in_progress", // Still "in_progress" until backup_history updates
                 message: "Workflow completed, waiting for database update...",
+                progress: 100, // ✅ FIX: Show 100% progress when workflow completes
+                current_step: "Finalizing backup",
                 backup_id: backupEntry.id,
               }),
               {

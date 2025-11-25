@@ -170,19 +170,42 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     const updateProgressForBackups = async () => {
       const currentInProgress = history.filter(item => item.status === "in_progress");
       
+      // ✅ FIX: Track if any backup status changed to completed/failed
+      let shouldRefreshHistory = false;
+      
       for (const item of currentInProgress) {
         // ✅ FIXED: Get real progress from API instead of estimating
         if (item.dispatch_id) {
           try {
             const status = await getBackupStatus(item.dispatch_id);
-            if (status.progress !== undefined) {
+            
+            // ✅ FIX: If backup completed or failed, set progress to 100% and refresh history
+            if (status.status === "success" || status.status === "failed") {
+              setInProgressProgress(prev => ({
+                ...prev,
+                [item.id]: 100, // Set to 100% when complete
+              }));
+              shouldRefreshHistory = true; // Refresh history to update status
+            } else if (status.progress !== undefined) {
+              // ✅ FIX: Update progress for in-progress backups, including when workflow completes (progress: 100)
               setInProgressProgress(prev => {
                 const currentProgress = prev[item.id] || 10;
-                // Only update if progress changed significantly (avoid unnecessary re-renders)
-                if (Math.abs(currentProgress - status.progress!) >= 1) {
+                const newProgress = status.progress!;
+                
+                // Always update if progress is 100% (workflow completed)
+                if (newProgress >= 100) {
+                  shouldRefreshHistory = true; // Refresh history when we see 100% progress
                   return {
                     ...prev,
-                    [item.id]: status.progress!,
+                    [item.id]: 100,
+                  };
+                }
+                
+                // Only update if progress changed significantly (avoid unnecessary re-renders)
+                if (Math.abs(currentProgress - newProgress) >= 1) {
+                  return {
+                    ...prev,
+                    [item.id]: newProgress,
                   };
                 }
                 return prev;
@@ -209,35 +232,53 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
         }
       }
 
-      // If no more in-progress items, stop polling and clear progress
+      // ✅ FIX: Refresh history if any backup completed/failed
+      if (shouldRefreshHistory) {
+        console.log("[Backup] Backup status changed, refreshing history...");
+        loadHistory();
+      }
+
+      // ✅ FIX: Clear progress for items that are no longer in progress (completed/failed/cancelled)
+      const allBackupIds = new Set(history.map(item => item.id));
+      const completedBackupIds = new Set(
+        history
+          .filter(item => item.status === "success" || item.status === "failed" || item.status === "cancelled")
+          .map(item => item.id)
+      );
+      
+      setInProgressProgress(prev => {
+        const updated = { ...prev };
+        // Remove progress for completed/failed/cancelled backups
+        completedBackupIds.forEach(id => {
+          delete updated[id];
+        });
+        // Also remove progress for backups that no longer exist in history
+        Object.keys(updated).forEach(id => {
+          if (!allBackupIds.has(id)) {
+            delete updated[id];
+          }
+        });
+        return updated;
+      });
+
+      // If no more in-progress items, stop polling
       if (currentInProgress.length === 0) {
         if (pollingIntervalRef.current) {
           clearInterval(pollingIntervalRef.current);
           pollingIntervalRef.current = null;
           hasStartedPollingRef.current = false;
         }
-        // Clear progress for items that are no longer in progress
-        setInProgressProgress(prev => {
-          const updated = { ...prev };
-          const inProgressIds = new Set(currentInProgress.map(item => item.id));
-          Object.keys(updated).forEach(id => {
-            if (!inProgressIds.has(id)) {
-              delete updated[id];
-            }
-          });
-          return updated;
-        });
       }
     };
 
     // Update progress immediately
     updateProgressForBackups();
     
-    // ✅ FIXED: Update progress more frequently for real-time updates
-    // Then update progress every 3 seconds (without refreshing history)
+    // ✅ FIX: Update progress more frequently for real-time updates (especially when backup is fast)
+    // Update every 2 seconds to catch fast backups (like 1-minute backups)
     pollingIntervalRef.current = setInterval(() => {
       updateProgressForBackups();
-    }, 3000);
+    }, 2000);
 
     return () => {
       if (pollingIntervalRef.current) {
@@ -588,11 +629,19 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           
           // ✅ FIXED: Use real progress from API if available
           if (status.progress !== undefined || status.current_step) {
+            const newProgress = status.progress !== undefined ? status.progress : manualBackupProgress.progress;
             setManualBackupProgress((prev) => ({
               ...prev,
-              progress: status.progress !== undefined ? status.progress : prev.progress,
+              progress: newProgress,
               currentStep: status.current_step || prev.currentStep,
             }));
+            
+            // ✅ FIX: If progress is 100%, the workflow is done (even if backup_history hasn't updated yet)
+            // Poll more frequently to catch the final status update
+            if (newProgress >= 100 && status.status === "in_progress") {
+              console.log("[Backup] Progress reached 100% - workflow completed, waiting for final status...");
+              // Continue with shorter delay to catch the final status
+            }
           }
           
           // Store backup_id when we get it
@@ -632,19 +681,24 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             throw new Error(status.error || "Backup failed. Check GitHub Actions logs for details.");
           } else if (status.status === "in_progress" || status.status === "pending") {
             // ✅ OPTIMIZED: Exponential backoff - start fast, slow down over time
-            // First 20 attempts: 1s, next 30: 2s, next 50: 5s, rest: 10s
-            let pollDelay = INITIAL_POLL_INTERVAL_MS;
-            if (pollAttempts > 20) {
-              pollDelay = 2000; // 2 seconds
-            }
-            if (pollAttempts > 50) {
-              pollDelay = 5000; // 5 seconds
-            }
-            if (pollAttempts > 100) {
-              pollDelay = MAX_POLL_INTERVAL_MS; // 10 seconds
+            // If progress is 100%, use shorter delay (workflow is done, just waiting for DB update)
+            const isWorkflowComplete = status.progress !== undefined && status.progress >= 100;
+            let pollDelay = isWorkflowComplete ? 1000 : INITIAL_POLL_INTERVAL_MS; // 1s if workflow done, otherwise normal
+            
+            if (!isWorkflowComplete) {
+              // Normal exponential backoff only if workflow not complete
+              if (pollAttempts > 20) {
+                pollDelay = 2000; // 2 seconds
+              }
+              if (pollAttempts > 50) {
+                pollDelay = 5000; // 5 seconds
+              }
+              if (pollAttempts > 100) {
+                pollDelay = MAX_POLL_INTERVAL_MS; // 10 seconds
+              }
             }
             
-            console.log(`[Backup] Still in progress (${status.status}), polling again in ${pollDelay}ms... (attempt ${pollAttempts})`);
+            console.log(`[Backup] Still in progress (${status.status}, progress: ${status.progress || 'N/A'}%), polling again in ${pollDelay}ms... (attempt ${pollAttempts})`);
             await new Promise((resolve) => setTimeout(resolve, pollDelay));
             return pollStatus();
           } else {
@@ -1228,7 +1282,7 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   };
 
   // ✅ NEW: Auto-download handler for automatic backups
-  const handleAutoDownload = async (backupId: string, s3Key: string | null) => {
+  const handleAutoDownload = async (_backupId: string, s3Key: string | null) => {
     if (!s3Key || !sharingConfig.autoDownload) return;
     
     try {
@@ -1282,8 +1336,11 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   }, [sharingConfig.autoDownload]);
 
   const getStatusBadge = (status: BackupHistoryItem["status"], backupId?: string) => {
-    // ✅ SYNCED: Use same progress calculation as manual backup
-    const progress = backupId ? (inProgressProgress[backupId] || (manualBackupProgress.backupId === backupId ? manualBackupProgress.progress : 10)) : 10;
+    // ✅ SYNCED: Use same progress calculation as manual backup (only for in_progress)
+    // For completed/failed backups, progress is not shown (they show status badges instead)
+    const progress = (status === "in_progress" && backupId) 
+      ? (inProgressProgress[backupId] || (manualBackupProgress.backupId === backupId ? manualBackupProgress.progress : 10)) 
+      : 10;
     
     switch (status) {
       case "success":
