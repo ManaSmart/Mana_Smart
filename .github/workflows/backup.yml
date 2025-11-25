@@ -417,7 +417,7 @@ jobs:
                 # Exit with error for other issues (not network)
                 exit 1
               fi
-            }
+            fi
           
           # Final check - if file doesn't exist or is empty, it's an error
           if [ -f backup/db/backup.sql ] && [ -s backup/db/backup.sql ]; then
