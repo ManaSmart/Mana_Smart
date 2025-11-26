@@ -1073,78 +1073,85 @@ jobs:
           BACKUP_SIZE="${{ env.BACKUP_SIZE }}"
           DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
           WORKFLOW_RUN_ID="${{ github.run_id }}"
+          SUPABASE_URL="${{ secrets.VITE_SUPABASE_URL }}"
+          BACKUP_API_KEY="${{ secrets.BACKUP_API_KEY }}"
           
           # Get backup_id from dispatch_id first
           echo "🔍 Finding backup_id for dispatch_id: $DISPATCH_ID"
-          node --input-type=commonjs -e "
+          
+          # Write Node.js script to temporary file to avoid shell parsing issues
+          cat > /tmp/find_backup_id.js << 'NODE_SCRIPT'
           const { createClient } = require('@supabase/supabase-js');
           
-          const supabaseUrl = process.env.SUPABASE_URL;
-          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-          const dispatchId = process.env.DISPATCH_ID;
-          
-          if (!supabaseUrl || !supabaseKey || !dispatchId) {
-            console.error('✗ Missing required variables');
-            process.exit(1);
-          }
-          
-          const cleanUrl = supabaseUrl.replace(/\/$/, '');
-          const supabase = createClient(cleanUrl, supabaseKey);
-          
-          supabase
-            .from('backup_history')
-            .select('id')
-            .eq('dispatch_id', dispatchId)
-            .single()
-            .then(({ data, error }) => {
-              if (error || !data) {
-                console.error('✗ Failed to find backup by dispatch_id:', error?.message);
+          (async () => {
+            try {
+              const supabaseUrl = process.env.SUPABASE_URL;
+              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+              const dispatchId = process.env.DISPATCH_ID;
+              
+              if (!supabaseUrl || !supabaseKey || !dispatchId) {
+                console.error('✗ Missing required variables');
                 process.exit(1);
               }
-              console.log('BACKUP_ID=' + data.id);
-            })
-            .catch(err => {
+              
+              const cleanUrl = supabaseUrl.replace(/\/$/, '');
+              const supabase = createClient(cleanUrl, supabaseKey);
+              
+              const { data, error } = await supabase
+                .from('backup_history')
+                .select('id')
+                .eq('dispatch_id', dispatchId)
+                .single();
+              
+              if (error || !data) {
+                console.error('✗ Failed to find backup by dispatch_id:', error?.message || 'Not found');
+                process.exit(1);
+              }
+              
+              console.log(data.id);
+            } catch (err) {
               console.error('✗ Error finding backup:', err.message);
               process.exit(1);
-            });
-          " > backup_id_output.txt
+            }
+          })();
+          NODE_SCRIPT
           
-          BACKUP_ID=\$(grep '^BACKUP_ID=' backup_id_output.txt | cut -d'=' -f2)
-          rm backup_id_output.txt
+          BACKUP_ID=$(node /tmp/find_backup_id.js)
+          rm -f /tmp/find_backup_id.js
           
-          if [ -z "\$BACKUP_ID" ]; then
+          if [ -z "$BACKUP_ID" ] || [ "$BACKUP_ID" = "" ]; then
             echo "❌ ERROR: Could not find backup_id for dispatch_id: $DISPATCH_ID"
             exit 1
           fi
           
-          echo "✓ Found backup_id: \$BACKUP_ID"
+          echo "✓ Found backup_id: $BACKUP_ID"
           echo "📤 Calling update-backup edge function..."
-          echo "  - backup_id: \$BACKUP_ID"
-          echo "  - s3_key: \$S3_KEY"
-          echo "  - size_bytes: \$BACKUP_SIZE"
-          echo "  - workflow_run_id: \$WORKFLOW_RUN_ID"
+          echo "  - backup_id: $BACKUP_ID"
+          echo "  - s3_key: $S3_KEY"
+          echo "  - size_bytes: $BACKUP_SIZE"
+          echo "  - workflow_run_id: $WORKFLOW_RUN_ID"
           
           # Call update-backup edge function
-          RESPONSE=\$(curl -s -w "\n%{http_code}" -X POST "\$SUPABASE_URL/functions/v1/update-backup" \\
-            -H "Authorization: Bearer \$BACKUP_API_KEY" \\
-            -H "Content-Type: application/json" \\
-            -d '{
-              "backup_id": "'"\$BACKUP_ID"'",
-              "s3_key": "'"\$S3_KEY"'",
-              "size_bytes": '\$BACKUP_SIZE',
-              "workflow_run_id": "'"\$WORKFLOW_RUN_ID"'"
-            }')
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/functions/v1/update-backup" \
+            -H "Authorization: Bearer $BACKUP_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"backup_id\": \"$BACKUP_ID\",
+              \"s3_key\": \"$S3_KEY\",
+              \"size_bytes\": $BACKUP_SIZE,
+              \"workflow_run_id\": \"$WORKFLOW_RUN_ID\"
+            }")
           
-          HTTP_CODE=\$(echo "\$RESPONSE" | tail -n1)
-          BODY=\$(echo "\$RESPONSE" | sed '\$d')
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
           
-          if [ "\$HTTP_CODE" -eq 200 ]; then
+          if [ "$HTTP_CODE" -eq 200 ]; then
             echo "✓ Backup history updated successfully via edge function"
-            echo "\$BODY" | jq '.' 2>/dev/null || echo "\$BODY"
+            echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
           else
             echo "❌ ERROR: Failed to update backup history"
-            echo "HTTP Status: \$HTTP_CODE"
-            echo "Response: \$BODY"
+            echo "HTTP Status: $HTTP_CODE"
+            echo "Response: $BODY"
             exit 1
           fi
           
