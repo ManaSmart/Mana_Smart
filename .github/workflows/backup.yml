@@ -1060,8 +1060,7 @@ jobs:
 
       - name: Update backup_history after S3 upload
         # ✅ CRITICAL: This step MUST run to update the database
-        # It runs even if previous steps had warnings (but not if they failed)
-        if: always()
+        # Remove 'if: always()' to ensure it only runs if upload succeeded
         run: |
           echo "=========================================="
           echo "🔧 BACKUP UPDATE STEP - STARTING"
@@ -1177,11 +1176,41 @@ jobs:
             echo "   - status: success"
             echo "   - s3_key: $S3_KEY"
             echo "   - finished_at: $FINISHED_AT"
+            
+            # Step 3: Verify the update actually worked
+            echo ""
+            echo "🔍 Step 3: Verifying update..."
+            sleep 2  # Give DB a moment to update
+            
+            VERIFY_RESPONSE=$(curl -s -X GET \
+              "${SUPABASE_REST_URL}?id=eq.${BACKUP_ID}&select=id,status,s3_key,finished_at" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Content-Type: application/json" 2>&1)
+            
+            echo "  Verification response: $VERIFY_RESPONSE"
+            
+            if echo "$VERIFY_RESPONSE" | grep -q '"status":"success"'; then
+              echo "✅ VERIFIED: Database shows status=success"
+            else
+              echo "⚠ WARNING: Database might not show success yet (could be replication delay)"
+            fi
+            
+            if [ -n "$S3_KEY" ] && echo "$VERIFY_RESPONSE" | grep -q "$S3_KEY"; then
+              echo "✅ VERIFIED: Database shows s3_key"
+            else
+              echo "⚠ WARNING: s3_key might not be set yet"
+            fi
           else
             echo ""
             echo "❌ ERROR: Update failed (HTTP $UPDATE_HTTP_CODE)"
             echo "❌ Response: $UPDATE_BODY"
             echo "❌ This is CRITICAL - backup file is in S3 but DB not updated!"
+            echo ""
+            echo "🔧 DEBUG INFO:"
+            echo "   BACKUP_ID: $BACKUP_ID"
+            echo "   UPDATE_URL: $UPDATE_URL"
+            echo "   UPDATE_JSON: $UPDATE_JSON"
             exit 1
           fi
           

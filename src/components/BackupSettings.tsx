@@ -534,6 +534,49 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             return;
           }
           
+          // ✅ FALLBACK: After 10 checks (30 seconds), try to manually trigger DB update
+          // This handles the case where GitHub Actions workflow completed but DB update step failed
+          if (checkCount >= 10 && checkCount % 10 === 0) {
+            console.log(`[Backup] Workflow completed but DB not updated after ${checkCount} checks. Attempting manual update...`);
+            
+            try {
+              // Try to get the backup from history to see if it has an s3_key
+              const history = await getBackupHistory(10);
+              const backup = history.find(b => 
+                b.dispatch_id === dispatchId || 
+                (backupId && b.id === backupId)
+              );
+              
+              if (backup) {
+                // If backup has s3_key but status is still in_progress, try to update it
+                if (backup.s3_key && backup.status === "in_progress") {
+                  console.log("[Backup] Found backup with s3_key but status still in_progress. Attempting to update via API...");
+                  
+                  try {
+                    // Try to call the update-backup API
+                    const { updateBackup } = await import("../lib/backupApi");
+                    await updateBackup(
+                      backup.id,
+                      dispatchId,
+                      backup.s3_key,
+                      "success",
+                      backup.size_bytes || null,
+                      null
+                    );
+                    console.log("[Backup] Successfully updated backup status via API");
+                    await loadHistory();
+                    return; // Exit monitoring, update should be reflected
+                  } catch (updateError) {
+                    console.warn("[Backup] Failed to update backup via API:", updateError);
+                    // Continue monitoring
+                  }
+                }
+              }
+            } catch (error) {
+              console.warn("[Backup] Error attempting manual update:", error);
+            }
+          }
+          
           // Still waiting for DB update (only log every 5th check)
           if (checkCount % 5 === 0) {
             console.log(`[Backup] Background check: workflow completed (100%) but status still in_progress, waiting for DB update... (check ${checkCount})`);
