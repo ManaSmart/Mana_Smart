@@ -1134,83 +1134,94 @@ jobs:
           
           echo "✓ Found backup_id: $BACKUP_ID"
           
-          # Step 2: Update backup_history
+          # Step 2: Update backup_history using Node.js (same method as edge functions)
           echo ""
-          echo "📝 Step 2: Updating backup_history..."
+          echo "📝 Step 2: Updating backup_history using Supabase client..."
           
-          FINISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # Use Node.js with Supabase client to ensure RLS is bypassed correctly
+          cd "$GITHUB_WORKSPACE" || true
           
-          # Build JSON payload carefully
-          UPDATE_JSON="{"
-          [ -n "$S3_KEY" ] && UPDATE_JSON="${UPDATE_JSON}\"s3_key\":\"${S3_KEY}\","
-          UPDATE_JSON="${UPDATE_JSON}\"status\":\"success\","
-          UPDATE_JSON="${UPDATE_JSON}\"finished_at\":\"${FINISHED_AT}\","
-          UPDATE_JSON="${UPDATE_JSON}\"error_text\":null"
-          [ -n "$BACKUP_SIZE" ] && [ "$BACKUP_SIZE" != "" ] && UPDATE_JSON="${UPDATE_JSON},\"size_bytes\":${BACKUP_SIZE}"
-          [ -n "$WORKFLOW_RUN_ID" ] && UPDATE_JSON="${UPDATE_JSON},\"workflow_run_id\":\"${WORKFLOW_RUN_ID}\""
-          UPDATE_JSON="${UPDATE_JSON}}"
+          UPDATE_RESULT=$(node --input-type=commonjs -e "
+          const { createClient } = require('@supabase/supabase-js');
           
-          echo "  Payload: $UPDATE_JSON"
+          (async () => {
+            try {
+              const supabaseUrl = process.env.SUPABASE_URL;
+              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+              const backupId = process.env.BACKUP_ID;
+              const s3Key = process.env.S3_KEY;
+              const sizeBytes = process.env.BACKUP_SIZE ? parseInt(process.env.BACKUP_SIZE, 10) : null;
+              const workflowRunId = process.env.WORKFLOW_RUN_ID;
+              
+              if (!supabaseUrl || !supabaseKey || !backupId) {
+                console.error('✗ Missing required variables');
+                process.exit(1);
+              }
+              
+              const cleanUrl = supabaseUrl.replace(/\/$/, '');
+              const supabase = createClient(cleanUrl, supabaseKey);
+              
+              const updateData = {
+                status: 'success',
+                finished_at: new Date().toISOString(),
+                error_text: null,
+              };
+              
+              if (s3Key) {
+                updateData.s3_key = s3Key;
+              }
+              if (sizeBytes !== null && !isNaN(sizeBytes)) {
+                updateData.size_bytes = sizeBytes;
+              }
+              if (workflowRunId) {
+                updateData.workflow_run_id = workflowRunId;
+              }
+              
+              console.log('  Updating backup:', backupId);
+              console.log('  Update data:', JSON.stringify(updateData, null, 2));
+              
+              const { data, error } = await supabase
+                .from('backup_history')
+                .update(updateData)
+                .eq('id', backupId)
+                .select()
+                .single();
+              
+              if (error) {
+                console.error('✗ Update failed:', error.message);
+                console.error('  Error code:', error.code);
+                console.error('  Error details:', error.details);
+                process.exit(1);
+              }
+              
+              if (!data) {
+                console.error('✗ Update returned no data');
+                process.exit(1);
+              }
+              
+              console.log('✓ Update successful');
+              console.log(JSON.stringify(data, null, 2));
+            } catch (err) {
+              console.error('✗ Update error:', err.message);
+              process.exit(1);
+            }
+          })();
+          " 2>&1)
           
-          # Perform update
-          UPDATE_URL="${SUPABASE_REST_URL}?id=eq.${BACKUP_ID}"
-          echo "  Updating: ${UPDATE_URL:0:100}..."
+          echo "$UPDATE_RESULT"
           
-          UPDATE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X PATCH \
-            "$UPDATE_URL" \
-            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=representation" \
-            -d "$UPDATE_JSON" 2>&1)
-          
-          UPDATE_HTTP_CODE=$(echo "$UPDATE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2 || echo "000")
-          UPDATE_BODY=$(echo "$UPDATE_RESPONSE" | sed '/HTTP_CODE:/d' | head -1)
-          
-          echo "  HTTP Code: $UPDATE_HTTP_CODE"
-          echo "  Response: $UPDATE_BODY"
-          
-          if [ "$UPDATE_HTTP_CODE" -ge 200 ] && [ "$UPDATE_HTTP_CODE" -lt 300 ]; then
+          if echo "$UPDATE_RESULT" | grep -q "✓ Update successful"; then
             echo ""
-            echo "✅ SUCCESS: Backup history updated!"
-            echo "   - status: success"
-            echo "   - s3_key: $S3_KEY"
-            echo "   - finished_at: $FINISHED_AT"
+            echo "✅ SUCCESS: Backup history updated via Supabase client!"
             
-            # Step 3: Verify the update actually worked
-            echo ""
-            echo "🔍 Step 3: Verifying update..."
-            sleep 2  # Give DB a moment to update
-            
-            VERIFY_RESPONSE=$(curl -s -X GET \
-              "${SUPABASE_REST_URL}?id=eq.${BACKUP_ID}&select=id,status,s3_key,finished_at" \
-              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "Content-Type: application/json" 2>&1)
-            
-            echo "  Verification response: $VERIFY_RESPONSE"
-            
-            if echo "$VERIFY_RESPONSE" | grep -q '"status":"success"'; then
-              echo "✅ VERIFIED: Database shows status=success"
-            else
-              echo "⚠ WARNING: Database might not show success yet (could be replication delay)"
-            fi
-            
-            if [ -n "$S3_KEY" ] && echo "$VERIFY_RESPONSE" | grep -q "$S3_KEY"; then
-              echo "✅ VERIFIED: Database shows s3_key"
-            else
-              echo "⚠ WARNING: s3_key might not be set yet"
-            fi
+            # Extract the updated data from output
+            UPDATED_DATA=$(echo "$UPDATE_RESULT" | grep -A 20 "✓ Update successful" | tail -n +2)
+            echo "$UPDATED_DATA"
           else
             echo ""
-            echo "❌ ERROR: Update failed (HTTP $UPDATE_HTTP_CODE)"
-            echo "❌ Response: $UPDATE_BODY"
+            echo "❌ ERROR: Update failed"
+            echo "❌ Output: $UPDATE_RESULT"
             echo "❌ This is CRITICAL - backup file is in S3 but DB not updated!"
-            echo ""
-            echo "🔧 DEBUG INFO:"
-            echo "   BACKUP_ID: $BACKUP_ID"
-            echo "   UPDATE_URL: $UPDATE_URL"
-            echo "   UPDATE_JSON: $UPDATE_JSON"
             exit 1
           fi
           
