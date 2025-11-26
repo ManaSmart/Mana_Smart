@@ -1061,6 +1061,8 @@ jobs:
       - name: Update backup_history via Edge Function
         # ✅ NEW: Use update-backup edge function instead of direct Supabase update
         # This ensures proper validation, idempotency, and error handling
+        # Falls back to direct Supabase update if edge function fails
+        # Note: Environment variables are inherited from job-level env
         run: |
           # ✅ FIX: Check if upload completed
           if [ "${{ env.UPLOAD_COMPLETED }}" != "true" ]; then
@@ -1069,12 +1071,15 @@ jobs:
             exit 1
           fi
           
+          # Get variables from environment (set at job level or from previous steps)
           S3_KEY="${{ env.S3_KEY }}"
           BACKUP_SIZE="${{ env.BACKUP_SIZE }}"
-          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          DISPATCH_ID="$DISPATCH_ID"
           WORKFLOW_RUN_ID="${{ github.run_id }}"
-          SUPABASE_URL="${{ secrets.VITE_SUPABASE_URL }}"
-          BACKUP_API_KEY="${{ secrets.BACKUP_API_KEY }}"
+          
+          # These are available from job-level env
+          # SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are already set
+          # BACKUP_API_KEY is optional (from job-level env if set)
           
           # Get backup_id from dispatch_id first
           echo "🔍 Finding backup_id for dispatch_id: $DISPATCH_ID"
@@ -1116,43 +1121,140 @@ jobs:
           })();
           NODE_SCRIPT
           
-          BACKUP_ID=$(node /tmp/find_backup_id.js)
+          BACKUP_ID=$(SUPABASE_URL="$SUPABASE_URL" SUPABASE_SERVICE_ROLE_KEY="${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}" DISPATCH_ID="$DISPATCH_ID" node /tmp/find_backup_id.js)
           rm -f /tmp/find_backup_id.js
           
           if [ -z "$BACKUP_ID" ] || [ "$BACKUP_ID" = "" ]; then
             echo "❌ ERROR: Could not find backup_id for dispatch_id: $DISPATCH_ID"
+            echo "❌ This means the backup entry was not created in backup_history"
             exit 1
           fi
           
           echo "✓ Found backup_id: $BACKUP_ID"
-          echo "📤 Calling update-backup edge function..."
+          echo "📤 Preparing to update backup_history..."
           echo "  - backup_id: $BACKUP_ID"
           echo "  - s3_key: $S3_KEY"
           echo "  - size_bytes: $BACKUP_SIZE"
           echo "  - workflow_run_id: $WORKFLOW_RUN_ID"
           
-          # Call update-backup edge function
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/functions/v1/update-backup" \
-            -H "Authorization: Bearer $BACKUP_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"backup_id\": \"$BACKUP_ID\",
-              \"s3_key\": \"$S3_KEY\",
-              \"size_bytes\": $BACKUP_SIZE,
-              \"workflow_run_id\": \"$WORKFLOW_RUN_ID\"
-            }")
-          
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          
-          if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✓ Backup history updated successfully via edge function"
-            echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
+          # Check if BACKUP_API_KEY is set
+          if [ -z "$BACKUP_API_KEY" ] || [ "$BACKUP_API_KEY" = "" ]; then
+            echo "⚠ WARNING: BACKUP_API_KEY not set, using direct Supabase update (fallback)"
+            USE_EDGE_FUNCTION=false
           else
-            echo "❌ ERROR: Failed to update backup history"
-            echo "HTTP Status: $HTTP_CODE"
-            echo "Response: $BODY"
-            exit 1
+            echo "✓ BACKUP_API_KEY is set, attempting edge function call"
+            USE_EDGE_FUNCTION=true
+          fi
+          
+          # Try edge function first if API key is available
+          if [ "$USE_EDGE_FUNCTION" = "true" ]; then
+            echo "📡 Calling edge function: $SUPABASE_URL/functions/v1/update-backup"
+            
+            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/functions/v1/update-backup" \
+              -H "Authorization: Bearer $BACKUP_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"backup_id\": \"$BACKUP_ID\",
+                \"s3_key\": \"$S3_KEY\",
+                \"size_bytes\": $BACKUP_SIZE,
+                \"workflow_run_id\": \"$WORKFLOW_RUN_ID\"
+              }" 2>&1)
+            
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            
+            echo "📡 Edge function response HTTP Code: $HTTP_CODE"
+            echo "📡 Edge function response Body: $BODY"
+            
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✓ Backup history updated successfully via edge function"
+              echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
+              EDGE_FUNCTION_SUCCESS=true
+            else
+              echo "⚠ WARNING: Edge function call failed (HTTP $HTTP_CODE)"
+              echo "⚠ Response: $BODY"
+              EDGE_FUNCTION_SUCCESS=false
+            fi
+          else
+            EDGE_FUNCTION_SUCCESS=false
+          fi
+          
+          # Fallback to direct Supabase update if edge function failed or not available
+          if [ "$EDGE_FUNCTION_SUCCESS" != "true" ]; then
+            echo "📝 Using direct Supabase update (fallback method)..."
+            
+            # Fallback: Direct Supabase update
+            SUPABASE_URL="$SUPABASE_URL" \
+            SUPABASE_SERVICE_ROLE_KEY="${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}" \
+            BACKUP_ID="$BACKUP_ID" \
+            S3_KEY="$S3_KEY" \
+            BACKUP_SIZE="$BACKUP_SIZE" \
+            WORKFLOW_RUN_ID="$WORKFLOW_RUN_ID" \
+            node --input-type=commonjs -e "
+            const { createClient } = require('@supabase/supabase-js');
+            
+            (async () => {
+              try {
+                const supabaseUrl = process.env.SUPABASE_URL;
+                const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+                const backupId = process.env.BACKUP_ID;
+                const s3Key = process.env.S3_KEY;
+                const sizeBytes = process.env.BACKUP_SIZE ? parseInt(process.env.BACKUP_SIZE, 10) : null;
+                const workflowRunId = process.env.WORKFLOW_RUN_ID;
+                
+                if (!supabaseUrl || !supabaseKey || !backupId || !s3Key) {
+                  console.error('✗ Missing required variables for fallback update');
+                  process.exit(1);
+                }
+                
+                const cleanUrl = supabaseUrl.replace(/\/$/, '');
+                const supabase = createClient(cleanUrl, supabaseKey);
+                
+                const updateData = {
+                  s3_key: s3Key,
+                  status: 'success',
+                  finished_at: new Date().toISOString(),
+                  error_text: null,
+                };
+                
+                if (sizeBytes !== null && !isNaN(sizeBytes)) {
+                  updateData.size_bytes = sizeBytes;
+                }
+                
+                if (workflowRunId) {
+                  updateData.workflow_run_id = workflowRunId;
+                }
+                
+                const { data, error } = await supabase
+                  .from('backup_history')
+                  .update(updateData)
+                  .eq('id', backupId)
+                  .select()
+                  .single();
+                
+                if (error) {
+                  console.error('✗ Fallback update failed:', error.message);
+                  process.exit(1);
+                }
+                
+                console.log('✓ Fallback update successful');
+                console.log(JSON.stringify(data, null, 2));
+              } catch (err) {
+                console.error('✗ Fallback update error:', err.message);
+                process.exit(1);
+              }
+            })();
+            "
+            
+            FALLBACK_EXIT_CODE=$?
+            if [ $FALLBACK_EXIT_CODE -eq 0 ]; then
+              echo "✓ Backup history updated via fallback method"
+            else
+              echo "❌ ERROR: Both edge function and fallback update failed"
+              echo "❌ This is a critical error - backup file is in S3 but database was not updated"
+              echo "❌ Manual intervention required to update backup_history table"
+              exit 1
+            fi
           fi
           
           # Update system_settings_kv (keep existing logic)
