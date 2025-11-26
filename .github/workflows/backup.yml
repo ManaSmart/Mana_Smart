@@ -1222,28 +1222,57 @@ jobs:
                 console.log('  Updating backup:', backupId);
                 console.log('  Update data:', JSON.stringify(updateData, null, 2));
                 
-                const { data, error } = await supabase
+                // First, try the update without .single() to avoid the "0 rows" error
+                const { data: updateResult, error: updateError } = await supabase
                   .from('backup_history')
                   .update(updateData)
                   .eq('id', backupId)
-                  .select()
-                  .single();
+                  .select();
                 
-                if (error) {
-                  console.error('✗ Update failed:', error.message);
-                  console.error('  Error code:', error.code);
-                  console.error('  Error details:', error.details);
-                  console.error('  Error hint:', error.hint);
+                if (updateError) {
+                  console.error('✗ Update failed:', updateError.message);
+                  console.error('  Error code:', updateError.code);
+                  console.error('  Error details:', updateError.details);
+                  console.error('  Error hint:', updateError.hint);
                   process.exit(1);
                 }
                 
-                if (!data) {
-                  console.error('✗ Update returned no data');
+                console.log('  Update response:', JSON.stringify(updateResult, null, 2));
+                
+                // Verify the update worked by querying the backup again
+                console.log('  Verifying update...');
+                const { data: verifyData, error: verifyError } = await supabase
+                  .from('backup_history')
+                  .select('id, status, s3_key, finished_at')
+                  .eq('id', backupId)
+                  .single();
+                
+                if (verifyError) {
+                  console.error('✗ Verification failed:', verifyError.message);
+                  process.exit(1);
+                }
+                
+                if (!verifyData) {
+                  console.error('✗ Backup not found after update');
                   process.exit(1);
                 }
                 
                 console.log('✓ Update successful');
-                console.log(JSON.stringify(data, null, 2));
+                console.log('  Verified data:', JSON.stringify(verifyData, null, 2));
+                
+                // Check if the update actually worked
+                if (verifyData.status !== 'success') {
+                  console.error('✗ Update did not change status to success');
+                  console.error('  Current status:', verifyData.status);
+                  process.exit(1);
+                }
+                
+                if (!verifyData.s3_key) {
+                  console.error('✗ Update did not set s3_key');
+                  process.exit(1);
+                }
+                
+                console.log('✓ Update verified - status and s3_key are correct');
               } catch (err) {
                 console.error('✗ Update error:', err.message);
                 console.error('  Stack:', err.stack);
