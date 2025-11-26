@@ -1222,7 +1222,7 @@ jobs:
                 console.log('  Updating backup:', backupId);
                 console.log('  Update data:', JSON.stringify(updateData, null, 2));
                 
-                // First, try the update without .single() to avoid the "0 rows" error
+                // First, try the update without .single() to avoid the \"0 rows\" error
                 const { data: updateResult, error: updateError } = await supabase
                   .from('backup_history')
                   .update(updateData)
