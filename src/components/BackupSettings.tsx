@@ -139,9 +139,12 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     autoDownload: false,
   });
   
-  // ✅ NEW: Share dialog state
-  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  // ✅ NEW: Share dialog state - separate for email and WhatsApp
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [whatsappDialogOpen, setWhatsappDialogOpen] = useState(false);
   const [shareBackupId, setShareBackupId] = useState<string | null>(null);
+  const [emailRecipient, setEmailRecipient] = useState("");
+  const [whatsappRecipient, setWhatsappRecipient] = useState("");
   const [isSharing, setIsSharing] = useState(false);
 
   // Load initial settings and history
@@ -830,13 +833,57 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             throw new Error("Backup polling cancelled");
           }
 
-          if (status.status === "success" && status.signed_url) {
+          if (status.status === "success") {
             setManualBackupProgress((prev) => ({
               ...prev,
               progress: 100,
             }));
             console.log("[Backup] Backup completed successfully!");
-            return status.signed_url;
+            
+            // If signed_url is provided, use it
+            if (status.signed_url) {
+              return status.signed_url;
+            }
+            
+            // Otherwise, try to get it from backup_history using backup_id
+            if (status.backup_id) {
+              try {
+                console.log("[Backup] No signed_url in status, fetching from backup_history...");
+                const historyData = await getBackupHistory(10);
+                const completedBackup = historyData.find(b => b.id === status.backup_id);
+                
+                if (completedBackup && completedBackup.s3_key) {
+                  console.log("[Backup] Found backup in history, generating signed URL...");
+                  const { signed_url } = await generateSignedUrl(completedBackup.s3_key);
+                  return signed_url;
+                } else {
+                  console.warn("[Backup] Backup found in history but no s3_key available yet");
+                  // Refresh history and try one more time
+                  await loadHistory();
+                  const refreshedHistory = await getBackupHistory(10);
+                  const refreshedBackup = refreshedHistory.find(b => b.id === status.backup_id);
+                  
+                  if (refreshedBackup && refreshedBackup.s3_key) {
+                    const { signed_url } = await generateSignedUrl(refreshedBackup.s3_key);
+                    return signed_url;
+                  }
+                }
+              } catch (urlError) {
+                console.error("[Backup] Failed to generate signed URL from backup_history:", urlError);
+                // Continue to show success message even if URL generation fails
+              }
+            }
+            
+            // If we still don't have a URL, return null to indicate success but no download URL yet
+            console.log("[Backup] Backup completed successfully but no download URL available yet");
+            toast.success("Backup completed successfully! Check the backup history to download.");
+            setIsLoading(false);
+            setManualBackupProgress((prev) => ({
+              ...prev,
+              isRunning: false,
+            }));
+            await loadHistory();
+            return null;
           } else if (status.status === "failed") {
             console.error("[Backup] Backup failed:", status.error);
             // Get more details from backup_history if available
@@ -1469,33 +1516,73 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     ));
   };
 
-  // ✅ NEW: Handle sharing
-  const handleShareClick = (backupId: string) => {
+  // ✅ NEW: Handle sharing - separate handlers for email and WhatsApp
+  const handleEmailShareClick = (backupId: string) => {
     setShareBackupId(backupId);
-    setShareDialogOpen(true);
+    setEmailRecipient(sharingConfig.emailRecipient || "");
+    setEmailDialogOpen(true);
   };
 
-  const handleShare = async (method: 'email' | 'whatsapp', recipient: string) => {
-    if (!shareBackupId) return;
+  const handleWhatsAppShareClick = (backupId: string) => {
+    setShareBackupId(backupId);
+    setWhatsappRecipient(sharingConfig.whatsappRecipient || "");
+    setWhatsappDialogOpen(true);
+  };
+
+  const handleEmailShare = async () => {
+    if (!shareBackupId || !emailRecipient.trim()) {
+      toast.error('Please enter an email address');
+      return;
+    }
     
     setIsSharing(true);
     try {
-      const result = await shareBackup(shareBackupId, method, recipient);
+      const result = await shareBackup(shareBackupId, 'email', emailRecipient.trim());
       
       if (result.success) {
-        if (method === 'whatsapp' && result.whatsapp_url) {
+        toast.success(result.message || 'Email sent successfully');
+        setEmailDialogOpen(false);
+        setEmailRecipient("");
+        // Update saved email recipient
+        setSharingConfig((prev) => ({ ...prev, emailRecipient: emailRecipient.trim() }));
+      } else {
+        toast.error(result.message || 'Failed to send email');
+      }
+    } catch (error) {
+      console.error('Email share error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to send email');
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+  const handleWhatsAppShare = async () => {
+    if (!shareBackupId || !whatsappRecipient.trim()) {
+      toast.error('Please enter a phone number');
+      return;
+    }
+    
+    setIsSharing(true);
+    try {
+      const result = await shareBackup(shareBackupId, 'whatsapp', whatsappRecipient.trim());
+      
+      if (result.success) {
+        if (result.whatsapp_url) {
           window.open(result.whatsapp_url, '_blank');
           toast.success('WhatsApp share link opened');
         } else {
-          toast.success(result.message || 'Backup shared successfully');
+          toast.success(result.message || 'WhatsApp message sent successfully');
         }
-        setShareDialogOpen(false);
+        setWhatsappDialogOpen(false);
+        setWhatsappRecipient("");
+        // Update saved WhatsApp recipient
+        setSharingConfig((prev) => ({ ...prev, whatsappRecipient: whatsappRecipient.trim() }));
       } else {
-        toast.error(result.message || 'Failed to share backup');
+        toast.error(result.message || 'Failed to share via WhatsApp');
       }
     } catch (error) {
-      console.error('Share error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to share backup');
+      console.error('WhatsApp share error:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to share via WhatsApp');
     } finally {
       setIsSharing(false);
     }
@@ -2022,12 +2109,20 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                               <Download className="w-4 h-4 mr-1" />
                               Download
                             </Button>
-                            {/* ✅ NEW: Share button */}
+                            {/* ✅ NEW: Separate Email and WhatsApp share buttons */}
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleShareClick(item.id)}
-                              title="Share backup"
+                              onClick={() => handleEmailShareClick(item.id)}
+                              title="Share via Email"
+                            >
+                              <Mail className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleWhatsAppShareClick(item.id)}
+                              title="Share via WhatsApp"
                             >
                               <MessageCircle className="w-4 h-4" />
                             </Button>
@@ -2383,82 +2478,34 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
         </DialogContent>
       </Dialog>
 
-      {/* ✅ NEW: Share Backup Dialog */}
-      <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
+      {/* ✅ NEW: Email Share Dialog */}
+      <Dialog open={emailDialogOpen} onOpenChange={setEmailDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <MessageCircle className="w-5 h-5" />
-              Share Backup
+              <Mail className="w-5 h-5" />
+              Share Backup via Email
             </DialogTitle>
             <DialogDescription>
-              Share this backup via Email or WhatsApp
+              Enter the email address to send the backup download link
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-4 py-4">
-            {/* Email Sharing */}
             <div className="space-y-2">
-              <Label className="flex items-center gap-2">
-                <Mail className="w-4 h-4" />
-                Email
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  type="email"
-                  placeholder="recipient@example.com"
-                  value={sharingConfig.emailRecipient}
-                  onChange={(e) =>
-                    setSharingConfig((prev) => ({ ...prev, emailRecipient: e.target.value }))
+              <Label htmlFor="email-recipient">Email Address</Label>
+              <Input
+                id="email-recipient"
+                type="email"
+                placeholder="recipient@example.com"
+                value={emailRecipient}
+                onChange={(e) => setEmailRecipient(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && emailRecipient.trim()) {
+                    handleEmailShare();
                   }
-                  className="flex-1"
-                />
-                <Button
-                  onClick={() => handleShare('email', sharingConfig.emailRecipient)}
-                  disabled={!sharingConfig.emailRecipient || isSharing}
-                >
-                  {isSharing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Mail className="w-4 h-4 mr-2" />
-                      Send
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            {/* WhatsApp Sharing */}
-            <div className="space-y-2">
-              <Label className="flex items-center gap-2">
-                <MessageCircle className="w-4 h-4" />
-                WhatsApp
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  type="tel"
-                  placeholder="+1234567890"
-                  value={sharingConfig.whatsappRecipient}
-                  onChange={(e) =>
-                    setSharingConfig((prev) => ({ ...prev, whatsappRecipient: e.target.value }))
-                  }
-                  className="flex-1"
-                />
-                <Button
-                  onClick={() => handleShare('whatsapp', sharingConfig.whatsappRecipient)}
-                  disabled={!sharingConfig.whatsappRecipient || isSharing}
-                >
-                  {isSharing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <>
-                      <MessageCircle className="w-4 h-4 mr-2" />
-                      Share
-                    </>
-                  )}
-                </Button>
-              </div>
+                }}
+              />
             </div>
           </div>
 
@@ -2466,12 +2513,95 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             <Button
               variant="outline"
               onClick={() => {
-                setShareDialogOpen(false);
+                setEmailDialogOpen(false);
                 setShareBackupId(null);
+                setEmailRecipient("");
               }}
               disabled={isSharing}
             >
-              Close
+              Cancel
+            </Button>
+            <Button
+              onClick={handleEmailShare}
+              disabled={!emailRecipient.trim() || isSharing}
+            >
+              {isSharing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                <>
+                  <Mail className="w-4 h-4 mr-2" />
+                  Send Email
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✅ NEW: WhatsApp Share Dialog */}
+      <Dialog open={whatsappDialogOpen} onOpenChange={setWhatsappDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MessageCircle className="w-5 h-5" />
+              Share Backup via WhatsApp
+            </DialogTitle>
+            <DialogDescription>
+              Enter the phone number (with country code) to share the backup
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="whatsapp-recipient">Phone Number</Label>
+              <Input
+                id="whatsapp-recipient"
+                type="tel"
+                placeholder="+1234567890"
+                value={whatsappRecipient}
+                onChange={(e) => setWhatsappRecipient(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && whatsappRecipient.trim()) {
+                    handleWhatsAppShare();
+                  }
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Include country code (e.g., +1 for US, +44 for UK)
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setWhatsappDialogOpen(false);
+                setShareBackupId(null);
+                setWhatsappRecipient("");
+              }}
+              disabled={isSharing}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleWhatsAppShare}
+              disabled={!whatsappRecipient.trim() || isSharing}
+            >
+              {isSharing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Sharing...
+                </>
+              ) : (
+                <>
+                  <MessageCircle className="w-4 h-4 mr-2" />
+                  Share via WhatsApp
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

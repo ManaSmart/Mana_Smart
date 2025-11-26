@@ -98,23 +98,50 @@ serve(async (req: Request) => {
     }
 
     // Generate signed URL
+    // Pass user_id to generate-signed-url function for authentication
     const signedUrlResponse = await fetch(`${SUPABASE_URL}/functions/v1/generate-signed-url`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ s3_key: backup.s3_key }),
+      body: JSON.stringify({ 
+        s3_key: backup.s3_key,
+        user_id: userId 
+      }),
     });
 
     if (!signedUrlResponse.ok) {
-      return new Response(JSON.stringify({ error: "Failed to generate download URL" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
-      });
+      const errorText = await signedUrlResponse.text();
+      console.error("Failed to generate signed URL:", errorText);
+      return new Response(
+        JSON.stringify({ 
+          error: "Failed to generate download URL",
+          details: errorText 
+        }), 
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
+        }
+      );
     }
 
-    const { signed_url } = await signedUrlResponse.json();
+    const signedUrlData = await signedUrlResponse.json();
+    const { signed_url } = signedUrlData;
+
+    if (!signed_url) {
+      console.error("No signed_url in response:", signedUrlData);
+      return new Response(
+        JSON.stringify({ 
+          error: "Invalid response from generate-signed-url",
+          details: signedUrlData 
+        }), 
+        {
+          status: 500,
+          headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
+        }
+      );
+    }
 
     if (method === "email") {
       // Email sharing using Supabase Edge Function or external service

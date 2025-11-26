@@ -254,9 +254,93 @@ export async function deleteBackup(
  * @returns Pre-signed URL valid for 15 minutes
  */
 export async function generateSignedUrl(s3Key: string): Promise<{ signed_url: string }> {
-  return await callEdgeFunction<{ signed_url: string }>('generate-signed-url', {
-    body: { s3_key: s3Key },
-  });
+  const userId = getCurrentUserId();
+  
+  if (!userId) {
+    throw new Error('Authentication required. Please log in.');
+  }
+
+  // Try direct fetch first (bypasses Supabase's invoke CORS issues)
+  // This works better when CORS is configured at the function level
+  try {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error('Supabase configuration is missing. Please check your environment variables.');
+    }
+
+    const functionUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/generate-signed-url`;
+    
+    const response = await fetch(functionUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${supabaseAnonKey}`,
+        'apikey': supabaseAnonKey,
+      },
+      body: JSON.stringify({
+        s3_key: s3Key,
+        user_id: userId,
+      }),
+    });
+
+    const responseText = await response.text();
+    let responseData: any;
+    
+    try {
+      responseData = responseText ? JSON.parse(responseText) : null;
+    } catch (parseError) {
+      throw new Error(`Edge Function generate-signed-url returned invalid response: ${responseText}`);
+    }
+
+    if (!response.ok) {
+      let errorMessage = 'Unknown error';
+      if (responseData) {
+        errorMessage = responseData.error || responseData.message || `HTTP ${response.status}`;
+      } else {
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      throw new Error(`Failed to generate signed URL: ${errorMessage}`);
+    }
+
+    if (!responseData || !responseData.signed_url) {
+      throw new Error('Invalid response from generate-signed-url function: missing signed_url');
+    }
+
+    return { signed_url: responseData.signed_url };
+  } catch (error) {
+    // If direct fetch fails with CORS, try using supabase.functions.invoke() as fallback
+    if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
+      console.warn('Direct fetch failed (possibly CORS), trying supabase.functions.invoke()...');
+      try {
+        const { data, error: invokeError } = await supabase.functions.invoke('generate-signed-url', {
+          body: { 
+            s3_key: s3Key,
+            user_id: userId,
+          },
+        });
+
+        if (invokeError) {
+          throw new Error(invokeError.message || 'Failed to generate signed URL via invoke');
+        }
+
+        if (!data || !data.signed_url) {
+          throw new Error('Invalid response from generate-signed-url function');
+        }
+
+        return { signed_url: data.signed_url };
+      } catch (invokeError) {
+        // If both methods fail, provide a helpful error message
+        throw new Error(
+          `Failed to generate signed URL. The Edge Function may not be deployed or CORS is not configured. ` +
+          `Please ensure the 'generate-signed-url' function is deployed and CORS is configured in Supabase Dashboard. ` +
+          `Original error: ${error instanceof Error ? error.message : 'Unknown error'}`
+        );
+      }
+    }
+    throw error;
+  }
 }
 
 /**
