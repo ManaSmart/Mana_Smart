@@ -79,6 +79,11 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const [searchQuery, setSearchQuery] = useState('');
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const hasStartedPollingRef = useRef(false);
+  const cancelPollingRef = useRef(false);
+  const lastHistoryRefreshRef = useRef(0);
+  const finalizationAttemptsRef = useRef<Record<string, number>>({});
+  const backgroundMonitoringStartedRef = useRef<Record<string, boolean>>({});
+  const FINALIZATION_THRESHOLD = 2;
   const [manualBackupProgress, setManualBackupProgress] = useState<{
     isRunning: boolean;
     progress: number;
@@ -96,7 +101,6 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   });
   
   // Ref to track cancellation
-  const cancelPollingRef = useRef(false);
   
   // Dialog state for cancel confirmation
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
@@ -170,31 +174,49 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     const updateProgressForBackups = async () => {
       const currentInProgress = history.filter(item => item.status === "in_progress");
       
-      // ✅ FIX: Track if any backup status changed to completed/failed
+      // ✅ FIX: Track if any backup status actually changed to completed/failed (not just progress)
       let shouldRefreshHistory = false;
       
       for (const item of currentInProgress) {
+        // ✅ NEW FIX: Check if backup has S3 key but status is still in_progress (workflow completed)
+        // This handles the case where workflow finished but DB update is delayed
+        if (item.s3_key) {
+          console.log(`[Backup] Backup ${item.id} has S3 key but status is still in_progress. Workflow completed, refreshing history...`);
+          shouldRefreshHistory = true;
+          setInProgressProgress(prev => ({
+            ...prev,
+            [item.id]: 100, // Set to 100% since S3 key exists
+          }));
+          continue; // Skip API call since we know it's done
+        }
+        
         // ✅ FIXED: Get real progress from API instead of estimating
         if (item.dispatch_id) {
           try {
             const status = await getBackupStatus(item.dispatch_id);
             
-            // ✅ FIX: If backup completed or failed, set progress to 100% and refresh history
+            // ✅ FIX: Only refresh history when status actually changes (success/failed), not just when progress is 100%
             if (status.status === "success" || status.status === "failed") {
               setInProgressProgress(prev => ({
                 ...prev,
                 [item.id]: 100, // Set to 100% when complete
               }));
-              shouldRefreshHistory = true; // Refresh history to update status
+              shouldRefreshHistory = true; // Only refresh when status actually changes
             } else if (status.progress !== undefined) {
-              // ✅ FIX: Update progress for in-progress backups, including when workflow completes (progress: 100)
+              // ✅ FIX: Update progress for in-progress backups
+              // Also check if progress is 100% - if so, check history for S3 key
               setInProgressProgress(prev => {
                 const currentProgress = prev[item.id] || 10;
                 const newProgress = status.progress!;
                 
-                // Always update if progress is 100% (workflow completed)
+                // If progress reached 100%, check if backup has S3 key in history
                 if (newProgress >= 100) {
-                  shouldRefreshHistory = true; // Refresh history when we see 100% progress
+                  // Check current history item for S3 key
+                  const historyItem = history.find(h => h.id === item.id);
+                  if (historyItem?.s3_key) {
+                    // S3 key exists - workflow completed, refresh history to get updated status
+                    shouldRefreshHistory = true;
+                  }
                   return {
                     ...prev,
                     [item.id]: 100,
@@ -232,10 +254,16 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
         }
       }
 
-      // ✅ FIX: Refresh history if any backup completed/failed
+      // ✅ FIX: Refresh history if any backup completed/failed (throttled)
+      // Also refresh if any backup has S3 key (workflow completed)
       if (shouldRefreshHistory) {
-        console.log("[Backup] Backup status changed, refreshing history...");
-        loadHistory();
+        const now = Date.now();
+        // Reduce throttle time to 2 seconds for faster updates when backups complete
+        if (now - lastHistoryRefreshRef.current > 2000) {
+          console.log("[Backup] Backup status changed or S3 key detected, refreshing history...");
+          await loadHistory();
+          lastHistoryRefreshRef.current = now;
+        }
       }
 
       // ✅ FIX: Clear progress for items that are no longer in progress (completed/failed/cancelled)
@@ -337,10 +365,26 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     
     let checkCount = 0;
     const MAX_BACKGROUND_CHECKS = 120; // 1 hour (120 * 30s = 3600s)
+    let monitoringStopped = false; // ✅ FIX: Track if monitoring was stopped to prevent multiple stops
+    
+    const stopMonitoring = () => {
+      if (monitoringStopped) return; // Prevent multiple stops
+      monitoringStopped = true;
+      clearInterval(checkInterval);
+      console.log(`[Backup] Background monitoring stopped for dispatch_id: ${dispatchId}`);
+    };
     
     const checkInterval = setInterval(async () => {
+      if (monitoringStopped) {
+        clearInterval(checkInterval);
+        return;
+      }
+      
       checkCount++;
-      console.log(`[Backup] Background check ${checkCount}/${MAX_BACKGROUND_CHECKS}...`);
+      // ✅ FIX: Only log every 5th check to reduce console spam
+      if (checkCount % 5 === 0 || checkCount === 1) {
+        console.log(`[Backup] Background check ${checkCount}/${MAX_BACKGROUND_CHECKS}...`);
+      }
       
       try {
         // First, try to check via backup_id in history (faster and more reliable)
@@ -351,10 +395,13 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           if (backup) {
             if (backup.status === "success" && backup.s3_key) {
               // Backup completed!
-              clearInterval(checkInterval);
+              stopMonitoring();
+              // ✅ FIX: Reset all state when backup completes
+              setIsLoading(false);
               setManualBackupProgress((prev) => ({
                 ...prev,
                 progress: 100,
+                isRunning: false,
                 isTimedOut: false,
               }));
               try {
@@ -369,7 +416,8 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
               return;
             } else if (backup.status === "failed") {
               // Backup failed
-              clearInterval(checkInterval);
+              stopMonitoring();
+              setIsLoading(false);
               setManualBackupProgress((prev) => ({
                 ...prev,
                 isRunning: false,
@@ -380,7 +428,8 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
               return;
             } else if (backup.status === "cancelled") {
               // Backup was cancelled
-              clearInterval(checkInterval);
+              stopMonitoring();
+              setIsLoading(false);
               setManualBackupProgress((prev) => ({
                 ...prev,
                 isRunning: false,
@@ -389,8 +438,36 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
               await loadHistory();
               return;
             }
-            // Still in progress, continue monitoring
-            console.log(`[Backup] Background check: backup still ${backup.status}`);
+            // ✅ FIX: Check if backup has S3 key even if status is still "in_progress"
+            // This handles the case where workflow completed but DB update step failed/delayed
+            // Check immediately - if S3 key exists, workflow is done
+            if (backup.status === "in_progress" && backup.s3_key) {
+              // Workflow completed (has S3 key) but status not updated - treat as success immediately
+              console.log("[Backup] Backup has S3 key but status still in_progress. Workflow completed, treating as success.");
+              stopMonitoring();
+              setIsLoading(false);
+              setManualBackupProgress((prev) => ({
+                ...prev,
+                progress: 100,
+                isRunning: false,
+                isTimedOut: false,
+              }));
+              try {
+                const { signed_url } = await generateSignedUrl(backup.s3_key);
+                toast.success("Backup completed! Opening download...");
+                window.open(signed_url, "_blank");
+              } catch (downloadError) {
+                console.error("[Backup] Failed to generate download URL:", downloadError);
+                toast.success("Backup completed! Check the backup history to download.");
+              }
+              await loadHistory();
+              return;
+            }
+            
+            // Still in progress, continue monitoring (only log every 5th check)
+            if (checkCount % 5 === 0) {
+              console.log(`[Backup] Background check: backup still ${backup.status}${backup.s3_key ? ' (has S3 key)' : ''}`);
+            }
           }
         }
         
@@ -399,10 +476,13 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
         
         if (status.status === "success" && status.signed_url) {
           // Backup completed!
-          clearInterval(checkInterval);
+          stopMonitoring();
+          // ✅ FIX: Reset all state when backup completes
+          setIsLoading(false);
           setManualBackupProgress((prev) => ({
             ...prev,
             progress: 100,
+            isRunning: false,
             isTimedOut: false,
           }));
           toast.success("Backup completed! Opening download...");
@@ -410,7 +490,8 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           await loadHistory();
         } else if (status.status === "failed") {
           // Backup failed
-          clearInterval(checkInterval);
+          stopMonitoring();
+          setIsLoading(false);
           setManualBackupProgress((prev) => ({
             ...prev,
             isRunning: false,
@@ -418,9 +499,50 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
           }));
           toast.error(`Backup failed: ${status.error || "Unknown error"}`);
           await loadHistory();
+        } else if (status.progress === 100 && status.status === "in_progress") {
+          // ✅ FIX: Workflow completed (progress 100%) but DB hasn't updated yet
+          // Check if backup has S3 key in history (workflow might have completed but DB update delayed)
+          // Check immediately - if S3 key exists, workflow is done
+          const history = await getBackupHistory(10);
+          const backup = history.find(b => 
+            b.dispatch_id === dispatchId || 
+            (backupId && b.id === backupId)
+          );
+          
+          if (backup && backup.s3_key && backup.status === "in_progress") {
+            // ✅ FALLBACK: Workflow completed, S3 key exists, but status not updated
+            // This means the workflow finished but the DB update step might have failed
+            // Treat as success and allow download
+            console.log("[Backup] Workflow completed but status not updated. S3 key exists, treating as success.");
+            stopMonitoring();
+            setIsLoading(false);
+            setManualBackupProgress((prev) => ({
+              ...prev,
+              progress: 100,
+              isRunning: false,
+              isTimedOut: false,
+            }));
+            try {
+              const { signed_url } = await generateSignedUrl(backup.s3_key);
+              toast.success("Backup completed! Opening download...");
+              window.open(signed_url, "_blank");
+            } catch (downloadError) {
+              console.error("[Backup] Failed to generate download URL:", downloadError);
+              toast.success("Backup completed! Check the backup history to download.");
+            }
+            await loadHistory();
+            return;
+          }
+          
+          // Still waiting for DB update (only log every 5th check)
+          if (checkCount % 5 === 0) {
+            console.log(`[Backup] Background check: workflow completed (100%) but status still in_progress, waiting for DB update... (check ${checkCount})`);
+          }
         } else {
-          // Still in progress, continue monitoring
-          console.log(`[Backup] Background check: still ${status.status}`);
+          // Still in progress, continue monitoring (only log every 5th check)
+          if (checkCount % 5 === 0) {
+            console.log(`[Backup] Background check: still ${status.status} (progress: ${status.progress ?? 'N/A'}%)`);
+          }
         }
       } catch (error) {
         console.warn("[Backup] Background monitoring error:", error);
@@ -430,12 +552,14 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
     
     // Stop monitoring after 1 hour (120 checks)
     setTimeout(() => {
-      clearInterval(checkInterval);
-      console.log("[Backup] Background monitoring stopped after 1 hour");
-      setManualBackupProgress((prev) => ({
-        ...prev,
-        isTimedOut: false,
-      }));
+      if (!monitoringStopped) {
+        stopMonitoring();
+        console.log("[Backup] Background monitoring stopped after 1 hour");
+        setManualBackupProgress((prev) => ({
+          ...prev,
+          isTimedOut: false,
+        }));
+      }
     }, 60 * 60 * 1000); // 1 hour
   };
 
@@ -515,6 +639,8 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
   const handleDownloadNow = async () => {
     // Reset cancellation flag
     cancelPollingRef.current = false;
+    finalizationAttemptsRef.current = {};
+    backgroundMonitoringStartedRef.current = {};
     
     setIsLoading(true);
     setManualBackupProgress({
@@ -627,6 +753,8 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             currentStep: status.current_step,
           });
           
+          const workflowComplete = status.progress !== undefined && status.progress >= 100;
+          
           // ✅ FIXED: Use real progress from API if available
           if (status.progress !== undefined || status.current_step) {
             const newProgress = status.progress !== undefined ? status.progress : manualBackupProgress.progress;
@@ -636,11 +764,13 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
               currentStep: status.current_step || prev.currentStep,
             }));
             
-            // ✅ FIX: If progress is 100%, the workflow is done (even if backup_history hasn't updated yet)
-            // Poll more frequently to catch the final status update
-            if (newProgress >= 100 && status.status === "in_progress") {
-              console.log("[Backup] Progress reached 100% - workflow completed, waiting for final status...");
-              // Continue with shorter delay to catch the final status
+            if (workflowComplete) {
+              finalizationAttemptsRef.current[dispatch_id] = (finalizationAttemptsRef.current[dispatch_id] || 0) + 1;
+              if (status.status === "in_progress") {
+                console.log("[Backup] Progress reached 100% - workflow completed, waiting for final status...");
+              }
+            } else {
+              delete finalizationAttemptsRef.current[dispatch_id];
             }
           }
           
@@ -680,25 +810,54 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
             }
             throw new Error(status.error || "Backup failed. Check GitHub Actions logs for details.");
           } else if (status.status === "in_progress" || status.status === "pending") {
-            // ✅ OPTIMIZED: Exponential backoff - start fast, slow down over time
-            // If progress is 100%, use shorter delay (workflow is done, just waiting for DB update)
-            const isWorkflowComplete = status.progress !== undefined && status.progress >= 100;
-            let pollDelay = isWorkflowComplete ? 1000 : INITIAL_POLL_INTERVAL_MS; // 1s if workflow done, otherwise normal
+            const finalizationAttempts = finalizationAttemptsRef.current[dispatch_id] || 0;
             
-            if (!isWorkflowComplete) {
-              // Normal exponential backoff only if workflow not complete
+            // ✅ OPTIMIZED: Exponential backoff - start fast, slow down over time
+            // If progress is 100%, use shorter delay initially, then slow down as we wait
+            let pollDelay = workflowComplete ? 1500 : INITIAL_POLL_INTERVAL_MS;
+            
+            if (!workflowComplete) {
               if (pollAttempts > 20) {
-                pollDelay = 2000; // 2 seconds
+                pollDelay = 2000;
               }
               if (pollAttempts > 50) {
-                pollDelay = 5000; // 5 seconds
+                pollDelay = 5000;
               }
               if (pollAttempts > 100) {
-                pollDelay = MAX_POLL_INTERVAL_MS; // 10 seconds
+                pollDelay = MAX_POLL_INTERVAL_MS;
               }
+            } else if (finalizationAttempts > 10) {
+              // Slow down if we've already polled multiple times at 100%
+              pollDelay = Math.min(MAX_POLL_INTERVAL_MS, 3000 + (finalizationAttempts - 10) * 1000);
             }
             
-            console.log(`[Backup] Still in progress (${status.status}, progress: ${status.progress || 'N/A'}%), polling again in ${pollDelay}ms... (attempt ${pollAttempts})`);
+            // If workflow is done but DB hasn't updated after multiple attempts, switch to background monitoring
+            if (workflowComplete && finalizationAttempts >= FINALIZATION_THRESHOLD) {
+              console.warn("[Backup] Workflow finished but status still in progress after multiple attempts. Monitoring in background.");
+              const backupIdToMonitor = status.backup_id || manualBackupProgress.backupId || null;
+              if (!backgroundMonitoringStartedRef.current[dispatch_id]) {
+                backgroundMonitoringStartedRef.current[dispatch_id] = true;
+                startBackgroundMonitoring(dispatch_id, backupIdToMonitor);
+              }
+              
+              // ✅ FIX: Reset both isLoading and isRunning so button becomes enabled
+              setIsLoading(false);
+              setManualBackupProgress((prev) => ({
+                ...prev,
+                isRunning: false,
+                isTimedOut: true,
+                currentStep: "Finalizing backup (monitoring in background)",
+              }));
+              
+              // ✅ FIX: Refresh history one more time to check if status updated
+              await loadHistory();
+              
+              toast.info("Backup finished. Waiting for Supabase to finalize — monitoring in background.");
+              cancelPollingRef.current = true;
+              return null;
+            }
+            
+            console.log(`[Backup] Still in progress (${status.status}, progress: ${status.progress ?? 'N/A'}%), polling again in ${pollDelay}ms... (attempt ${pollAttempts})`);
             await new Promise((resolve) => setTimeout(resolve, pollDelay));
             return pollStatus();
           } else {
@@ -729,15 +888,33 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
         // Open download in new tab
         window.open(signedUrl, "_blank");
         toast.success("Backup completed! Download started.");
+        // ✅ FIX: Reset loading state
+        setIsLoading(false);
+        setManualBackupProgress((prev) => ({
+          ...prev,
+          isRunning: false,
+        }));
         // Refresh history and settings
         await Promise.all([loadHistory(), loadSettings()]);
+      } else if (signedUrl === null && !cancelPollingRef.current) {
+        // ✅ FIX: pollStatus returned null (switched to background monitoring)
+        // State is already reset in the pollStatus function, just ensure isLoading is false
+        setIsLoading(false);
       }
     } catch (error) {
       if (cancelPollingRef.current) {
-        // User cancelled - don't show error
+        // User cancelled - don't show error, but reset state
+        setIsLoading(false);
+        setManualBackupProgress((prev) => ({
+          ...prev,
+          isRunning: false,
+        }));
         return;
       }
       console.error("Backup failed:", error);
+      
+      // ✅ FIX: Always reset loading state on error
+      setIsLoading(false);
       
       // If timeout occurred, refresh history to check if backup actually completed
       if (error instanceof Error && error.message.includes("taking longer than expected")) {

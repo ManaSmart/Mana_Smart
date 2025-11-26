@@ -117,34 +117,198 @@ serve(async (req: Request) => {
     const { signed_url } = await signedUrlResponse.json();
 
     if (method === "email") {
-      // Email sharing - would need email service integration (SendGrid, AWS SES, etc.)
-      // For now, return success with instructions
-      return new Response(
-        JSON.stringify({
-          success: true,
-          message: "Email sharing configured. Integration with email service required.",
-          note: "To enable email sharing, integrate with an email service provider (SendGrid, AWS SES, etc.)",
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
+      // Email sharing using Supabase Edge Function or external service
+      const EMAIL_SERVICE_URL = Deno.env.get("EMAIL_SERVICE_URL") ?? "";
+      const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY") ?? "";
+      const AWS_SES_REGION = Deno.env.get("AWS_SES_REGION") ?? "";
+      const AWS_SES_ACCESS_KEY = Deno.env.get("AWS_SES_ACCESS_KEY") ?? "";
+      const AWS_SES_SECRET_KEY = Deno.env.get("AWS_SES_SECRET_KEY") ?? "";
+      const FROM_EMAIL = Deno.env.get("FROM_EMAIL") ?? "noreply@console-mana.com";
+
+      let emailSent = false;
+      let emailError: string | null = null;
+
+      // Try SendGrid if configured
+      if (SENDGRID_API_KEY) {
+        try {
+          const sendGridResponse = await fetch("https://api.sendgrid.com/v3/mail/send", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${SENDGRID_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              personalizations: [
+                {
+                  to: [{ email: recipient }],
+                },
+              ],
+              from: { email: FROM_EMAIL },
+              subject: "Your Backup is Ready",
+              content: [
+                {
+                  type: "text/html",
+                  value: `
+                    <html>
+                      <body>
+                        <h2>Your Backup is Ready</h2>
+                        <p>Your backup file from ${new Date(backup.created_at).toLocaleDateString()} is ready for download.</p>
+                        <p><a href="${signed_url}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Download Backup</a></p>
+                        <p><small>This link will expire in 15 minutes.</small></p>
+                      </body>
+                    </html>
+                  `,
+                },
+              ],
+            }),
+          });
+
+          if (sendGridResponse.ok) {
+            emailSent = true;
+          } else {
+            const errorText = await sendGridResponse.text();
+            emailError = `SendGrid error: ${sendGridResponse.status} - ${errorText}`;
+          }
+        } catch (error) {
+          emailError = error instanceof Error ? error.message : "Unknown error";
         }
-      );
+      }
+      // Try AWS SES if configured
+      else if (AWS_SES_ACCESS_KEY && AWS_SES_SECRET_KEY) {
+        try {
+          // AWS SES requires AWS SDK - for now, log that it needs implementation
+          console.log("AWS SES email sending requires AWS SDK implementation");
+          emailError = "AWS SES integration requires additional setup";
+        } catch (error) {
+          emailError = error instanceof Error ? error.message : "Unknown error";
+        }
+      }
+      // Try custom email service URL
+      else if (EMAIL_SERVICE_URL) {
+        try {
+          const emailServiceResponse = await fetch(EMAIL_SERVICE_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              to: recipient,
+              subject: "Your Backup is Ready",
+              html: `
+                <h2>Your Backup is Ready</h2>
+                <p>Your backup file from ${new Date(backup.created_at).toLocaleDateString()} is ready for download.</p>
+                <p><a href="${signed_url}">Download Backup</a></p>
+                <p><small>This link will expire in 15 minutes.</small></p>
+              `,
+            }),
+          });
+
+          if (emailServiceResponse.ok) {
+            emailSent = true;
+          } else {
+            emailError = `Email service error: ${emailServiceResponse.status}`;
+          }
+        } catch (error) {
+          emailError = error instanceof Error ? error.message : "Unknown error";
+        }
+      }
+
+      if (emailSent) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "Email sent successfully",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
+          }
+        );
+      } else {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: emailError || "Email service not configured. Please configure SENDGRID_API_KEY, AWS SES, or EMAIL_SERVICE_URL.",
+            message: "To enable email sharing, configure one of: SENDGRID_API_KEY, AWS SES credentials, or EMAIL_SERVICE_URL",
+          }),
+          {
+            status: 500,
+            headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
+          }
+        );
+      }
     } else if (method === "whatsapp") {
-      // WhatsApp sharing - create WhatsApp share link
-      const message = encodeURIComponent(
-        `Backup file from ${new Date(backup.created_at).toLocaleDateString()}\nDownload: ${signed_url}`
-      );
-      const whatsappUrl = `https://wa.me/${recipient.replace(/[^0-9]/g, "")}?text=${message}`;
+      // WhatsApp sharing using Twilio if configured, otherwise use WhatsApp web link
+      const TWILIO_ACCOUNT_SID = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
+      const TWILIO_AUTH_TOKEN = Deno.env.get("TWILIO_AUTH_TOKEN") ?? "";
+      const TWILIO_WHATSAPP_FROM = Deno.env.get("TWILIO_WHATSAPP_FROM") ?? "whatsapp:+14155238886";
+
+      let whatsappSent = false;
+      let whatsappError: string | null = null;
+      let whatsappUrl = "";
+
+      // Try Twilio WhatsApp if configured
+      if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
+        try {
+          const phoneNumber = recipient.replace(/[^0-9+]/g, "");
+          const formattedPhone = phoneNumber.startsWith("+") ? phoneNumber : `+${phoneNumber}`;
+          const toNumber = `whatsapp:${formattedPhone}`;
+
+          const message = `Your backup file from ${new Date(backup.created_at).toLocaleDateString()} is ready.\nDownload: ${signed_url}\n\nThis link expires in 15 minutes.`;
+
+          const twilioResponse = await fetch(
+            `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`,
+            {
+              method: "POST",
+              headers: {
+                "Authorization": `Basic ${btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`)}`,
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body: new URLSearchParams({
+                From: TWILIO_WHATSAPP_FROM,
+                To: toNumber,
+                Body: message,
+              }),
+            }
+          );
+
+          if (twilioResponse.ok) {
+            whatsappSent = true;
+            const twilioData = await twilioResponse.json();
+            console.log("WhatsApp message sent via Twilio:", twilioData);
+          } else {
+            const errorText = await twilioResponse.text();
+            whatsappError = `Twilio error: ${twilioResponse.status} - ${errorText}`;
+          }
+        } catch (error) {
+          whatsappError = error instanceof Error ? error.message : "Unknown error";
+        }
+      }
+
+      // Fallback to WhatsApp web link
+      if (!whatsappSent) {
+        const message = encodeURIComponent(
+          `Your backup file from ${new Date(backup.created_at).toLocaleDateString()} is ready.\nDownload: ${signed_url}\n\nThis link expires in 15 minutes.`
+        );
+        const phoneNumber = recipient.replace(/[^0-9]/g, "");
+        whatsappUrl = `https://wa.me/${phoneNumber}?text=${message}`;
+      }
 
       return new Response(
         JSON.stringify({
-          success: true,
+          success: whatsappSent || !!whatsappUrl,
           whatsapp_url: whatsappUrl,
-          message: "WhatsApp share link generated",
+          message: whatsappSent 
+            ? "WhatsApp message sent successfully" 
+            : whatsappError 
+            ? `WhatsApp sending failed: ${whatsappError}. Share link generated instead.`
+            : "WhatsApp share link generated",
+          note: whatsappSent 
+            ? undefined 
+            : "To enable direct WhatsApp sending, configure TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN",
         }),
         {
-          status: 200,
+          status: whatsappSent || whatsappUrl ? 200 : 500,
           headers: { "Content-Type": "application/json", ...getCorsHeaders(req) },
         }
       );

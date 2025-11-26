@@ -38,6 +38,7 @@ jobs:
       DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
       TRIGGER_TYPE: ${{ github.event.inputs.trigger_type || 'scheduled' }}
       BACKUP_S3_FILES: ${{ secrets.BACKUP_S3_FILES || 'true' }}
+      BACKUP_API_KEY: ${{ secrets.BACKUP_API_KEY }}
 
     steps:
       - name: Checkout code
@@ -1057,8 +1058,9 @@ jobs:
             exit 1
           fi
 
-      - name: Update backup_history and system_settings
-        # ✅ FIX: Only update if upload completed successfully
+      - name: Update backup_history via Edge Function
+        # ✅ NEW: Use update-backup edge function instead of direct Supabase update
+        # This ensures proper validation, idempotency, and error handling
         run: |
           # ✅ FIX: Check if upload completed
           if [ "${{ env.UPLOAD_COMPLETED }}" != "true" ]; then
@@ -1067,122 +1069,114 @@ jobs:
             exit 1
           fi
           
-          # Check if database backup failed (network issue)
-          if [ -f backup/db/backup.sql ] && grep -q "DATABASE BACKUP FAILED" backup/db/backup.sql; then
-            FINAL_STATUS="partial"
-            FINAL_ERROR_TEXT="Database backup failed: Network unreachable (Supabase Free Plan blocks external connections). Auth users and storage files backed up successfully. Enable IP whitelisting or upgrade to Pro plan for complete backup."
-          else
-            FINAL_STATUS="success"
-            FINAL_ERROR_TEXT=""
-          fi
-          
           S3_KEY="${{ env.S3_KEY }}"
           BACKUP_SIZE="${{ env.BACKUP_SIZE }}"
+          DISPATCH_ID="${{ github.event.inputs.dispatch_id || github.run_id }}"
+          WORKFLOW_RUN_ID="${{ github.run_id }}"
           
-          # ✅ FIX: Pass variables directly to Node.js process
-          STATUS="$FINAL_STATUS" \
-          ERROR_TEXT="$FINAL_ERROR_TEXT" \
-          S3_KEY="$S3_KEY" \
-          BACKUP_SIZE="$BACKUP_SIZE" \
+          # Get backup_id from dispatch_id first
+          echo "🔍 Finding backup_id for dispatch_id: $DISPATCH_ID"
           node --input-type=commonjs -e "
           const { createClient } = require('@supabase/supabase-js');
           
-          // ✅ FIX: Get all variables from process.env
           const supabaseUrl = process.env.SUPABASE_URL;
           const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
           const dispatchId = process.env.DISPATCH_ID;
-          const workflowRunId = process.env.GITHUB_RUN_ID || null; // ✅ NEW: Get workflow run ID
-          const status = process.env.STATUS;
-          const errorText = process.env.ERROR_TEXT || null;
-          const s3Key = process.env.S3_KEY;
-          const sizeBytes = process.env.BACKUP_SIZE ? parseInt(process.env.BACKUP_SIZE, 10) : null;
           
-          // ✅ FIX: Validate all required variables
-          if (!supabaseUrl || !supabaseKey) {
-            console.error('✗ CRITICAL ERROR: Missing Supabase credentials');
-            console.error('SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
-            console.error('SUPABASE_SERVICE_ROLE_KEY:', supabaseKey ? 'SET' : 'MISSING');
-            process.exit(1);
-          }
-          
-          // ✅ FIX: Validate URL format
-          if (!supabaseUrl.startsWith('http://') && !supabaseUrl.startsWith('https://')) {
-            console.error('✗ CRITICAL ERROR: Invalid SUPABASE_URL format');
-            console.error('URL must start with http:// or https://');
-            console.error('Current value preview:', supabaseUrl.substring(0, 50));
-            console.error('Expected format: https://xxxxx.supabase.co');
-            console.error('');
-            console.error('Please check your VITE_SUPABASE_URL secret in GitHub Settings');
-            console.error('It should be your Supabase project URL, NOT the database connection string');
-            console.error('Correct: https://rqssjgiunwyjeyutgkkp.supabase.co');
-            console.error('Wrong:   postgresql://postgres:password@db.xxxxx.supabase.co:5432/postgres');
+          if (!supabaseUrl || !supabaseKey || !dispatchId) {
+            console.error('✗ Missing required variables');
             process.exit(1);
           }
           
           const cleanUrl = supabaseUrl.replace(/\/$/, '');
-          
-          if (!dispatchId) {
-            console.error('✗ CRITICAL ERROR: Missing DISPATCH_ID');
-            process.exit(1);
-          }
-          
-          // ✅ FIX: workflowRunId already declared above, no need to redeclare
-          
-          console.log('✓ Supabase credentials validated');
-          console.log('✓ URL format validated');
-          console.log('✓ Updating backup_history with:');
-          console.log('  - dispatch_id:', dispatchId);
-          console.log('  - workflow_run_id:', workflowRunId);
-          console.log('  - status:', status);
-          console.log('  - s3_key:', s3Key);
-          console.log('  - size_bytes:', sizeBytes);
-          
           const supabase = createClient(cleanUrl, supabaseKey);
-          
-          // Update backup_history
-          const updateData = {
-            status: status,
-            s3_key: s3Key,
-            size_bytes: sizeBytes,
-            error_text: errorText,
-          };
-          
-          // ✅ NEW: Only update workflow_run_id if we have it and it's not already set
-          if (workflowRunId) {
-            updateData.workflow_run_id = workflowRunId;
-          }
           
           supabase
             .from('backup_history')
-            .update(updateData)
+            .select('id')
             .eq('dispatch_id', dispatchId)
+            .single()
             .then(({ data, error }) => {
-              if (error) {
-                console.error('✗ CRITICAL ERROR updating backup history');
-                console.error('Error:', error);
-                console.error('Error code:', error.code);
-                console.error('Error message:', error.message);
-                console.error('Error details:', error.details);
-                console.error('Error hint:', error.hint);
+              if (error || !data) {
+                console.error('✗ Failed to find backup by dispatch_id:', error?.message);
                 process.exit(1);
               }
-              
-              console.log('✓ Backup history updated successfully');
-              
-              // Update system_settings_kv
-              // Note: Service role key should bypass RLS, but RLS policy requires auth.role() = 'service_role'
-              // When using service_role key directly, we need to ensure it's recognized
-              // If this fails, it's not critical - the backup itself succeeded
-              return supabase
-                .from('system_settings_kv')
-                .upsert({
-                  key: 'last_backup_at',
-                  value: new Date().toISOString(),
-                }, {
-                  onConflict: 'key',
-                })
-                .select();
+              console.log('BACKUP_ID=' + data.id);
             })
+            .catch(err => {
+              console.error('✗ Error finding backup:', err.message);
+              process.exit(1);
+            });
+          " > backup_id_output.txt
+          
+          BACKUP_ID=\$(grep '^BACKUP_ID=' backup_id_output.txt | cut -d'=' -f2)
+          rm backup_id_output.txt
+          
+          if [ -z "\$BACKUP_ID" ]; then
+            echo "❌ ERROR: Could not find backup_id for dispatch_id: $DISPATCH_ID"
+            exit 1
+          fi
+          
+          echo "✓ Found backup_id: \$BACKUP_ID"
+          echo "📤 Calling update-backup edge function..."
+          echo "  - backup_id: \$BACKUP_ID"
+          echo "  - s3_key: \$S3_KEY"
+          echo "  - size_bytes: \$BACKUP_SIZE"
+          echo "  - workflow_run_id: \$WORKFLOW_RUN_ID"
+          
+          # Call update-backup edge function
+          RESPONSE=\$(curl -s -w "\n%{http_code}" -X POST "\$SUPABASE_URL/functions/v1/update-backup" \\
+            -H "Authorization: Bearer \$BACKUP_API_KEY" \\
+            -H "Content-Type: application/json" \\
+            -d '{
+              "backup_id": "'"\$BACKUP_ID"'",
+              "s3_key": "'"\$S3_KEY"'",
+              "size_bytes": '\$BACKUP_SIZE',
+              "workflow_run_id": "'"\$WORKFLOW_RUN_ID"'"
+            }')
+          
+          HTTP_CODE=\$(echo "\$RESPONSE" | tail -n1)
+          BODY=\$(echo "\$RESPONSE" | sed '\$d')
+          
+          if [ "\$HTTP_CODE" -eq 200 ]; then
+            echo "✓ Backup history updated successfully via edge function"
+            echo "\$BODY" | jq '.' 2>/dev/null || echo "\$BODY"
+          else
+            echo "❌ ERROR: Failed to update backup history"
+            echo "HTTP Status: \$HTTP_CODE"
+            echo "Response: \$BODY"
+            exit 1
+          fi
+          
+          # Update system_settings_kv (keep existing logic)
+          echo "📝 Updating system_settings..."
+          node --input-type=commonjs -e "
+          const { createClient } = require('@supabase/supabase-js');
+          
+          const supabaseUrl = process.env.SUPABASE_URL;
+          const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+          
+          if (!supabaseUrl || !supabaseKey) {
+            console.log('⚠ Skipping system_settings update - missing credentials');
+            process.exit(0);
+          }
+          
+          const cleanUrl = supabaseUrl.replace(/\/$/, '');
+          const supabase = createClient(cleanUrl, supabaseKey);
+          
+          // Update system_settings_kv
+          // Note: Service role key should bypass RLS, but RLS policy requires auth.role() = 'service_role'
+          // When using service_role key directly, we need to ensure it's recognized
+          // If this fails, it's not critical - the backup itself succeeded
+          supabase
+            .from('system_settings_kv')
+            .upsert({
+              key: 'last_backup_at',
+              value: new Date().toISOString(),
+            }, {
+              onConflict: 'key',
+            })
+            .select()
             .then(({ data: settingsData, error: settingsError }) => {
               if (settingsError) {
                 console.error('⚠ Warning: Failed to update last_backup_at:', settingsError.message);
@@ -1200,10 +1194,16 @@ jobs:
               }
             })
             .catch((err) => {
-              console.error('✗ CRITICAL ERROR:', err);
-              process.exit(1);
+              console.error('⚠ Warning: Error updating system settings:', err.message);
+              // Don't fail - backup update already succeeded
             });
           "
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}
+          DISPATCH_ID: ${{ github.event.inputs.dispatch_id || github.run_id }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          BACKUP_API_KEY: ${{ secrets.BACKUP_API_KEY }}
 
       - name: Handle backup failure
         if: failure()

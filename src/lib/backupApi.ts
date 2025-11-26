@@ -359,3 +359,89 @@ export async function shareBackup(
   });
 }
 
+/**
+ * Update backup history with s3_key, status, and finished_at
+ * Called by GitHub Actions workflow after backup is uploaded to S3
+ * @param backupId The backup ID (or dispatch_id)
+ * @param s3Key The S3 key where the backup is stored
+ * @param status The backup status ('success', 'failed', 'cancelled')
+ * @param sizeBytes Optional file size in bytes
+ * @param errorText Optional error message if failed
+ * @returns Success status and updated backup
+ */
+export async function updateBackup(
+  backupId: string | null,
+  dispatchId: string | null,
+  s3Key: string | null,
+  status: 'success' | 'failed' | 'cancelled',
+  sizeBytes?: number | null,
+  errorText?: string | null
+): Promise<{
+  success: boolean;
+  message: string;
+  backup: any;
+}> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+  const backupApiKey = import.meta.env.VITE_BACKUP_API_KEY as string;
+  
+  if (!supabaseUrl) {
+    throw new Error('Supabase configuration is missing');
+  }
+
+  const functionUrl = `${supabaseUrl.replace(/\/$/, '')}/functions/v1/update-backup`;
+  
+  const response = await fetch(functionUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${backupApiKey || 'service-role-key'}`,
+    },
+    body: JSON.stringify({
+      backup_id: backupId,
+      dispatch_id: dispatchId,
+      s3_key: s3Key,
+      status,
+      size_bytes: sizeBytes,
+      error_text: errorText,
+    }),
+  });
+
+  const responseText = await response.text();
+  let responseData: any;
+  
+  try {
+    responseData = responseText ? JSON.parse(responseText) : null;
+  } catch (parseError) {
+    throw new Error(`Update backup returned invalid response: ${responseText}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(responseData?.error || responseData?.message || 'Failed to update backup');
+  }
+
+  return responseData;
+}
+
+/**
+ * Download a backup by backup ID
+ * @param backupId The backup ID to download
+ * @returns Download URL and expiration info
+ */
+export async function downloadBackup(backupId: string): Promise<{
+  download_url: string;
+  expires_in: number;
+  backup_id: string;
+  size_bytes?: number | null;
+}> {
+  return await callEdgeFunction<{
+    download_url: string;
+    expires_in: number;
+    backup_id: string;
+    size_bytes?: number | null;
+  }>('download-backup', {
+    body: {
+      backup_id: backupId,
+    },
+  });
+}
+
