@@ -1273,38 +1273,84 @@ jobs:
                 console.log('  Updating backup:', backupId);
                 console.log('  Update data:', JSON.stringify(updateData, null, 2));
                 
-                // First, try the update without .single() to avoid the \"0 rows\" error
-                const { data: updateResult, error: updateError } = await supabase
-                  .from('backup_history')
-                  .update(updateData)
-                  .eq('id', backupId)
-                  .select();
+                // Update using REST API directly (more reliable with RLS)
+                const updateUrl = `${cleanUrl}/rest/v1/backup_history?id=eq.${backupId}`;
+                console.log('  Update URL:', updateUrl.replace(cleanUrl, '***'));
                 
-                if (updateError) {
-                  console.error('✗ Update failed:', updateError.message);
-                  console.error('  Error code:', updateError.code);
-                  console.error('  Error details:', updateError.details);
-                  console.error('  Error hint:', updateError.hint);
+                const updateResponse = await fetch(updateUrl, {
+                  method: 'PATCH',
+                  headers: {
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${supabaseKey}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=representation' // Return updated row
+                  },
+                  body: JSON.stringify(updateData)
+                });
+                
+                const updateResponseText = await updateResponse.text();
+                let updateResult = null;
+                try {
+                  updateResult = JSON.parse(updateResponseText);
+                } catch (e) {
+                  console.error('  ⚠ Failed to parse update response as JSON');
+                  console.error('  Response text:', updateResponseText);
+                }
+                
+                if (!updateResponse.ok) {
+                  console.error('✗ Update failed:', updateResponse.status, updateResponse.statusText);
+                  console.error('  Response:', updateResponseText);
                   process.exit(1);
                 }
                 
+                console.log('  Update response status:', updateResponse.status);
                 console.log('  Update response:', JSON.stringify(updateResult, null, 2));
                 
-                // Verify the update worked by querying the backup again
+                // Verify the update worked by querying the backup again (with retries)
                 console.log('  Verifying update...');
-                const { data: verifyData, error: verifyError } = await supabase
-                  .from('backup_history')
-                  .select('id, status, s3_key, finished_at')
-                  .eq('id', backupId)
-                  .single();
+                let verifyData = null;
+                let verifyError = null;
+                const maxVerifyRetries = 5;
+                let verifyRetryCount = 0;
+                
+                while (verifyRetryCount < maxVerifyRetries) {
+                  // Small delay before verification (except first attempt)
+                  if (verifyRetryCount > 0) {
+                    const delay = 1000 * verifyRetryCount; // 1s, 2s, 3s, 4s
+                    console.log(`  ⚠ Verification attempt ${verifyRetryCount + 1}/${maxVerifyRetries}, waiting ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                  }
+                  
+                  const verifyResult = await supabase
+                    .from('backup_history')
+                    .select('id, status, s3_key, finished_at, size_bytes, workflow_run_id')
+                    .eq('id', backupId)
+                    .single();
+                  
+                  verifyData = verifyResult.data;
+                  verifyError = verifyResult.error;
+                  
+                  if (!verifyError && verifyData) {
+                    // Check if update actually took effect
+                    if (verifyData.status === 'success' && verifyData.s3_key) {
+                      break; // Success!
+                    }
+                  }
+                  
+                  verifyRetryCount++;
+                  
+                  if (verifyRetryCount < maxVerifyRetries) {
+                    console.log(`  ⚠ Verification attempt ${verifyRetryCount} - status: ${verifyData?.status || 'unknown'}, s3_key: ${verifyData?.s3_key ? 'set' : 'missing'}`);
+                  }
+                }
                 
                 if (verifyError) {
-                  console.error('✗ Verification failed:', verifyError.message);
+                  console.error('✗ Verification failed after retries:', verifyError.message);
                   process.exit(1);
                 }
                 
                 if (!verifyData) {
-                  console.error('✗ Backup not found after update');
+                  console.error('✗ Backup not found after update (after retries)');
                   process.exit(1);
                 }
                 
@@ -1315,11 +1361,13 @@ jobs:
                 if (verifyData.status !== 'success') {
                   console.error('✗ Update did not change status to success');
                   console.error('  Current status:', verifyData.status);
+                  console.error('  This may indicate an RLS policy issue or database constraint');
                   process.exit(1);
                 }
                 
                 if (!verifyData.s3_key) {
                   console.error('✗ Update did not set s3_key');
+                  console.error('  This may indicate an RLS policy issue or database constraint');
                   process.exit(1);
                 }
                 
