@@ -1081,48 +1081,33 @@ jobs:
           # SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are already set
           # BACKUP_API_KEY is optional (from job-level env if set)
           
-          # Get backup_id from dispatch_id first
+          # Get backup_id from dispatch_id using Supabase REST API (no Node.js module needed)
           echo "🔍 Finding backup_id for dispatch_id: $DISPATCH_ID"
           
-          # Write Node.js script to temporary file to avoid shell parsing issues
-          cat > /tmp/find_backup_id.js << 'NODE_SCRIPT'
-          const { createClient } = require('@supabase/supabase-js');
+          # Use Supabase REST API directly via curl
+          SUPABASE_REST_URL="${SUPABASE_URL}/rest/v1/backup_history"
+          BACKUP_QUERY_RESPONSE=$(curl -s -X GET \
+            "${SUPABASE_REST_URL}?dispatch_id=eq.${DISPATCH_ID}&select=id" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=representation")
           
-          (async () => {
-            try {
-              const supabaseUrl = process.env.SUPABASE_URL;
-              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-              const dispatchId = process.env.DISPATCH_ID;
-              
-              if (!supabaseUrl || !supabaseKey || !dispatchId) {
-                console.error('✗ Missing required variables');
-                process.exit(1);
-              }
-              
-              const cleanUrl = supabaseUrl.replace(/\/$/, '');
-              const supabase = createClient(cleanUrl, supabaseKey);
-              
-              const { data, error } = await supabase
-                .from('backup_history')
-                .select('id')
-                .eq('dispatch_id', dispatchId)
-                .single();
-              
-              if (error || !data) {
-                console.error('✗ Failed to find backup by dispatch_id:', error?.message || 'Not found');
-                process.exit(1);
-              }
-              
-              console.log(data.id);
-            } catch (err) {
-              console.error('✗ Error finding backup:', err.message);
-              process.exit(1);
-            }
-          })();
-          NODE_SCRIPT
+          echo "📡 Query response: $BACKUP_QUERY_RESPONSE"
           
-          BACKUP_ID=$(SUPABASE_URL="$SUPABASE_URL" SUPABASE_SERVICE_ROLE_KEY="${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}" DISPATCH_ID="$DISPATCH_ID" node /tmp/find_backup_id.js)
-          rm -f /tmp/find_backup_id.js
+          # Extract backup_id from JSON response using jq or grep/sed
+          if command -v jq &> /dev/null; then
+            BACKUP_ID=$(echo "$BACKUP_QUERY_RESPONSE" | jq -r '.[0].id // empty')
+          else
+            # Fallback: extract ID using grep/sed
+            BACKUP_ID=$(echo "$BACKUP_QUERY_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"\([^"]*\)"/\1/')
+          fi
+          
+          # If still empty, try alternative extraction
+          if [ -z "$BACKUP_ID" ] || [ "$BACKUP_ID" = "null" ]; then
+            # Try extracting UUID pattern directly
+            BACKUP_ID=$(echo "$BACKUP_QUERY_RESPONSE" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+          fi
           
           if [ -z "$BACKUP_ID" ] || [ "$BACKUP_ID" = "" ]; then
             echo "❌ ERROR: Could not find backup_id for dispatch_id: $DISPATCH_ID"
@@ -1181,76 +1166,48 @@ jobs:
           
           # Fallback to direct Supabase update if edge function failed or not available
           if [ "$EDGE_FUNCTION_SUCCESS" != "true" ]; then
-            echo "📝 Using direct Supabase update (fallback method)..."
+            echo "📝 Using direct Supabase REST API update (fallback method)..."
             
-            # Fallback: Direct Supabase update
-            SUPABASE_URL="$SUPABASE_URL" \
-            SUPABASE_SERVICE_ROLE_KEY="${{ secrets.VITE_SUPABASE_SERVICE_ROLE_KEY }}" \
-            BACKUP_ID="$BACKUP_ID" \
-            S3_KEY="$S3_KEY" \
-            BACKUP_SIZE="$BACKUP_SIZE" \
-            WORKFLOW_RUN_ID="$WORKFLOW_RUN_ID" \
-            node --input-type=commonjs -e "
-            const { createClient } = require('@supabase/supabase-js');
+            # Prepare update payload using printf to avoid YAML parsing issues
+            FINISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            UPDATE_PAYLOAD="{"
+            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"s3_key\":\"${S3_KEY}\","
+            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"status\":\"success\","
+            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"finished_at\":\"${FINISHED_AT}\","
+            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"error_text\":null"
+            if [ -n "$BACKUP_SIZE" ] && [ "$BACKUP_SIZE" != "" ]; then
+              UPDATE_PAYLOAD="${UPDATE_PAYLOAD},\"size_bytes\":${BACKUP_SIZE}"
+            fi
+            if [ -n "$WORKFLOW_RUN_ID" ]; then
+              UPDATE_PAYLOAD="${UPDATE_PAYLOAD},\"workflow_run_id\":\"${WORKFLOW_RUN_ID}\""
+            fi
+            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}}"
             
-            (async () => {
-              try {
-                const supabaseUrl = process.env.SUPABASE_URL;
-                const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-                const backupId = process.env.BACKUP_ID;
-                const s3Key = process.env.S3_KEY;
-                const sizeBytes = process.env.BACKUP_SIZE ? parseInt(process.env.BACKUP_SIZE, 10) : null;
-                const workflowRunId = process.env.WORKFLOW_RUN_ID;
-                
-                if (!supabaseUrl || !supabaseKey || !backupId || !s3Key) {
-                  console.error('✗ Missing required variables for fallback update');
-                  process.exit(1);
-                }
-                
-                const cleanUrl = supabaseUrl.replace(/\/$/, '');
-                const supabase = createClient(cleanUrl, supabaseKey);
-                
-                const updateData = {
-                  s3_key: s3Key,
-                  status: 'success',
-                  finished_at: new Date().toISOString(),
-                  error_text: null,
-                };
-                
-                if (sizeBytes !== null && !isNaN(sizeBytes)) {
-                  updateData.size_bytes = sizeBytes;
-                }
-                
-                if (workflowRunId) {
-                  updateData.workflow_run_id = workflowRunId;
-                }
-                
-                const { data, error } = await supabase
-                  .from('backup_history')
-                  .update(updateData)
-                  .eq('id', backupId)
-                  .select()
-                  .single();
-                
-                if (error) {
-                  console.error('✗ Fallback update failed:', error.message);
-                  process.exit(1);
-                }
-                
-                console.log('✓ Fallback update successful');
-                console.log(JSON.stringify(data, null, 2));
-              } catch (err) {
-                console.error('✗ Fallback update error:', err.message);
-                process.exit(1);
-              }
-            })();
-            "
+            echo "📤 Update payload:"
+            echo "$UPDATE_PAYLOAD" | jq '.' 2>/dev/null || echo "$UPDATE_PAYLOAD"
             
-            FALLBACK_EXIT_CODE=$?
-            if [ $FALLBACK_EXIT_CODE -eq 0 ]; then
-              echo "✓ Backup history updated via fallback method"
+            # Update via Supabase REST API
+            SUPABASE_UPDATE_URL="${SUPABASE_URL}/rest/v1/backup_history"
+            UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
+              "${SUPABASE_UPDATE_URL}?id=eq.${BACKUP_ID}" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=representation" \
+              -d "$UPDATE_PAYLOAD")
+            
+            UPDATE_HTTP_CODE=$(echo "$UPDATE_RESPONSE" | tail -n1)
+            UPDATE_BODY=$(echo "$UPDATE_RESPONSE" | sed '$d')
+            
+            echo "📡 Fallback update HTTP Code: $UPDATE_HTTP_CODE"
+            echo "📡 Fallback update Response: $UPDATE_BODY"
+            
+            if [ "$UPDATE_HTTP_CODE" -ge 200 ] && [ "$UPDATE_HTTP_CODE" -lt 300 ]; then
+              echo "✓ Backup history updated via fallback method (REST API)"
+              echo "$UPDATE_BODY" | jq '.' 2>/dev/null || echo "$UPDATE_BODY"
             else
-              echo "❌ ERROR: Both edge function and fallback update failed"
+              echo "❌ ERROR: Fallback update failed (HTTP $UPDATE_HTTP_CODE)"
+              echo "❌ Response: $UPDATE_BODY"
               echo "❌ This is a critical error - backup file is in S3 but database was not updated"
               echo "❌ Manual intervention required to update backup_history table"
               exit 1
@@ -1272,19 +1229,19 @@ jobs:
           
           const cleanUrl = supabaseUrl.replace(/\/$/, '');
           const supabase = createClient(cleanUrl, supabaseKey);
-          
-          // Update system_settings_kv
-          // Note: Service role key should bypass RLS, but RLS policy requires auth.role() = 'service_role'
-          // When using service_role key directly, we need to ensure it's recognized
-          // If this fails, it's not critical - the backup itself succeeded
+              
+              // Update system_settings_kv
+              // Note: Service role key should bypass RLS, but RLS policy requires auth.role() = 'service_role'
+              // When using service_role key directly, we need to ensure it's recognized
+              // If this fails, it's not critical - the backup itself succeeded
           supabase
-            .from('system_settings_kv')
-            .upsert({
-              key: 'last_backup_at',
-              value: new Date().toISOString(),
-            }, {
-              onConflict: 'key',
-            })
+                .from('system_settings_kv')
+                .upsert({
+                  key: 'last_backup_at',
+                  value: new Date().toISOString(),
+                }, {
+                  onConflict: 'key',
+                })
             .select()
             .then(({ data: settingsData, error: settingsError }) => {
               if (settingsError) {
