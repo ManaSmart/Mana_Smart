@@ -1140,20 +1140,39 @@ jobs:
           
           # Ensure we're in the project root and module is available
           cd "$GITHUB_WORKSPACE" || cd "$(pwd)"
+          echo "  Current directory: $(pwd)"
+          echo "  Checking for node_modules..."
           
           # Verify module exists, install if needed
           if [ ! -d "node_modules/@supabase" ]; then
             echo "  Installing @supabase/supabase-js..."
-            npm install @supabase/supabase-js --no-save || {
+            npm install @supabase/supabase-js --no-save 2>&1 | head -20 || {
               echo "❌ Failed to install @supabase/supabase-js"
               exit 1
             }
           fi
           
-          echo "  Using Supabase client from node_modules..."
+          if [ ! -d "node_modules/@supabase" ]; then
+            echo "❌ ERROR: @supabase/supabase-js still not available after installation"
+            echo "  node_modules exists: $([ -d "node_modules" ] && echo "yes" || echo "no")"
+            exit 1
+          fi
+          
+          echo "  ✓ Module found, running update script..."
+          echo "  Environment variables:"
+          echo "    SUPABASE_URL: ${SUPABASE_URL:0:40}..."
+          echo "    SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:+SET}"
+          echo "    BACKUP_ID: $BACKUP_ID"
+          echo "    S3_KEY: $S3_KEY"
+          echo "    BACKUP_SIZE: $BACKUP_SIZE"
+          echo "    WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
           
           # Run the update script and capture all output (stdout and stderr)
-          UPDATE_RESULT=$(SUPABASE_URL="$SUPABASE_URL" \
+          # Use a temporary file to capture output since command substitution might hide errors
+          TEMP_OUTPUT=$(mktemp)
+          echo "  Temp output file: $TEMP_OUTPUT"
+          
+          SUPABASE_URL="$SUPABASE_URL" \
             SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
             BACKUP_ID="$BACKUP_ID" \
             S3_KEY="$S3_KEY" \
@@ -1237,13 +1256,14 @@ jobs:
             console.error('  Module path:', require.resolve.paths('@supabase/supabase-js'));
             process.exit(1);
           }
-          " 2>&1)
+          " > "$TEMP_OUTPUT" 2>&1
+          
+          UPDATE_EXIT_CODE=$?
+          UPDATE_RESULT=$(cat "$TEMP_OUTPUT" 2>/dev/null || echo "Failed to read output")
+          rm -f "$TEMP_OUTPUT"
           
           # Show the full output
           echo "$UPDATE_RESULT"
-          
-          # Check exit code
-          UPDATE_EXIT_CODE=$?
           
           if [ $UPDATE_EXIT_CODE -ne 0 ]; then
             echo ""
