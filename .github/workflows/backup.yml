@@ -1252,7 +1252,16 @@ jobs:
                 }
                 
                 const cleanUrl = supabaseUrl.replace(/\/$/, '');
-                const supabase = createClient(cleanUrl, supabaseKey);
+                // Create client with service role key - this should bypass RLS
+                const supabase = createClient(cleanUrl, supabaseKey, {
+                  auth: {
+                    persistSession: false,
+                    autoRefreshToken: false
+                  },
+                  db: {
+                    schema: 'public'
+                  }
+                });
                 
                 const updateData = {
                   status: 'success',
@@ -1273,38 +1282,76 @@ jobs:
                 console.log('  Updating backup:', backupId);
                 console.log('  Update data:', JSON.stringify(updateData, null, 2));
                 
-                // Update using REST API directly (more reliable with RLS)
-                const updateUrl = cleanUrl + '/rest/v1/backup_history?id=eq.' + backupId;
-                console.log('  Update URL:', updateUrl.replace(cleanUrl, '***'));
+                // Use database function to update backup_history (bypasses RLS)
+                console.log('  Attempting update via database function (bypasses RLS)...');
                 
-                const updateResponse = await fetch(updateUrl, {
-                  method: 'PATCH',
-                  headers: {
-                    'apikey': supabaseKey,
-                    'Authorization': 'Bearer ' + supabaseKey,
-                    'Content-Type': 'application/json',
-                    'Prefer': 'return=representation' // Return updated row
-                  },
-                  body: JSON.stringify(updateData)
+                const { data: rpcResult, error: rpcError } = await supabase.rpc('update_backup_history', {
+                  p_backup_id: backupId,
+                  p_status: updateData.status,
+                  p_s3_key: updateData.s3_key || null,
+                  p_size_bytes: updateData.size_bytes || null,
+                  p_workflow_run_id: updateData.workflow_run_id || null,
+                  p_error_text: updateData.error_text || null
                 });
                 
-                const updateResponseText = await updateResponse.text();
-                let updateResult = null;
-                try {
-                  updateResult = JSON.parse(updateResponseText);
-                } catch (e) {
-                  console.error('  ⚠ Failed to parse update response as JSON');
-                  console.error('  Response text:', updateResponseText);
+                if (rpcError) {
+                  console.error('✗ Database function update failed:', rpcError.message);
+                  console.error('  Error code:', rpcError.code);
+                  console.error('  Error details:', rpcError.details);
+                  console.error('  Error hint:', rpcError.hint);
+                  
+                  // Fallback 1: Try Supabase client update
+                  console.log('  Trying Supabase client fallback...');
+                  const { data: clientResult, error: clientError } = await supabase
+                    .from('backup_history')
+                    .update(updateData)
+                    .eq('id', backupId)
+                    .select();
+                  
+                  if (clientError) {
+                    console.error('✗ Supabase client update also failed:', clientError.message);
+                    
+                    // Fallback 2: Try REST API
+                    console.log('  Trying REST API fallback...');
+                    const updateUrl = cleanUrl + '/rest/v1/backup_history?id=eq.' + backupId;
+                    
+                    const updateResponse = await fetch(updateUrl, {
+                      method: 'PATCH',
+                      headers: {
+                        'apikey': supabaseKey,
+                        'Authorization': 'Bearer ' + supabaseKey,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                      },
+                      body: JSON.stringify(updateData)
+                    });
+                    
+                    const updateResponseText = await updateResponse.text();
+                    let restResult = null;
+                    try {
+                      restResult = JSON.parse(updateResponseText);
+                    } catch (e) {
+                      console.error('  ⚠ Failed to parse REST response as JSON');
+                      console.error('  Response text:', updateResponseText);
+                    }
+                    
+                    if (!updateResponse.ok) {
+                      console.error('✗ All update methods failed');
+                      console.error('  REST API status:', updateResponse.status);
+                      console.error('  REST API response:', updateResponseText);
+                      process.exit(1);
+                    }
+                    
+                    console.log('  ✓ REST API update succeeded (status:', updateResponse.status + ')');
+                    console.log('  REST response:', JSON.stringify(restResult, null, 2));
+                  } else {
+                    console.log('  ✓ Supabase client update succeeded');
+                    console.log('  Update response:', JSON.stringify(clientResult, null, 2));
+                  }
+                } else {
+                  console.log('  ✓ Database function update succeeded');
+                  console.log('  Update response:', JSON.stringify(rpcResult, null, 2));
                 }
-                
-                if (!updateResponse.ok) {
-                  console.error('✗ Update failed:', updateResponse.status, updateResponse.statusText);
-                  console.error('  Response:', updateResponseText);
-                  process.exit(1);
-                }
-                
-                console.log('  Update response status:', updateResponse.status);
-                console.log('  Update response:', JSON.stringify(updateResult, null, 2));
                 
                 // Verify the update worked by querying the backup again (with retries)
                 console.log('  Verifying update...');
