@@ -1138,77 +1138,120 @@ jobs:
           echo ""
           echo "📝 Step 2: Updating backup_history using Supabase client..."
           
-          # Use Node.js with Supabase client to ensure RLS is bypassed correctly
-          cd "$GITHUB_WORKSPACE" || true
+          # Ensure we're in the project root and module is available
+          cd "$GITHUB_WORKSPACE" || cd "$(pwd)"
           
-          UPDATE_RESULT=$(node --input-type=commonjs -e "
-          const { createClient } = require('@supabase/supabase-js');
-          
-          (async () => {
-            try {
-              const supabaseUrl = process.env.SUPABASE_URL;
-              const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-              const backupId = process.env.BACKUP_ID;
-              const s3Key = process.env.S3_KEY;
-              const sizeBytes = process.env.BACKUP_SIZE ? parseInt(process.env.BACKUP_SIZE, 10) : null;
-              const workflowRunId = process.env.WORKFLOW_RUN_ID;
-              
-              if (!supabaseUrl || !supabaseKey || !backupId) {
-                console.error('✗ Missing required variables');
-                process.exit(1);
-              }
-              
-              const cleanUrl = supabaseUrl.replace(/\/$/, '');
-              const supabase = createClient(cleanUrl, supabaseKey);
-              
-              const updateData = {
-                status: 'success',
-                finished_at: new Date().toISOString(),
-                error_text: null,
-              };
-              
-              if (s3Key) {
-                updateData.s3_key = s3Key;
-              }
-              if (sizeBytes !== null && !isNaN(sizeBytes)) {
-                updateData.size_bytes = sizeBytes;
-              }
-              if (workflowRunId) {
-                updateData.workflow_run_id = workflowRunId;
-              }
-              
-              console.log('  Updating backup:', backupId);
-              console.log('  Update data:', JSON.stringify(updateData, null, 2));
-              
-              const { data, error } = await supabase
-                .from('backup_history')
-                .update(updateData)
-                .eq('id', backupId)
-                .select()
-                .single();
-              
-              if (error) {
-                console.error('✗ Update failed:', error.message);
-                console.error('  Error code:', error.code);
-                console.error('  Error details:', error.details);
-                process.exit(1);
-              }
-              
-              if (!data) {
-                console.error('✗ Update returned no data');
-                process.exit(1);
-              }
-              
-              console.log('✓ Update successful');
-              console.log(JSON.stringify(data, null, 2));
-            } catch (err) {
-              console.error('✗ Update error:', err.message);
-              process.exit(1);
+          # Verify module exists, install if needed
+          if [ ! -d "node_modules/@supabase" ]; then
+            echo "  Installing @supabase/supabase-js..."
+            npm install @supabase/supabase-js --no-save || {
+              echo "❌ Failed to install @supabase/supabase-js"
+              exit 1
             }
-          })();
+          fi
+          
+          echo "  Using Supabase client from node_modules..."
+          
+          # Run the update script and capture all output (stdout and stderr)
+          UPDATE_RESULT=$(SUPABASE_URL="$SUPABASE_URL" \
+            SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_ROLE_KEY" \
+            BACKUP_ID="$BACKUP_ID" \
+            S3_KEY="$S3_KEY" \
+            BACKUP_SIZE="$BACKUP_SIZE" \
+            WORKFLOW_RUN_ID="$WORKFLOW_RUN_ID" \
+            node --input-type=commonjs -e "
+          try {
+            const { createClient } = require('@supabase/supabase-js');
+            
+            (async () => {
+              try {
+                const supabaseUrl = process.env.SUPABASE_URL;
+                const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+                const backupId = process.env.BACKUP_ID;
+                const s3Key = process.env.S3_KEY;
+                const sizeBytes = process.env.BACKUP_SIZE ? parseInt(process.env.BACKUP_SIZE, 10) : null;
+                const workflowRunId = process.env.WORKFLOW_RUN_ID;
+                
+                if (!supabaseUrl || !supabaseKey || !backupId) {
+                  console.error('✗ Missing required variables');
+                  console.error('  SUPABASE_URL:', supabaseUrl ? 'SET' : 'MISSING');
+                  console.error('  SUPABASE_SERVICE_ROLE_KEY:', supabaseKey ? 'SET' : 'MISSING');
+                  console.error('  BACKUP_ID:', backupId ? 'SET' : 'MISSING');
+                  process.exit(1);
+                }
+                
+                const cleanUrl = supabaseUrl.replace(/\/$/, '');
+                const supabase = createClient(cleanUrl, supabaseKey);
+                
+                const updateData = {
+                  status: 'success',
+                  finished_at: new Date().toISOString(),
+                  error_text: null,
+                };
+                
+                if (s3Key) {
+                  updateData.s3_key = s3Key;
+                }
+                if (sizeBytes !== null && !isNaN(sizeBytes)) {
+                  updateData.size_bytes = sizeBytes;
+                }
+                if (workflowRunId) {
+                  updateData.workflow_run_id = workflowRunId;
+                }
+                
+                console.log('  Updating backup:', backupId);
+                console.log('  Update data:', JSON.stringify(updateData, null, 2));
+                
+                const { data, error } = await supabase
+                  .from('backup_history')
+                  .update(updateData)
+                  .eq('id', backupId)
+                  .select()
+                  .single();
+                
+                if (error) {
+                  console.error('✗ Update failed:', error.message);
+                  console.error('  Error code:', error.code);
+                  console.error('  Error details:', error.details);
+                  console.error('  Error hint:', error.hint);
+                  process.exit(1);
+                }
+                
+                if (!data) {
+                  console.error('✗ Update returned no data');
+                  process.exit(1);
+                }
+                
+                console.log('✓ Update successful');
+                console.log(JSON.stringify(data, null, 2));
+              } catch (err) {
+                console.error('✗ Update error:', err.message);
+                console.error('  Stack:', err.stack);
+                process.exit(1);
+              }
+            })();
+          } catch (requireError) {
+            console.error('✗ Failed to require @supabase/supabase-js');
+            console.error('  Error:', requireError.message);
+            console.error('  Current directory:', process.cwd());
+            console.error('  Module path:', require.resolve.paths('@supabase/supabase-js'));
+            process.exit(1);
+          }
           " 2>&1)
           
+          # Show the full output
           echo "$UPDATE_RESULT"
+          
+          # Check exit code
+          UPDATE_EXIT_CODE=$?
+          
+          if [ $UPDATE_EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "❌ ERROR: Node.js script exited with code $UPDATE_EXIT_CODE"
+            echo "❌ Full output shown above"
+            echo "❌ This is CRITICAL - backup file is in S3 but DB not updated!"
+            exit 1
+          fi
           
           if echo "$UPDATE_RESULT" | grep -q "✓ Update successful"; then
             echo ""
@@ -1219,8 +1262,8 @@ jobs:
             echo "$UPDATED_DATA"
           else
             echo ""
-            echo "❌ ERROR: Update failed"
-            echo "❌ Output: $UPDATE_RESULT"
+            echo "❌ ERROR: Update failed - '✓ Update successful' not found in output"
+            echo "❌ Full output shown above"
             echo "❌ This is CRITICAL - backup file is in S3 but DB not updated!"
             exit 1
           fi
