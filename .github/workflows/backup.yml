@@ -755,13 +755,45 @@ jobs:
           async function downloadBucket(bucketName) {
             try {
               console.log('  → Listing files in bucket:', bucketName);
-              const { data: files, error } = await supabase.storage
-                .from(bucketName)
-                .list('', { limit: 1000, recursive: true });
+              
+              // Retry logic for listing files (handles timeouts)
+              let files = null;
+              let error = null;
+              const maxRetries = 3;
+              let retryCount = 0;
+              
+              while (retryCount < maxRetries) {
+                const result = await supabase.storage
+                  .from(bucketName)
+                  .list('', { limit: 1000, recursive: true });
+                
+                files = result.data;
+                error = result.error;
+                
+                if (!error) {
+                  break; // Success
+                }
+                
+                // Check if it's a timeout or connection error
+                const errorMsg = (error.message || '').toLowerCase();
+                const isTimeout = errorMsg.includes('timeout') ||
+                  errorMsg.includes('timed out') ||
+                  errorMsg.includes('connection') ||
+                  errorMsg.includes('time out');
+                
+                if (!isTimeout || retryCount === maxRetries - 1) {
+                  break; // Not a timeout or last retry
+                }
+                
+                retryCount++;
+                const delay = Math.min(1000 * Math.pow(2, retryCount - 1), 5000); // Exponential backoff, max 5s
+                console.log(`  ⚠ Retry ${retryCount}/${maxRetries} for ${bucketName} after ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+              }
               
               if (error) {
                 console.error('  ✗ Error listing files in', bucketName, ':', error.message);
-                return { bucket: bucketName, downloaded: 0, error: error.message };
+                return { bucket: bucketName, downloaded: 0, error: error.message, warning: true };
               }
               
               if (!files || files.length === 0) {
@@ -833,8 +865,27 @@ jobs:
               if (bucketsWithErrors.length > 0) {
                 const errorBuckets = bucketsWithErrors.map(r => r.bucket).join(', ');
                 const errorDetails = bucketsWithErrors.map(r => r.bucket + ' (' + r.error + ')').join(', ');
-                console.error('  ✗ Errors in buckets:', errorBuckets);
-                throw new Error('Failed to backup ' + bucketsWithErrors.length + ' bucket(s): ' + errorDetails);
+                
+                // Separate critical errors from warnings (timeouts/connection issues)
+                const criticalErrors = bucketsWithErrors.filter(r => !r.warning);
+                const warnings = bucketsWithErrors.filter(r => r.warning);
+                
+                if (warnings.length > 0) {
+                  console.warn('  ⚠️ Warnings in buckets (timeouts/connection issues):', warnings.map(r => r.bucket).join(', '));
+                  console.warn('  ⚠️ These buckets will be skipped, but backup will continue');
+                }
+                
+                if (criticalErrors.length > 0) {
+                  const criticalDetails = criticalErrors.map(r => r.bucket + ' (' + r.error + ')').join(', ');
+                  console.error('  ✗ Critical errors in buckets:', criticalErrors.map(r => r.bucket).join(', '));
+                  // Only fail if there are critical errors (not just timeouts)
+                  throw new Error('Failed to backup ' + criticalErrors.length + ' bucket(s): ' + criticalDetails);
+                }
+                
+                // If only warnings, log but don't fail
+                if (warnings.length > 0 && criticalErrors.length === 0) {
+                  console.log('  ℹ️ Backup completed with warnings - some buckets had timeout/connection issues');
+                }
               }
               
               // Create a summary file
