@@ -1274,14 +1274,14 @@ jobs:
                 console.log('  Update data:', JSON.stringify(updateData, null, 2));
                 
                 // Update using REST API directly (more reliable with RLS)
-                const updateUrl = `${cleanUrl}/rest/v1/backup_history?id=eq.${backupId}`;
+                const updateUrl = cleanUrl + '/rest/v1/backup_history?id=eq.' + backupId;
                 console.log('  Update URL:', updateUrl.replace(cleanUrl, '***'));
                 
                 const updateResponse = await fetch(updateUrl, {
                   method: 'PATCH',
                   headers: {
                     'apikey': supabaseKey,
-                    'Authorization': `Bearer ${supabaseKey}`,
+                    'Authorization': 'Bearer ' + supabaseKey,
                     'Content-Type': 'application/json',
                     'Prefer': 'return=representation' // Return updated row
                   },
@@ -1317,7 +1317,7 @@ jobs:
                   // Small delay before verification (except first attempt)
                   if (verifyRetryCount > 0) {
                     const delay = 1000 * verifyRetryCount; // 1s, 2s, 3s, 4s
-                    console.log(`  ⚠ Verification attempt ${verifyRetryCount + 1}/${maxVerifyRetries}, waiting ${delay}ms...`);
+                    console.log('  ⚠ Verification attempt ' + (verifyRetryCount + 1) + '/' + maxVerifyRetries + ', waiting ' + delay + 'ms...');
                     await new Promise(resolve => setTimeout(resolve, delay));
                   }
                   
@@ -1340,7 +1340,9 @@ jobs:
                   verifyRetryCount++;
                   
                   if (verifyRetryCount < maxVerifyRetries) {
-                    console.log(`  ⚠ Verification attempt ${verifyRetryCount} - status: ${verifyData?.status || 'unknown'}, s3_key: ${verifyData?.s3_key ? 'set' : 'missing'}`);
+                    const statusStr = verifyData && verifyData.status ? verifyData.status : 'unknown';
+                    const s3KeyStr = verifyData && verifyData.s3_key ? 'set' : 'missing';
+                    console.log('  ⚠ Verification attempt ' + verifyRetryCount + ' - status: ' + statusStr + ', s3_key: ' + s3KeyStr);
                   }
                 }
                 
