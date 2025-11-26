@@ -1062,6 +1062,7 @@ jobs:
         # ✅ CRITICAL: This step MUST run to update the database
         # Remove 'if: always()' to ensure it only runs if upload succeeded
         run: |
+          set +e  # Don't exit on error immediately - we need to read the temp file
           echo "=========================================="
           echo "🔧 BACKUP UPDATE STEP - STARTING"
           echo "=========================================="
@@ -1259,16 +1260,23 @@ jobs:
           " > "$TEMP_OUTPUT" 2>&1
           
           UPDATE_EXIT_CODE=$?
-          UPDATE_RESULT=$(cat "$TEMP_OUTPUT" 2>/dev/null || echo "Failed to read output")
-          rm -f "$TEMP_OUTPUT"
           
-          # Show the full output
-          echo "$UPDATE_RESULT"
+          # Always read and show the output, even if command failed
+          if [ -f "$TEMP_OUTPUT" ]; then
+            UPDATE_RESULT=$(cat "$TEMP_OUTPUT" 2>/dev/null || echo "Failed to read output file")
+            echo "=== NODE.JS SCRIPT OUTPUT ==="
+            echo "$UPDATE_RESULT"
+            echo "=== END OUTPUT ==="
+            rm -f "$TEMP_OUTPUT"
+          else
+            UPDATE_RESULT="Temp file not found: $TEMP_OUTPUT"
+            echo "❌ ERROR: Temp output file was not created"
+          fi
           
           if [ $UPDATE_EXIT_CODE -ne 0 ]; then
             echo ""
             echo "❌ ERROR: Node.js script exited with code $UPDATE_EXIT_CODE"
-            echo "❌ Full output shown above"
+            echo "❌ See output above for error details"
             echo "❌ This is CRITICAL - backup file is in S3 but DB not updated!"
             exit 1
           fi
