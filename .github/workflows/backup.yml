@@ -1058,161 +1058,137 @@ jobs:
             exit 1
           fi
 
-      - name: Update backup_history via Edge Function
-        # ✅ NEW: Use update-backup edge function instead of direct Supabase update
-        # This ensures proper validation, idempotency, and error handling
-        # Falls back to direct Supabase update if edge function fails
-        # Note: Environment variables are inherited from job-level env
+      - name: Update backup_history after S3 upload
+        # ✅ CRITICAL: This step MUST run to update the database
+        # It runs even if previous steps had warnings (but not if they failed)
+        if: always()
         run: |
-          # ✅ FIX: Check if upload completed
-          if [ "${{ env.UPLOAD_COMPLETED }}" != "true" ]; then
-            echo "❌ ERROR: S3 upload did not complete successfully"
-            echo "❌ Cannot update backup_history - upload verification failed"
-            exit 1
-          fi
+          echo "=========================================="
+          echo "🔧 BACKUP UPDATE STEP - STARTING"
+          echo "=========================================="
           
-          # Get variables from environment (set at job level or from previous steps)
+          # Get all variables - use defaults if env vars not set
           S3_KEY="${{ env.S3_KEY }}"
           BACKUP_SIZE="${{ env.BACKUP_SIZE }}"
           DISPATCH_ID="$DISPATCH_ID"
           WORKFLOW_RUN_ID="${{ github.run_id }}"
           
-          # These are available from job-level env
-          # SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are already set
-          # BACKUP_API_KEY is optional (from job-level env if set)
+          echo "✓ Variables:"
+          echo "  DISPATCH_ID: $DISPATCH_ID"
+          echo "  S3_KEY: $S3_KEY"
+          echo "  BACKUP_SIZE: $BACKUP_SIZE"
+          echo "  WORKFLOW_RUN_ID: $WORKFLOW_RUN_ID"
+          echo "  SUPABASE_URL: ${SUPABASE_URL:0:40}..."
           
-          # Get backup_id from dispatch_id using Supabase REST API (no Node.js module needed)
-          echo "🔍 Finding backup_id for dispatch_id: $DISPATCH_ID"
+          # Validate required variables
+          if [ -z "$DISPATCH_ID" ]; then
+            echo "❌ ERROR: DISPATCH_ID is empty"
+            exit 1
+          fi
           
-          # Use Supabase REST API directly via curl
+          if [ -z "$S3_KEY" ]; then
+            echo "⚠ WARNING: S3_KEY is empty, but continuing..."
+          fi
+          
+          # Step 1: Find backup_id
+          echo ""
+          echo "🔍 Step 1: Finding backup_id for dispatch_id: $DISPATCH_ID"
+          
           SUPABASE_REST_URL="${SUPABASE_URL}/rest/v1/backup_history"
-          BACKUP_QUERY_RESPONSE=$(curl -s -X GET \
-            "${SUPABASE_REST_URL}?dispatch_id=eq.${DISPATCH_ID}&select=id" \
+          QUERY_URL="${SUPABASE_REST_URL}?dispatch_id=eq.${DISPATCH_ID}&select=id"
+          
+          echo "  Querying: ${QUERY_URL:0:100}..."
+          
+          BACKUP_QUERY_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X GET \
+            "$QUERY_URL" \
             -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=representation")
+            -H "Content-Type: application/json" 2>&1)
           
-          echo "📡 Query response: $BACKUP_QUERY_RESPONSE"
+          HTTP_CODE=$(echo "$BACKUP_QUERY_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2 || echo "000")
+          QUERY_BODY=$(echo "$BACKUP_QUERY_RESPONSE" | sed '/HTTP_CODE:/d' | head -1)
           
-          # Extract backup_id from JSON response using jq or grep/sed
+          echo "  HTTP Code: $HTTP_CODE"
+          echo "  Response: $QUERY_BODY"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ ERROR: Failed to query backup_history (HTTP $HTTP_CODE)"
+            echo "❌ Full response: $BACKUP_QUERY_RESPONSE"
+            exit 1
+          fi
+          
+          # Extract backup_id - try multiple methods
+          BACKUP_ID=""
           if command -v jq &> /dev/null; then
-            BACKUP_ID=$(echo "$BACKUP_QUERY_RESPONSE" | jq -r '.[0].id // empty')
-          else
-            # Fallback: extract ID using grep/sed
-            BACKUP_ID=$(echo "$BACKUP_QUERY_RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | sed 's/"id":"\([^"]*\)"/\1/')
+            BACKUP_ID=$(echo "$QUERY_BODY" | jq -r '.[0].id // empty' 2>/dev/null)
           fi
           
-          # If still empty, try alternative extraction
+          if [ -z "$BACKUP_ID" ]; then
+            BACKUP_ID=$(echo "$QUERY_BODY" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+          fi
+          
           if [ -z "$BACKUP_ID" ] || [ "$BACKUP_ID" = "null" ]; then
-            # Try extracting UUID pattern directly
-            BACKUP_ID=$(echo "$BACKUP_QUERY_RESPONSE" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
-          fi
-          
-          if [ -z "$BACKUP_ID" ] || [ "$BACKUP_ID" = "" ]; then
-            echo "❌ ERROR: Could not find backup_id for dispatch_id: $DISPATCH_ID"
-            echo "❌ This means the backup entry was not created in backup_history"
+            echo "❌ ERROR: Could not extract backup_id"
+            echo "❌ Response was: $QUERY_BODY"
             exit 1
           fi
           
           echo "✓ Found backup_id: $BACKUP_ID"
-          echo "📤 Preparing to update backup_history..."
-          echo "  - backup_id: $BACKUP_ID"
-          echo "  - s3_key: $S3_KEY"
-          echo "  - size_bytes: $BACKUP_SIZE"
-          echo "  - workflow_run_id: $WORKFLOW_RUN_ID"
           
-          # Check if BACKUP_API_KEY is set
-          if [ -z "$BACKUP_API_KEY" ] || [ "$BACKUP_API_KEY" = "" ]; then
-            echo "⚠ WARNING: BACKUP_API_KEY not set, using direct Supabase update (fallback)"
-            USE_EDGE_FUNCTION=false
+          # Step 2: Update backup_history
+          echo ""
+          echo "📝 Step 2: Updating backup_history..."
+          
+          FINISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          # Build JSON payload carefully
+          UPDATE_JSON="{"
+          [ -n "$S3_KEY" ] && UPDATE_JSON="${UPDATE_JSON}\"s3_key\":\"${S3_KEY}\","
+          UPDATE_JSON="${UPDATE_JSON}\"status\":\"success\","
+          UPDATE_JSON="${UPDATE_JSON}\"finished_at\":\"${FINISHED_AT}\","
+          UPDATE_JSON="${UPDATE_JSON}\"error_text\":null"
+          [ -n "$BACKUP_SIZE" ] && [ "$BACKUP_SIZE" != "" ] && UPDATE_JSON="${UPDATE_JSON},\"size_bytes\":${BACKUP_SIZE}"
+          [ -n "$WORKFLOW_RUN_ID" ] && UPDATE_JSON="${UPDATE_JSON},\"workflow_run_id\":\"${WORKFLOW_RUN_ID}\""
+          UPDATE_JSON="${UPDATE_JSON}}"
+          
+          echo "  Payload: $UPDATE_JSON"
+          
+          # Perform update
+          UPDATE_URL="${SUPABASE_REST_URL}?id=eq.${BACKUP_ID}"
+          echo "  Updating: ${UPDATE_URL:0:100}..."
+          
+          UPDATE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X PATCH \
+            "$UPDATE_URL" \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=representation" \
+            -d "$UPDATE_JSON" 2>&1)
+          
+          UPDATE_HTTP_CODE=$(echo "$UPDATE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2 || echo "000")
+          UPDATE_BODY=$(echo "$UPDATE_RESPONSE" | sed '/HTTP_CODE:/d' | head -1)
+          
+          echo "  HTTP Code: $UPDATE_HTTP_CODE"
+          echo "  Response: $UPDATE_BODY"
+          
+          if [ "$UPDATE_HTTP_CODE" -ge 200 ] && [ "$UPDATE_HTTP_CODE" -lt 300 ]; then
+            echo ""
+            echo "✅ SUCCESS: Backup history updated!"
+            echo "   - status: success"
+            echo "   - s3_key: $S3_KEY"
+            echo "   - finished_at: $FINISHED_AT"
           else
-            echo "✓ BACKUP_API_KEY is set, attempting edge function call"
-            USE_EDGE_FUNCTION=true
+            echo ""
+            echo "❌ ERROR: Update failed (HTTP $UPDATE_HTTP_CODE)"
+            echo "❌ Response: $UPDATE_BODY"
+            echo "❌ This is CRITICAL - backup file is in S3 but DB not updated!"
+            exit 1
           fi
           
-          # Try edge function first if API key is available
-          if [ "$USE_EDGE_FUNCTION" = "true" ]; then
-            echo "📡 Calling edge function: $SUPABASE_URL/functions/v1/update-backup"
-            
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/functions/v1/update-backup" \
-              -H "Authorization: Bearer $BACKUP_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{
-                \"backup_id\": \"$BACKUP_ID\",
-                \"s3_key\": \"$S3_KEY\",
-                \"size_bytes\": $BACKUP_SIZE,
-                \"workflow_run_id\": \"$WORKFLOW_RUN_ID\"
-              }" 2>&1)
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            BODY=$(echo "$RESPONSE" | sed '$d')
-            
-            echo "📡 Edge function response HTTP Code: $HTTP_CODE"
-            echo "📡 Edge function response Body: $BODY"
-            
-            if [ "$HTTP_CODE" -eq 200 ]; then
-              echo "✓ Backup history updated successfully via edge function"
-              echo "$BODY" | jq '.' 2>/dev/null || echo "$BODY"
-              EDGE_FUNCTION_SUCCESS=true
-            else
-              echo "⚠ WARNING: Edge function call failed (HTTP $HTTP_CODE)"
-              echo "⚠ Response: $BODY"
-              EDGE_FUNCTION_SUCCESS=false
-            fi
-          else
-            EDGE_FUNCTION_SUCCESS=false
-          fi
-          
-          # Fallback to direct Supabase update if edge function failed or not available
-          if [ "$EDGE_FUNCTION_SUCCESS" != "true" ]; then
-            echo "📝 Using direct Supabase REST API update (fallback method)..."
-            
-            # Prepare update payload using printf to avoid YAML parsing issues
-            FINISHED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            UPDATE_PAYLOAD="{"
-            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"s3_key\":\"${S3_KEY}\","
-            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"status\":\"success\","
-            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"finished_at\":\"${FINISHED_AT}\","
-            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}\"error_text\":null"
-            if [ -n "$BACKUP_SIZE" ] && [ "$BACKUP_SIZE" != "" ]; then
-              UPDATE_PAYLOAD="${UPDATE_PAYLOAD},\"size_bytes\":${BACKUP_SIZE}"
-            fi
-            if [ -n "$WORKFLOW_RUN_ID" ]; then
-              UPDATE_PAYLOAD="${UPDATE_PAYLOAD},\"workflow_run_id\":\"${WORKFLOW_RUN_ID}\""
-            fi
-            UPDATE_PAYLOAD="${UPDATE_PAYLOAD}}"
-            
-            echo "📤 Update payload:"
-            echo "$UPDATE_PAYLOAD" | jq '.' 2>/dev/null || echo "$UPDATE_PAYLOAD"
-            
-            # Update via Supabase REST API
-            SUPABASE_UPDATE_URL="${SUPABASE_URL}/rest/v1/backup_history"
-            UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X PATCH \
-              "${SUPABASE_UPDATE_URL}?id=eq.${BACKUP_ID}" \
-              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "Content-Type: application/json" \
-              -H "Prefer: return=representation" \
-              -d "$UPDATE_PAYLOAD")
-            
-            UPDATE_HTTP_CODE=$(echo "$UPDATE_RESPONSE" | tail -n1)
-            UPDATE_BODY=$(echo "$UPDATE_RESPONSE" | sed '$d')
-            
-            echo "📡 Fallback update HTTP Code: $UPDATE_HTTP_CODE"
-            echo "📡 Fallback update Response: $UPDATE_BODY"
-            
-            if [ "$UPDATE_HTTP_CODE" -ge 200 ] && [ "$UPDATE_HTTP_CODE" -lt 300 ]; then
-              echo "✓ Backup history updated via fallback method (REST API)"
-              echo "$UPDATE_BODY" | jq '.' 2>/dev/null || echo "$UPDATE_BODY"
-            else
-              echo "❌ ERROR: Fallback update failed (HTTP $UPDATE_HTTP_CODE)"
-              echo "❌ Response: $UPDATE_BODY"
-              echo "❌ This is a critical error - backup file is in S3 but database was not updated"
-              echo "❌ Manual intervention required to update backup_history table"
-              exit 1
-            fi
-          fi
+          echo ""
+          echo "=========================================="
+          echo "✅ BACKUP UPDATE COMPLETE"
+          echo "=========================================="
           
           # Update system_settings_kv (keep existing logic)
           echo "📝 Updating system_settings..."
