@@ -8,6 +8,9 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Use absolute paths for Hostinger root deployment
+  // Change to './' if deploying to a subdirectory
+  base: '/',
   plugins: [
     react(),
     {
@@ -34,6 +37,16 @@ export default defineConfig({
     target: 'esnext',
     modulePreload: {
       polyfill: false, // Modern browsers don't need polyfill
+    },
+    // Ensure assets are properly referenced
+    assetsDir: 'assets',
+    rollupOptions: {
+      output: {
+        // Ensure consistent asset naming
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+      },
     },
   },
   // Optimize dev server

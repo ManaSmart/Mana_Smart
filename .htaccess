@@ -6,8 +6,9 @@
   AddType text/javascript .js
   AddType application/json .json
   
-  # CSS MIME type
+  # CSS MIME type - CRITICAL for styles to load
   AddType text/css .css
+  AddCharset UTF-8 .css
   
   # Other important types
   AddType application/wasm .wasm
@@ -88,6 +89,16 @@
   
   # Referrer Policy
   Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  
+  # Ensure CSS files are served with correct content type
+  <FilesMatch "\.css$">
+    Header set Content-Type "text/css; charset=UTF-8"
+  </FilesMatch>
+  
+  # Ensure JS files are served with correct content type
+  <FilesMatch "\.(js|mjs)$">
+    Header set Content-Type "application/javascript; charset=UTF-8"
+  </FilesMatch>
 </IfModule>
 
 # Force HTTPS (uncomment if you have SSL installed)

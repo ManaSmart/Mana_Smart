@@ -39,6 +39,7 @@ import {
   deleteBackup,
   restoreBackup,
   shareBackup,
+  updateBackup,
 } from "../lib/backupApi";
 
 interface BackupHistoryItem {
@@ -557,7 +558,6 @@ export function BackupSettings({ autoBackup, onAutoBackupChange }: BackupSetting
                   
                   try {
                     // Try to call the update-backup API
-                    const { updateBackup } = await import("../lib/backupApi");
                     await updateBackup(
                       backup.id,
                       dispatchId,

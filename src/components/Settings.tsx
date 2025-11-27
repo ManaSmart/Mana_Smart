@@ -45,6 +45,7 @@ import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { validateFile } from "../lib/storage";
 import { uploadLogoToS3WithFixedPath } from "../lib/s3Storage";
 import { loadLogoWithAllFallbacks, downloadLogoToLocalBackup, clearLocalLogoBackup } from "../lib/logoManager";
+import { updateBackupEnabled } from "../lib/backupApi";
 import { ACCESS_AREAS, ACCESS_AREA_MAP } from "../config/access-areas";
 import type { AccessAction } from "../config/access-areas";
 import type { PageId } from "../config/page-map";
@@ -2140,7 +2141,6 @@ export function Settings({
                         setAutoBackup(checked);
                         // Sync with BackupSettings
                         try {
-                          const { updateBackupEnabled } = await import("../lib/backupApi");
                           await updateBackupEnabled(checked);
                         } catch (error) {
                           console.error("Failed to sync backup setting:", error);
