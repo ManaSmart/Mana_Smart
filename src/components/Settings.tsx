@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -40,7 +40,7 @@ import type { Roles } from "../../supabase/models/roles";
 import type { SystemUsers } from "../../supabase/models/system_users";
 import type { CompanyBranding } from "../../supabase/models/company_branding";
 import type { SystemSettings } from "../../supabase/models/system_settings";
-import { uploadFile, uploadLogoToS3, getFileUrl, deleteFile, getFilesByOwner } from "../lib/storage";
+import { uploadFile, getFileUrl, deleteFile, getFilesByOwner } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { validateFile } from "../lib/storage";
 import { uploadLogoToS3WithFixedPath } from "../lib/s3Storage";
@@ -298,7 +298,7 @@ export function Settings({
   const [localSystemStamp, setLocalSystemStamp] = useState<string | null>(null);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [uploadingStamp, setUploadingStamp] = useState(false);
-  const [logoLoading, setLogoLoading] = useState(true); // Track logo loading state
+  const [, setLogoLoading] = useState(true); // Track logo loading state
 
   // Company settings
   const [companyName, setCompanyName] = useState("Scent Management Company");

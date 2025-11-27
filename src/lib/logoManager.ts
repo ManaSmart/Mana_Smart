@@ -3,12 +3,11 @@
  * Handles logo loading, URL regeneration, and fallback mechanisms
  */
 
-import { getFileUrlFromS3, regenerateSignedUrlForS3, fileExistsInS3 } from './s3Storage';
+import { regenerateSignedUrlForS3 } from './s3Storage';
 import { getFilesByOwner, getFileUrl } from './storage';
 import { FILE_CATEGORIES, STORAGE_BUCKETS } from '../../supabase/models/file_metadata';
 import type { FileMetadata } from '../../supabase/models/file_metadata';
 
-const LOGO_FIXED_PATH = 'branding/logo';
 const LOCAL_LOGO_PATH = '/logo.png'; // Public folder path
 const SIGNED_URL_EXPIRY = 604800; // 7 days in seconds
 

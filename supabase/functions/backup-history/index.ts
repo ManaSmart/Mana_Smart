@@ -58,6 +58,7 @@ serve(async (req: Request) => {
   let userId: string | null = null;
   let body: any = {};
   let limit = 5;
+  const url = new URL(req.url); // Define url at higher scope for both GET and POST
 
   if (req.method === "POST") {
     try {
@@ -111,7 +112,6 @@ serve(async (req: Request) => {
     }
   } else {
     // GET request - less strict, but still verify if user_id provided
-    const url = new URL(req.url);
     limit = parseInt(url.searchParams.get("limit") || "5", 10);
     userId = url.searchParams.get("user_id");
     
@@ -178,7 +178,7 @@ serve(async (req: Request) => {
     // ✅ FIX: Apply search filter BEFORE final limiting for accurate results
     if (searchQuery && searchQuery.trim()) {
       const searchLower = searchQuery.toLowerCase();
-      results = results.filter((item) => {
+      results = results.filter((item: any) => {
         // Search in S3 key (filename)
         if (item.s3_key && item.s3_key.toLowerCase().includes(searchLower)) {
           return true;

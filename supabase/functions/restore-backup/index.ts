@@ -17,7 +17,6 @@ import { ZipReader, BlobReader, BlobWriter } from "https://deno.land/x/zipjs@v2.
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const DATABASE_URL = Deno.env.get("DATABASE_URL") ?? "";
 
 const allowedOrigins = [
   "http://localhost:5173",
@@ -45,7 +44,6 @@ function convertInsertsToMerge(sql: string): string {
   const converted: string[] = [];
   let inInsert = false;
   let insertBuffer: string[] = [];
-  let tableName = '';
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -54,11 +52,6 @@ function convertInsertsToMerge(sql: string): string {
     if (line.match(/^INSERT INTO/i)) {
       inInsert = true;
       insertBuffer = [line];
-      // Extract table name
-      const match = line.match(/INSERT INTO\s+([^\s(]+)/i);
-      if (match) {
-        tableName = match[1].replace(/"/g, '');
-      }
       continue;
     }
 
@@ -309,7 +302,7 @@ serve(async (req: Request) => {
       fileBytes = new Uint8Array(fileBuffer);
     } else {
       // New: base64 JSON format (body already parsed in auth section)
-      const { backup_file, file_name, file_type } = body;
+      const { backup_file, file_name } = body;
 
       if (!backup_file) {
         return new Response(
@@ -418,7 +411,7 @@ serve(async (req: Request) => {
           
           if (!existingUser?.user) {
             // User doesn't exist, create it
-            const { data, error } = await supabase.auth.admin.createUser({
+            const { error } = await supabase.auth.admin.createUser({
               email: user.email,
               email_confirm: !!user.email_confirmed_at,
               user_metadata: user.user_metadata || {},

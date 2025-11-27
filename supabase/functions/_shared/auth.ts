@@ -1,7 +1,5 @@
 // Shared authentication and authorization utilities for Edge Functions
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
 export interface AuthResult {
   success: boolean;
   user?: {

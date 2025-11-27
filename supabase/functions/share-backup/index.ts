@@ -147,7 +147,6 @@ serve(async (req: Request) => {
       // Email sharing using Supabase Edge Function or external service
       const EMAIL_SERVICE_URL = Deno.env.get("EMAIL_SERVICE_URL") ?? "";
       const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY") ?? "";
-      const AWS_SES_REGION = Deno.env.get("AWS_SES_REGION") ?? "";
       const AWS_SES_ACCESS_KEY = Deno.env.get("AWS_SES_ACCESS_KEY") ?? "";
       const AWS_SES_SECRET_KEY = Deno.env.get("AWS_SES_SECRET_KEY") ?? "";
       const FROM_EMAIL = Deno.env.get("FROM_EMAIL") ?? "noreply@console-mana.com";
