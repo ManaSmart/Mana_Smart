@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, DollarSign, CheckCircle, AlertCircle, Clock, Download } from "lucide-react";
+import { Plus, Search, DollarSign, CheckCircle, AlertCircle, Clock, Download, Receipt } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
 import { Button } from "./ui/button";
@@ -981,6 +981,31 @@ export function Payments() {
         <CardContent>
           {isLoading ? (
             <div className="py-6 text-center text-muted-foreground">Loading payments...</div>
+          ) : payments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 px-4">
+              <div className="relative mb-6">
+                <div className="absolute inset-0 bg-gradient-to-br from-purple-100 to-blue-100 rounded-full blur-2xl opacity-50"></div>
+                <div className="relative bg-gradient-to-br from-purple-50 to-blue-50 rounded-full p-8 border-2 border-purple-200">
+                  <Receipt className="h-16 w-16 text-purple-600" />
+                </div>
+              </div>
+              <h3 className="text-xl font-semibold text-foreground mb-2">No Payments Yet</h3>
+              <p className="text-muted-foreground text-center max-w-md mb-6">
+                Start tracking your payments by recording your first payment. Click the "Record New Payment" button to get started.
+              </p>
+              <Button 
+                onClick={handleNewPayment}
+                className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                <Plus className="h-4 w-4" />
+                Record New Payment
+              </Button>
+            </div>
+          ) : filteredPayments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <Receipt className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">No payments found matching your search criteria.</p>
+            </div>
           ) : (
             <Table>
             <TableHeader>

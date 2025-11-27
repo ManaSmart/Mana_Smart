@@ -509,7 +509,17 @@ export function Customers() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredCustomers.map((customer) => (
+              {filteredCustomers.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={10} className="p-0">
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <User className="h-12 w-12 text-muted-foreground mb-3" />
+                      <p className="text-muted-foreground">No customers found</p>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredCustomers.map((customer) => (
                 <TableRow key={customer.id}>
                   <TableCell className="font-medium">{customer.name}</TableCell>
                   <TableCell>
@@ -655,7 +665,7 @@ export function Customers() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+              )))}
             </TableBody>
           </Table>
         </CardContent>

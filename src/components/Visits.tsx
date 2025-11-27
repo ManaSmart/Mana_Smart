@@ -38,6 +38,7 @@ import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
+import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { supabase } from "../lib/supabaseClient";
 import type { Activity, Reminder } from "../types/activity";
@@ -703,10 +704,17 @@ export function Visits({
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Visits</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {loading ? "--" : visits.length}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">All recorded visits</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-24" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{visits.length}</div>
+                <p className="text-xs text-muted-foreground mt-1">All recorded visits</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -715,10 +723,19 @@ export function Visits({
             <CardTitle className="text-sm font-medium text-muted-foreground">Scheduled</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              {loading ? "--" : visits.filter((visit) => visit.status === "Scheduled").length}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Upcoming</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-20" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-blue-600">
+                  {visits.filter((visit) => visit.status === "Scheduled").length}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Upcoming</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -727,10 +744,19 @@ export function Visits({
             <CardTitle className="text-sm font-medium text-muted-foreground">Completed</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {loading ? "--" : visits.filter((visit) => visit.status === "Completed").length}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Successfully finished</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-28" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-green-600">
+                  {visits.filter((visit) => visit.status === "Completed").length}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Successfully finished</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -739,10 +765,19 @@ export function Visits({
             <CardTitle className="text-sm font-medium text-muted-foreground">Cancelled</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              {loading ? "--" : visits.filter((visit) => visit.status === "Cancelled").length}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">This month</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-20" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-red-600">
+                  {visits.filter((visit) => visit.status === "Cancelled").length}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">This month</p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -855,15 +890,25 @@ export function Visits({
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      Loading visits...
-                    </TableCell>
-                  </TableRow>
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={i}>
+                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-40" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                    </TableRow>
+                  ))
                 ) : filteredVisits.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      No visits found
+                    <TableCell colSpan={8} className="p-0">
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <Calendar className="h-12 w-12 text-muted-foreground mb-3" />
+                        <p className="text-muted-foreground">No visits found</p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : (

@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Textarea } from "./ui/textarea";
 import { Separator } from "./ui/separator";
 import { Switch } from "./ui/switch";
+import { Skeleton } from "./ui/skeleton";
 import type { InventoryItem } from "./Inventory";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
 import { CustomerSelector } from "./CustomerSelector";
@@ -2246,8 +2247,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             <DollarSign className="h-5 w-5 text-blue-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-blue-600">{stats.total}</div>
-            <p className="text-xs text-muted-foreground mt-1">All invoices</p>
+            {isDataLoading ? (
+              <>
+                <Skeleton className="h-9 w-16 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-blue-600">{stats.total}</div>
+                <p className="text-xs text-muted-foreground mt-1">All invoices</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -2257,8 +2267,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             <Wallet className="h-5 w-5 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-green-600">{stats.paid}</div>
-            <p className="text-xs text-muted-foreground mt-1">Fully paid</p>
+            {isDataLoading ? (
+              <>
+                <Skeleton className="h-9 w-16 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-green-600">{stats.paid}</div>
+                <p className="text-xs text-muted-foreground mt-1">Fully paid</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -2268,8 +2287,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             <CreditCard className="h-5 w-5 text-yellow-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-yellow-600">{stats.partial}</div>
-            <p className="text-xs text-muted-foreground mt-1">Partially paid</p>
+            {isDataLoading ? (
+              <>
+                <Skeleton className="h-9 w-16 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-yellow-600">{stats.partial}</div>
+                <p className="text-xs text-muted-foreground mt-1">Partially paid</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -2279,8 +2307,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             <DollarSign className="h-5 w-5 text-gray-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-gray-600">{stats.draft}</div>
-            <p className="text-xs text-muted-foreground mt-1">Unpaid</p>
+            {isDataLoading ? (
+              <>
+                <Skeleton className="h-9 w-16 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </>
+            ) : (
+              <>
+                <div className="text-3xl font-bold text-gray-600">{stats.draft}</div>
+                <p className="text-xs text-muted-foreground mt-1">Unpaid</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -2290,8 +2327,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             <Wallet className="h-5 w-5 text-purple-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-purple-600">{stats.totalRevenue.toFixed(0)}</div>
-            <p className="text-xs text-muted-foreground mt-1">SAR collected</p>
+            {isDataLoading ? (
+              <>
+                <Skeleton className="h-9 w-20 mb-2" />
+                <Skeleton className="h-4 w-24" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-purple-600">{stats.totalRevenue.toFixed(0)}</div>
+                <p className="text-xs text-muted-foreground mt-1">SAR collected</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -2301,8 +2347,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             <CreditCard className="h-5 w-5 text-orange-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-orange-600">{stats.pendingAmount.toFixed(0)}</div>
-            <p className="text-xs text-muted-foreground mt-1">SAR pending</p>
+            {isDataLoading ? (
+              <>
+                <Skeleton className="h-9 w-20 mb-2" />
+                <Skeleton className="h-4 w-24" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-orange-600">{stats.pendingAmount.toFixed(0)}</div>
+                <p className="text-xs text-muted-foreground mt-1">SAR pending</p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -2353,8 +2408,39 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         </CardHeader>
         <CardContent>
           {isDataLoading ? (
-            <div className="text-center py-12 text-muted-foreground text-sm">
-              Loading invoices...
+            <div className="space-y-3">
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead><Skeleton className="h-4 w-24" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-20" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-28" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-20" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-16" /></TableHead>
+                      <TableHead><Skeleton className="h-4 w-20" /></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <TableRow key={i}>
+                        <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
           ) : filteredInvoices.length === 0 ? (
             <div className="text-center py-12">

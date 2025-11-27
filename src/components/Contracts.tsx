@@ -1906,9 +1906,11 @@ export function Contracts({ systemLogo }: ContractsProps) {
               <TableBody>
                 {filteredContracts.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="h-48 text-center text-muted-foreground">
-                    <FileText className="h-12 w-12 mx-auto mb-3 opacity-25" />
-                      No contracts found
+                    <TableCell colSpan={10} className="p-0">
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <FileText className="h-12 w-12 text-muted-foreground mb-3" />
+                        <p className="text-muted-foreground">No contracts found</p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : (

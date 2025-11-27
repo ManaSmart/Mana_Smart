@@ -471,9 +471,9 @@ export function Leads() {
           {loading && <div>Loading leads...</div>}
           {loadError && <div className="text-red-500">{loadError}</div>}
           {!loading && !loadError && filteredLeads.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <User className="h-12 w-12 mx-auto mb-3 opacity-20" />
-              <p>No leads yet. Create your first lead!</p>
+            <div className="flex flex-col items-center justify-center py-12">
+              <User className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">No leads found</p>
             </div>
           ) : (
             <Table>

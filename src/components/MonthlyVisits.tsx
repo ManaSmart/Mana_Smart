@@ -26,6 +26,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Textarea } from "./ui/textarea";
+import { Skeleton } from "./ui/skeleton";
 
 type VisitStatus = "scheduled" | "completed" | "cancelled";
 
@@ -376,8 +377,17 @@ export function MonthlyVisits() {
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{loading ? "--" : stats.total}</div>
-            <p className="text-xs text-muted-foreground mt-1">Upcoming and historical</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-32" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold">{stats.total}</div>
+                <p className="text-xs text-muted-foreground mt-1">Upcoming and historical</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -387,10 +397,17 @@ export function MonthlyVisits() {
             <Clock className="h-4 w-4 text-blue-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              {loading ? "--" : stats.scheduled}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Awaiting service</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-24" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-blue-600">{stats.scheduled}</div>
+                <p className="text-xs text-muted-foreground mt-1">Awaiting service</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -400,10 +417,17 @@ export function MonthlyVisits() {
             <CheckCircle2 className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {loading ? "--" : stats.completed}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Finished visits</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-24" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-green-600">{stats.completed}</div>
+                <p className="text-xs text-muted-foreground mt-1">Finished visits</p>
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -413,10 +437,17 @@ export function MonthlyVisits() {
             <XCircle className="h-4 w-4 text-red-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">
-              {loading ? "--" : stats.cancelled}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Cancelled visits</p>
+            {loading ? (
+              <>
+                <Skeleton className="h-8 w-16 mb-2" />
+                <Skeleton className="h-3 w-24" />
+              </>
+            ) : (
+              <>
+                <div className="text-2xl font-bold text-red-600">{stats.cancelled}</div>
+                <p className="text-xs text-muted-foreground mt-1">Cancelled visits</p>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -471,15 +502,25 @@ export function MonthlyVisits() {
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                      Loading visits...
-                    </TableCell>
-                  </TableRow>
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={i}>
+                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                    </TableRow>
+                  ))
                 ) : filteredVisits.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                      No visits found
+                    <TableCell colSpan={8} className="p-0">
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <Calendar className="h-12 w-12 text-muted-foreground mb-3" />
+                        <p className="text-muted-foreground">No visits found</p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : (

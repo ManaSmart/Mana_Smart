@@ -1502,9 +1502,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           {loading && <div>Loading quotations...</div>}
           {loadError && <div className="text-red-500">{loadError}</div>}
           {quotations.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <FileText className="h-12 w-12 mx-auto mb-3 opacity-20" />
-              <p>No quotations yet. Create your first quotation!</p>
+            <div className="flex flex-col items-center justify-center py-12">
+              <FileText className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">No quotations found</p>
             </div>
           ) : (
             <Table>

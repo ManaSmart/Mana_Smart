@@ -991,10 +991,13 @@ export function Leaves() {
           </div>
 
           {!leavesLoading && filteredLeaves.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground">
-              {searchQuery
-                ? "No leave requests found matching your search."
-                : "No leave requests yet"}
+            <div className="flex flex-col items-center justify-center py-12">
+              <Clock className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">
+                {searchQuery
+                  ? "No leave requests found matching your search."
+                  : "No leave requests found"}
+              </p>
             </div>
           )}
         </CardContent>

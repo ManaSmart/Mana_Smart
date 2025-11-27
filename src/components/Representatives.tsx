@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Plus, Search, MoreVertical, Edit, Trash2, Phone, Mail, Calendar, Eye, Download } from "lucide-react";
+import { Plus, Search, MoreVertical, Edit, Trash2, Phone, Mail, Calendar, Eye, Download, User } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
 import { Button } from "./ui/button";
@@ -495,8 +495,11 @@ export function Representatives() {
                   </TableRow>
                 ) : filteredRepresentatives.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      No representatives found
+                    <TableCell colSpan={8} className="p-0">
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <User className="h-12 w-12 text-muted-foreground mb-3" />
+                        <p className="text-muted-foreground">No representatives found</p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ) : (

@@ -745,10 +745,15 @@ This is a template file for payroll records. Fill in the employee details and sa
                 ))}
                 {!payrollsLoading && filteredRecords.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-12 text-center text-muted-foreground">
-                      {searchQuery
-                        ? "No payroll records found matching your search."
-                        : "No payroll records yet. Create your first payroll record to get started!"}
+                    <TableCell colSpan={7} className="p-0">
+                      <div className="flex flex-col items-center justify-center py-12">
+                        <DollarSign className="h-12 w-12 text-muted-foreground mb-3" />
+                        <p className="text-muted-foreground">
+                          {searchQuery
+                            ? "No payroll records found matching your search."
+                            : "No payroll records found"}
+                        </p>
+                      </div>
                     </TableCell>
                   </TableRow>
                 )}

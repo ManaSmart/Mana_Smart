@@ -1131,7 +1131,10 @@ export function Employees() {
           {employeesLoading && employees.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground">Loading employees...</div>
           ) : filteredEmployees.length === 0 ? (
-            <div className="py-8 text-center text-muted-foreground">No employees found.</div>
+            <div className="flex flex-col items-center justify-center py-12">
+              <User className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">No employees found</p>
+            </div>
           ) : (
             <div className="rounded-md border">
               <Table>

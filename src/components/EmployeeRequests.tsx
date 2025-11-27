@@ -11,6 +11,7 @@ import {
   Pencil,
   Trash2,
   Download,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
@@ -1129,8 +1130,11 @@ export function EmployeeRequests() {
           </div>
 
           {!requestsLoading && filteredRequests.length === 0 && (
-            <div className="text-center py-12 text-muted-foreground">
-              {searchQuery ? "No requests found matching your search." : "No employee requests yet"}
+            <div className="flex flex-col items-center justify-center py-12">
+              <FileText className="h-12 w-12 text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">
+                {searchQuery ? "No requests found matching your search." : "No employee requests found"}
+              </p>
             </div>
           )}
         </CardContent>
