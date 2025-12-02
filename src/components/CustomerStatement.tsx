@@ -13,6 +13,7 @@ import { selectors, thunks } from "../redux-toolkit/slices";
 import type { Customers } from "../../supabase/models/customers";
 import type { Invoices as InvoiceRow } from "../../supabase/models/invoices";
 import type { Payments as PaymentRow } from "../../supabase/models/payments";
+import { getPrintLogo } from "../lib/getPrintLogo";
 
 interface Transaction {
   id: string;
@@ -341,6 +342,9 @@ export function CustomerStatement({ systemLogo, systemNameAr, systemNameEn }: Cu
     const printWindow = window.open('', '', 'height=842,width=595');
     if (!printWindow) return;
 
+    // Load logo from Settings
+    const logoToUse = systemLogo || (await getPrintLogo()) || undefined;
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -655,7 +659,7 @@ export function CustomerStatement({ systemLogo, systemNameAr, systemNameEn }: Cu
             </div>
             
             <div class="logo-section">
-              ${systemLogo ? `<img src="${systemLogo}" class="company-logo" alt="Company Logo">` : ''}
+              ${logoToUse ? `<img src="${logoToUse}" class="company-logo" alt="Company Logo">` : ''}
               <div class="company-name-en">${systemNameEn || 'Mana Smart'}</div>
               <div class="company-name-ar">${systemNameAr || 'منى سمارت'}</div>
             </div>

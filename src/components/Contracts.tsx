@@ -25,6 +25,7 @@ import { supabase } from "../lib/supabaseClient";
 import { generateAutomaticInvoice } from "../utils/autoInvoice";
 import { uploadFile, getFileUrl } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
+import { getPrintLogo } from "../lib/getPrintLogo";
 
 interface HistoryLog {
   id: number;
@@ -1102,17 +1103,21 @@ export function Contracts({ systemLogo }: ContractsProps) {
     handleSendContract(contract);
   };
 
-  const handlePrintContract = (contract: Contract) => {
+  const handlePrintContract = async (contract: Contract) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const html = generateContractHTML(contract);
+    // Load logo from Settings if not provided
+    const logoToUse = systemLogo || (await getPrintLogo()) || undefined;
+    const html = generateContractHTML(contract, logoToUse);
     printWindow.document.write(html);
     printWindow.document.close();
     printWindow.print();
   };
 
   const handlePrintAttachedContract = async (contract: Contract) => {
+    // Load logo from Settings if not provided
+    const logoToUse = systemLogo || (await getPrintLogo()) || undefined;
     // Use file URL if available, otherwise fall back to base64 (for old contracts)
     let fileUrl = contract.attachedFileUrl || contract.attachedFileData;
     
@@ -1195,7 +1200,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
       .replace(/{{emergency_visit_fee}}/g, contract.emergencyVisitFee.toLocaleString());
   };
 
-  const generateContractHTML = (contract: Contract) => {
+  const generateContractHTML = (contract: Contract, logoToUse?: string) => {
     return `
       <!DOCTYPE html>
       <html>
@@ -1315,7 +1320,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
       <body>
         <!-- Header -->
         <div class="header">
-          ${systemLogo ? `<img src="${systemLogo}" alt="Logo" class="logo">` : ''}
+          ${logoToUse ? `<img src="${logoToUse}" alt="Logo" class="logo">` : ''}
           <div class="main-title">اتفاقية ��قديم خدمة التعطير (الأعمال)</div>
           <div class="main-title">Aromatic Service Agreement (Business)</div>
           <div class="location">

@@ -22,6 +22,7 @@ import { selectors, thunks } from "../redux-toolkit/slices";
 import type { Invoices as InvoiceRow } from "../../supabase/models/invoices";
 import type { Payments as PaymentRecord } from "../../supabase/models/payments";
 import type { Customers } from "../../supabase/models/customers";
+import { getPrintLogo } from "../lib/getPrintLogo";
 
 interface PaymentDisplay {
   id: number;
@@ -296,12 +297,15 @@ export function Payments() {
     setIsAddDialogOpen(true);
   };
 
-  const handlePrint = (payment: any) => {
+  const handlePrint = async (payment: any) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       toast.error("Failed to open print window");
       return;
     }
+
+    // Load logo from Settings
+    const logoToUse = await getPrintLogo();
 
     const html = `
       <!DOCTYPE html>
@@ -411,6 +415,7 @@ export function Payments() {
       </head>
       <body>
         <div class="header">
+          ${logoToUse ? `<img src="${logoToUse}" alt="Company Logo" style="max-width: 120px; max-height: 80px; margin-bottom: 15px; display: block; margin-left: auto; margin-right: auto;">` : ''}
           <div class="title">إيصال دفع</div>
           <div class="subtitle">PAYMENT RECEIPT</div>
           <div class="receipt-number">رقم الإيصال: ${payment.invoiceNumber}</div>

@@ -24,6 +24,7 @@ import { selectors, thunks } from "../redux-toolkit/slices";
 import type { Customers } from "../../supabase/models/customers";
 import type { Invoices as InvoicesRow } from "../../supabase/models/invoices";
 import type { Payments as PaymentRow } from "../../supabase/models/payments";
+import { getPrintLogo } from "../lib/getPrintLogo";
 
 interface InvoiceItem {
   id: number;
@@ -877,8 +878,14 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return;
     }
 
-    // Generate HTML
-    const invoiceHTML = generateInvoiceHTML(invoice);
+    // Load logo from Settings if not provided in invoice
+    let logoToUse = invoice.companyLogo;
+    if (!logoToUse) {
+      logoToUse = (await getPrintLogo()) || undefined;
+    }
+
+    // Generate HTML with logo
+    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -932,7 +939,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     printWindow.print();
   };
 
-  const generateInvoiceHTML = (invoice: Invoice) => {
+  const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null) => {
+    // Use provided logo or fall back to invoice logo
+    const companyLogo = logoUrl || invoice.companyLogo;
     // Escape HTML special characters in text content
     const escapeHtml = (text: string) => {
       if (!text) return '';
@@ -1291,7 +1300,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           <div class="content">
             <div class="header">
               <div class="company-info">
-                ${invoice.companyLogo ? `<img src="${invoice.companyLogo}" class="company-logo" alt="Company Logo">` : 
+                ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : 
                   '<div class="company-name">🌸 Mana Smart Trading</div>'}
                 <div style="color: #64748b; font-size: 13px;">
                   Khobar, Saudi Arabia<br>
@@ -2588,8 +2597,10 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => {
-                            const blob = new Blob([generateInvoiceHTML(invoice)], { type: 'text/html' });
+                          onClick={async () => {
+                            // Load logo for download
+                            const logoForDownload = invoice.companyLogo || (await getPrintLogo()) || undefined;
+                            const blob = new Blob([generateInvoiceHTML(invoice, logoForDownload)], { type: 'text/html' });
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;

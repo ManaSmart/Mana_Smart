@@ -19,6 +19,7 @@ import { CustomerSelector } from "./CustomerSelector";
 import type { Customer } from "./CustomerSelector";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { thunks, selectors } from "../redux-toolkit/slices";
+import { getPrintLogo } from "../lib/getPrintLogo";
 
 interface QuotationItem {
   id: number;
@@ -74,11 +75,13 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const dispatch = useAppDispatch();
   const dbQuotations = useAppSelector(selectors.quotations.selectAll) as any[];
   const dbInventory = useAppSelector(selectors.inventory.selectAll) as any[];
+  const dbCustomers = useAppSelector(selectors.customers.selectAll) as any[];
   const loading = useAppSelector(selectors.quotations.selectLoading);
   const loadError = useAppSelector(selectors.quotations.selectError);
   useEffect(() => {
     dispatch(thunks.quotations.fetchAll(undefined));
     dispatch(thunks.inventory.fetchAll(undefined));
+    dispatch(thunks.customers.fetchAll(undefined));
   }, [dispatch]);
   // Create quotation number map similar to invoices - based on sorted order
   const quotationNumberMap = useMemo(() => {
@@ -181,31 +184,20 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const [selectedQuotation, setSelectedQuotation] = useState<Quotation | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
 
-  // Customer management
-  const [customers, setCustomers] = useState<Customer[]>([
-    {
-      id: 1,
-      name: "Ahmed Mohammed",
-      company: "Palm Trading Company",
-      mobile: "0501234567",
-      email: "ahmed@palmtrade.com",
-      location: "Riyadh, Al Malaz District",
-      commercialRegister: "1010234567",
-      taxNumber: "310123456700003",
-      status: "active"
-    },
-    {
-      id: 2,
-      name: "Khaled Abdullah",
-      company: "Paradise Corporation",
-      mobile: "0507654321",
-      email: "khaled@paradise.com",
-      location: "Jeddah, Al Safa District",
-      commercialRegister: "1010345678",
-      taxNumber: "310234567800003",
-      status: "active"
-    }
-  ]);
+  // Customer management - map from database to CustomerSelector format
+  const customers: Customer[] = useMemo(() => {
+    return dbCustomers.map((c, idx) => ({
+      id: idx + 1,
+      name: c.customer_name ?? c.company ?? "",
+      company: c.company ?? "",
+      mobile: c.contact_num ?? "",
+      email: c.customer_email ?? "",
+      location: c.customer_address ?? c.customer_city_of_residence ?? "",
+      commercialRegister: "", // Not stored in database
+      taxNumber: "", // Not stored in database
+      status: (c.status ?? "active") as "active" | "inactive" | "pending",
+    }));
+  }, [dbCustomers]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | undefined>();
 
   // Form states
@@ -364,8 +356,27 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     }
   };
 
-  const handleCustomerAdd = (newCustomer: Customer) => {
-    setCustomers([...customers, newCustomer]);
+  const handleCustomerAdd = async (newCustomer: Customer) => {
+    // Create customer in database via Redux
+    const values: any = {
+      customer_name: newCustomer.name.trim(),
+      company: newCustomer.company.trim() || null,
+      contact_num: newCustomer.mobile.trim() || null,
+      customer_email: newCustomer.email.trim() || null,
+      customer_address: newCustomer.location.trim() || null,
+      status: 'active',
+    };
+    
+    try {
+      await dispatch(thunks.customers.createOne(values)).unwrap();
+      // Refresh customers list - the customers array will update via useMemo
+      await dispatch(thunks.customers.fetchAll(undefined));
+      toast.success("Customer added successfully!");
+      // Note: CustomerSelector will call onCustomerSelect with the newCustomer
+      // which will populate the form fields, so we don't need to find it here
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to add customer');
+    }
   };
 
   const updateItem = (id: number, field: string, value: any) => {
@@ -550,6 +561,12 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       return;
     }
 
+    // Load logo from Settings if not provided in quotation
+    let logoToUse = quotation.companyLogo;
+    if (!logoToUse) {
+      logoToUse = (await getPrintLogo()) || undefined;
+    }
+
     // Debug: Log items with images
     console.log('Printing quotation items:', quotation.items.map(item => ({
       description: item.description,
@@ -563,8 +580,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     const itemsWithImages = quotation.items.filter(item => item.image);
     console.log(`Found ${itemsWithImages.length} items with images out of ${quotation.items.length} total items`);
 
-    // Generate HTML
-    const quotationHTML = generateQuotationHTML(quotation);
+    // Generate HTML with logo
+    const quotationHTML = generateQuotationHTML(quotation, logoToUse);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -622,7 +639,10 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     printWindow.print();
   };
 
-  const generateQuotationHTML = (quotation: Quotation) => {
+  const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null) => {
+    // Use provided logo or fall back to quotation logo
+    const companyLogo = logoUrl || quotation.companyLogo;
+    
     return `
       <!DOCTYPE html>
       <html>
@@ -812,7 +832,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           <div class="content">
             <div class="header">
               <div class="company-info">
-                ${quotation.companyLogo ? `<img src="${quotation.companyLogo}" class="company-logo" alt="Company Logo">` : ''}
+                ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : ''}
                 <div class="company-name">Mana Smart Trading</div>
                 <div style="margin-top: 10px; color: #64748b; font-size: 12px;">
                   <div>VAT: 311234567800003</div>
