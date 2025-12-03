@@ -1116,8 +1116,6 @@ export function Contracts({ systemLogo }: ContractsProps) {
   };
 
   const handlePrintAttachedContract = async (contract: Contract) => {
-    // Load logo from Settings if not provided
-    const logoToUse = systemLogo || (await getPrintLogo()) || undefined;
     // Use file URL if available, otherwise fall back to base64 (for old contracts)
     let fileUrl = contract.attachedFileUrl || contract.attachedFileData;
     
@@ -1321,7 +1319,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
         <!-- Header -->
         <div class="header">
           ${logoToUse ? `<img src="${logoToUse}" alt="Logo" class="logo">` : ''}
-          <div class="main-title">اتفاقية ��قديم خدمة التعطير (الأعمال)</div>
+          <div class="main-title">اتفاقية تقديم خدمة التعطير (الأعمال)</div>
           <div class="main-title">Aromatic Service Agreement (Business)</div>
           <div class="location">
             الموقع: الخبر، المملكة العربية السعودية، ${replaceVariables('{{postal_code}}', contract)}
@@ -1376,7 +1374,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
           <div class="arabic-section">
             <div class="clause-title">البند الأول: نطاق الاتفاقية</div>
             <div class="clause-content">
-              يتعهد المزود بتقديم خدمات التعطير باستخدام الأجهزة والزيو�� العطرية المخصصة، وتشمل التركيب، والتعبئة، والصيانة، والمتابعة، وفقًا لما هو مبيّن في هذه الاتفاقية وملحق الخدمة.
+              يتعهد المزود بتقديم خدمات التعطير باستخدام الأجهزة والزيوت العطرية المخصصة، وتشمل التركيب، والتعبئة، والصيانة، والمتابعة، وفقًا لما هو مبيّن في هذه الاتفاقية وملحق الخدمة.
             </div>
           </div>
           <div class="english-section">

@@ -448,19 +448,60 @@ const PermissionDenied = ({ page }: { page: Page }) => (
   </div>
 );
 
+// Helper function to get initial auth state from localStorage (synchronous)
+const getInitialAuthState = () => {
+  try {
+    const stored = localStorage.getItem('auth_user');
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    if (parsed?.full_name || parsed?.email) {
+      return {
+        currentUser: parsed.full_name ?? parsed.email ?? "",
+        currentUserEmail: parsed.email ?? "",
+        currentUserId: parsed.user_id ?? "",
+        userRole: parsed.role_name ?? "",
+        permissions: normalizePermissions(parsed.role_permissions),
+        isLoggedIn: true,
+      };
+    }
+  } catch (error) {
+    console.error('Failed to parse stored auth user', error);
+    localStorage.removeItem('auth_user');
+  }
+  return null;
+};
+
+// Helper function to get initial page from localStorage
+const getInitialPage = (): Page => {
+  try {
+    const stored = localStorage.getItem('current_page');
+    if (stored) {
+      return stored as Page;
+    }
+  } catch (error) {
+    console.error('Failed to parse stored current page', error);
+  }
+  return "dashboard";
+};
+
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentUser, setCurrentUser] = useState("");
-  const [currentUserEmail, setCurrentUserEmail] = useState("");
-  const [currentUserId, setCurrentUserId] = useState("");
-  const [userRole, setUserRole] = useState("");
-  const [currentPage, setCurrentPage] = useState<Page>("dashboard");
+  // Initialize auth state synchronously from localStorage to prevent flash
+  const initialAuthState = getInitialAuthState();
+  const [isLoggedIn, setIsLoggedIn] = useState(initialAuthState?.isLoggedIn ?? false);
+  const [currentUser, setCurrentUser] = useState(initialAuthState?.currentUser ?? "");
+  const [currentUserEmail, setCurrentUserEmail] = useState(initialAuthState?.currentUserEmail ?? "");
+  const [currentUserId, setCurrentUserId] = useState(initialAuthState?.currentUserId ?? "");
+  const [userRole, setUserRole] = useState(initialAuthState?.userRole ?? "");
+  const [permissions, setPermissions] = useState<ResolvedPermissions>(initialAuthState?.permissions ?? ({} as ResolvedPermissions));
+  
+  // Initialize current page from localStorage
+  const [currentPage, setCurrentPage] = useState<Page>(getInitialPage());
+  
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [reminders, setReminders] = useState<Reminder[]>([]); // Reminders are now fetched from database in CalendarReminders component
   const [activities, setActivities] = useState<Activity[]>(mockActivities);
   const [openSections, setOpenSections] = useState<string[]>(["Dashboard & Analytics"]);
-  const [permissions, setPermissions] = useState<ResolvedPermissions>({} as ResolvedPermissions);
   const [userProfilePicture, setUserProfilePicture] = useState<string | null>(null);
   
   // System Branding
@@ -483,26 +524,17 @@ export default function App() {
     setUserRole(payload.roleName);
     setPermissions(normalizePermissions(payload.rolePermissions));
     setIsLoggedIn(true);
+    
+    // Persist current page (in case user navigated before login)
+    localStorage.setItem('current_page', currentPage);
   };
 
+  // Persist current page whenever it changes (only if logged in)
   useEffect(() => {
-    const stored = localStorage.getItem('auth_user');
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed?.full_name || parsed?.email) {
-        setCurrentUser(parsed.full_name ?? parsed.email ?? "");
-        setCurrentUserEmail(parsed.email ?? "");
-        setCurrentUserId(parsed.user_id ?? "");
-        setUserRole(parsed.role_name ?? "");
-        setPermissions(normalizePermissions(parsed.role_permissions));
-        setIsLoggedIn(true);
-      }
-    } catch (error) {
-      console.error('Failed to parse stored auth user', error);
-      localStorage.removeItem('auth_user');
+    if (isLoggedIn && currentPage) {
+      localStorage.setItem('current_page', currentPage);
     }
-  }, []);
+  }, [currentPage, isLoggedIn]);
 
   // Update favicon and page title when company logo/name changes
   useEffect(() => {
@@ -856,6 +888,7 @@ export default function App() {
     setCurrentPage("dashboard");
     setPermissions({} as ResolvedPermissions);
     localStorage.removeItem('auth_user');
+    localStorage.removeItem('current_page');
     // Increment login key to force Login component remount and clear form fields
     setLoginKey(prev => prev + 1);
   };
@@ -1102,6 +1135,7 @@ export default function App() {
   }, [currentPage, renderWithGuard, reminders, activities, systemLogo, systemNameAr, systemNameEn, pendingQuotationData, addActivity, upsertVisitReminder, removeVisitReminder, currentUser, userRole, currentUserEmail, currentUserId, permissions]);
 
   // Show login page if not logged in
+  // Auth state is initialized synchronously from localStorage, so no flash should occur
   if (!isLoggedIn) {
     return <Login key={loginKey} onLogin={handleLogin} />;
   }
