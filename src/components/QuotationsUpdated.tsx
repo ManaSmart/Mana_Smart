@@ -774,10 +774,15 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           .item-desc {
             font-weight: 500;
           }
+          .totals-wrapper {
+            overflow: hidden;
+            margin-bottom: 30px;
+          }
           .totals-section {
             float: right;
             width: 350px;
             margin-top: 20px;
+            margin-bottom: 20px;
           }
           .total-row {
             display: flex;
@@ -795,22 +800,25 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           }
           .terms {
             clear: both;
-            margin-top: 40px;
-            padding: 20px;
-            background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+            background: #374151;
+            padding: 15px;
             border-radius: 8px;
-            border: 2px solid #e2e8f0;
-            position: relative;
+            margin: 20px 0;
+            border-left: 4px solid #1f2937;
+            max-height: none;
+            overflow: visible;
           }
           .terms-title {
             font-weight: 600;
-            color: #64748b;
-            margin-bottom: 10px;
-            font-size: 16px;
+            color: #f3f4f6;
+            margin-bottom: 8px;
           }
           .terms-content {
-            font-size: 12px;
-            line-height: 1.8;
+            color: #e5e7eb;
+            font-size: 13px;
+            white-space: pre-wrap;
+            overflow: visible;
+            max-height: none;
           }
           .footer {
             clear: both;
@@ -822,7 +830,66 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
             color: #64748b;
           }
           @media print {
-            body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            @page {
+              size: A4;
+              margin: 15mm;
+            }
+            html, body {
+              width: 100%;
+              height: auto;
+              margin: 0;
+              padding: 0;
+              background: white !important;
+            }
+            body { 
+              print-color-adjust: exact; 
+              -webkit-print-color-adjust: exact; 
+              background: white !important;
+              font-size: 12px;
+            }
+            .quotation-container {
+              max-width: 100%;
+              margin: 0;
+              padding: 15mm;
+              box-shadow: none;
+              border-radius: 0;
+            }
+            .stamp {
+              print-color-adjust: exact;
+              -webkit-print-color-adjust: exact;
+            }
+            .items-table th {
+              print-color-adjust: exact;
+              -webkit-print-color-adjust: exact;
+            }
+            .total-row.grand {
+              print-color-adjust: exact;
+              -webkit-print-color-adjust: exact;
+            }
+            .terms {
+              print-color-adjust: exact;
+              -webkit-print-color-adjust: exact;
+            }
+            /* Prevent page breaks inside important sections */
+            .header, .customer-section, .totals-wrapper, .totals-section {
+              page-break-inside: avoid;
+            }
+            .items-table tbody tr {
+              page-break-inside: avoid;
+            }
+            /* Ensure footer stays together */
+            .footer {
+              page-break-inside: avoid;
+            }
+            /* Ensure notes don't overlap with totals */
+            .totals-wrapper {
+              clear: both;
+              margin-bottom: 30px;
+            }
+            .terms {
+              clear: both;
+              margin-top: 30px;
+            }
           }
         </style>
       </head>
@@ -913,33 +980,35 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               </tbody>
             </table>
 
-            <div class="totals-section">
-              <div class="total-row">
-                <span>Subtotal:</span>
-                <span>SAR ${quotation.totalBeforeDiscount.toFixed(2)}</span>
-              </div>
-              ${quotation.totalDiscount > 0 ? `
-              <div class="total-row">
-                <span>Discount:</span>
-                <span>- SAR ${quotation.totalDiscount.toFixed(2)}</span>
-              </div>
-              ` : ''}
-              <div class="total-row">
-                <span>After Discount:</span>
-                <span>SAR ${quotation.totalAfterDiscount.toFixed(2)}</span>
-              </div>
-              <div class="total-row">
-                <span>VAT (15%):</span>
-                <span>SAR ${quotation.totalVAT.toFixed(2)}</span>
-              </div>
-              <div class="total-row grand">
-                <span>GRAND TOTAL:</span>
-                <span>SAR ${quotation.grandTotal.toFixed(2)}</span>
+            <div class="totals-wrapper">
+              <div class="totals-section">
+                <div class="total-row">
+                  <span>Subtotal:</span>
+                  <span>SAR ${quotation.totalBeforeDiscount.toFixed(2)}</span>
+                </div>
+                ${quotation.totalDiscount > 0 ? `
+                <div class="total-row">
+                  <span>Discount:</span>
+                  <span>- SAR ${quotation.totalDiscount.toFixed(2)}</span>
+                </div>
+                ` : ''}
+                <div class="total-row">
+                  <span>After Discount:</span>
+                  <span>SAR ${quotation.totalAfterDiscount.toFixed(2)}</span>
+                </div>
+                <div class="total-row">
+                  <span>VAT (15%):</span>
+                  <span>SAR ${quotation.totalVAT.toFixed(2)}</span>
+                </div>
+                <div class="total-row grand">
+                  <span>GRAND TOTAL:</span>
+                  <span>SAR ${quotation.grandTotal.toFixed(2)}</span>
+                </div>
               </div>
             </div>
 
             ${quotation.notes ? `
-            <div class="terms">
+            <div class="terms" style="margin-top: 30px;">
               <div class="terms-title">Notes</div>
               <div class="terms-content">${quotation.notes}</div>
             </div>
@@ -947,12 +1016,20 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
 
             <div class="terms">
               <div class="terms-title">Terms & Conditions</div>
-              <div class="terms-content">
-                <ul style="list-style: none; padding: 0;">
-                  <li>• This quotation is valid for ${Math.ceil((new Date(quotation.expiryDate).getTime() - new Date(quotation.date).getTime()) / (1000 * 60 * 60 * 24))} days from the issue date</li>
-                  ${quotation.termsAndConditions ? quotation.termsAndConditions.split('\\n').map(line => line.trim() ? `<li>${line}</li>` : '').join('') : ''}
-                </ul>
-              </div>
+              <div class="terms-content">${quotation.termsAndConditions || `• This quotation is valid for ${Math.ceil((new Date(quotation.expiryDate).getTime() - new Date(quotation.date).getTime()) / (1000 * 60 * 60 * 24))} days from the issue date
+• All prices include 15% VAT
+• Payment terms: 50% advance, 50% upon completion
+• Delivery within 7-10 business days
+• Prices subject to change after expiry
+• Installation and setup included
+• One year warranty on all devices`}</div>
+            </div>
+
+            <div style="margin-top: 20px; padding: 15px 0; border-top: 1px solid #e2e8f0; font-size: 13px; color: #333; line-height: 1.6;">
+              <div>Mana Smart Trading Company</div>
+              <div>Al Rajhi Bank</div>
+              <div>A.N.: 301000010006080269328</div>
+              <div>IBAN No.: SA2680000301608010269328</div>
             </div>
 
             <div class="footer">
@@ -960,6 +1037,12 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               <div>
                 For any questions, please contact us:<br>
                 Phone: +966 50 123 4567 | Email: info@manatrading.sa
+              </div>
+              <div style="margin-top: 15px; font-size: 12px; color: #64748b; line-height: 1.6;">
+                <div>Mana Smart Trading Company</div>
+                <div>Al Rajhi Bank</div>
+                <div>A.N.: 301000010006080269328</div>
+                <div>IBAN No.: SA2680000301608010269328</div>
               </div>
             </div>
           </div>

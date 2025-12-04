@@ -1427,11 +1427,24 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 • Please reference invoice number in payment`}</div>
             </div>
 
+            <div style="margin-top: 20px; padding: 15px 0; border-top: 1px solid #e2e8f0; font-size: 13px; color: #333; line-height: 1.6;">
+              <div>Mana Smart Trading Company</div>
+              <div>Al Rajhi Bank</div>
+              <div>A.N.: 301000010006080269328</div>
+              <div>IBAN No.: SA2680000301608010269328</div>
+            </div>
+
             <div class="footer">
               <div style="color: #64748b; font-size: 12px;">
                 <div style="font-weight: 600; color: #475569; margin-bottom: 5px;">Thank You for Your Business!</div>
                 If you have any questions about this invoice, please contact us at:<br>
                 Email: sales@mana.sa | Phone: +966 556 292 500
+              </div>
+              <div style="margin-top: 15px; font-size: 12px; color: #64748b; line-height: 1.6;">
+                <div>Mana Smart Trading Company</div>
+                <div>Al Rajhi Bank</div>
+                <div>A.N.: 301000010006080269328</div>
+                <div>IBAN No.: SA2680000301608010269328</div>
               </div>
               ${invoice.qrCode ? `
               <div class="qr-section">
@@ -2832,11 +2845,16 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                           setPaymentAmount(value);
                         } else if (numValue < 0) {
                           setPaymentAmount('0');
-                        } else if (numValue > selectedInvoice.remainingAmount) {
-                          setPaymentAmount(selectedInvoice.remainingAmount.toFixed(2));
-                          toast.warning(`Payment amount cannot exceed remaining amount of ${selectedInvoice.remainingAmount.toFixed(2)} ر.س`);
                         } else {
-                          setPaymentAmount(value);
+                          // Round both values to 2 decimal places for comparison to avoid floating-point precision issues
+                          const roundedValue = Math.round(numValue * 100) / 100;
+                          const roundedRemainingInput = Math.round(selectedInvoice.remainingAmount * 100) / 100;
+                          if (roundedValue > roundedRemainingInput + 0.01) {
+                            setPaymentAmount(selectedInvoice.remainingAmount.toFixed(2));
+                            toast.warning(`Payment amount cannot exceed remaining amount of ${selectedInvoice.remainingAmount.toFixed(2)} ر.س`);
+                          } else {
+                            setPaymentAmount(value);
+                          }
                         }
                       }}
                       placeholder="0.00"
@@ -3030,12 +3048,25 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                       (sum, payment) => sum + Number(payment.paid_amount ?? 0),
                       0
                     );
-                    // Always prefer the sum of payments as the source of truth
-                    // Only fall back to invoice.paid_amount if no payments exist yet
+                    
+                    // Calculate current paid amount: use sum of payments if available, otherwise use invoice's paid_amount
+                    // The sum of payments is the source of truth, but if no payments exist yet, use the invoice's paid_amount
+                    // This handles the case where an invoice was created with an initial paid_amount but no payment records
+                    // Priority: 1) Sum of payment records, 2) selectedInvoice.paidAmount (current display value), 3) dbInvoice.paid_amount
                     let currentPaid = currentPaidFromPayments;
-                    if (currentPaid <= 0) {
-                      // If no payments found, use invoice's paid_amount or selectedInvoice's paidAmount
-                      currentPaid = Number(dbInvoice.paid_amount ?? selectedInvoice.paidAmount ?? 0);
+                    if (currentPaidFromPayments <= 0 && relatedPayments.length === 0) {
+                      // No payment records exist yet, prefer selectedInvoice.paidAmount (what user sees) over dbInvoice.paid_amount
+                      // This ensures we use the correct value even if dbInvoice is stale
+                      currentPaid = Number(selectedInvoice.paidAmount ?? dbInvoice.paid_amount ?? 0);
+                    } else if (currentPaidFromPayments > 0) {
+                      // We have payment records, but also check if selectedInvoice shows a different (higher) value
+                      // This can happen if invoice was created with initial paid_amount but no payment record
+                      const displayedPaid = Number(selectedInvoice.paidAmount ?? 0);
+                      if (displayedPaid > currentPaidFromPayments) {
+                        // The displayed paid amount is higher, meaning there's an initial paid_amount without a payment record
+                        // Use the displayed value as it represents the true current state
+                        currentPaid = displayedPaid;
+                      }
                     }
                     // Ensure we don't exceed total amount
                     if (totalAmount > 0 && currentPaid - totalAmount > 0.0001) {
@@ -3050,7 +3081,11 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                       }
                     }
 
-                    if (amount - remainingBefore > 0.0001) {
+                    // Round both values to 2 decimal places to avoid floating-point precision issues
+                    const roundedAmount = Math.round(amount * 100) / 100;
+                    const roundedRemaining = Math.round(remainingBefore * 100) / 100;
+
+                    if (roundedAmount > roundedRemaining + 0.01) {
                       toast.error("Payment amount cannot exceed remaining amount");
                       return;
                     }
@@ -3076,18 +3111,32 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                     // Calculate new paid amount by adding the new payment to the current paid amount
                     // We use currentPaid (calculated before payment creation) + the new payment amount
                     // This is more reliable than recalculating from dbPayments which may not be updated yet
-                    const uncappedNewPaid = currentPaid + amount;
+                    // Round the amount to 2 decimal places to avoid precision issues
+                    const roundedPaymentAmount = Math.round(amount * 100) / 100;
+                    const uncappedNewPaid = currentPaid + roundedPaymentAmount;
                     const newPaidAmount =
                       totalAmount > 0 ? Math.min(uncappedNewPaid, totalAmount) : uncappedNewPaid;
                     const newRemainingAmount = Math.max(0, totalAmount - newPaidAmount);
                     
                     // Round to 2 decimal places to avoid floating point precision issues
-                    const roundedRemaining = Number(newRemainingAmount.toFixed(2));
+                    const roundedNewRemaining = Number(newRemainingAmount.toFixed(2));
                     const roundedPaid = Number(newPaidAmount.toFixed(2));
+                    
+                    // Debug: Log the calculation to help identify issues
+                    // console.log('Payment calculation:', {
+                    //   currentPaid,
+                    //   roundedAmount,
+                    //   uncappedNewPaid,
+                    //   newPaidAmount,
+                    //   roundedPaid,
+                    //   totalAmount,
+                    //   newRemainingAmount,
+                    //   roundedNewRemaining
+                    // });
                     
                     // Determine status: if remaining is 0 or very small (<= 0.01), mark as paid
                     // Also check if paid amount equals or exceeds total amount
-                    const paymentStatus = (roundedRemaining <= 0.01 || roundedPaid >= totalAmount - 0.01) ? "paid" : "partial";
+                    const paymentStatus = (roundedNewRemaining <= 0.01 || roundedPaid >= totalAmount - 0.01) ? "paid" : "partial";
 
                     try {
                       await dispatch(
