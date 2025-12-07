@@ -83,7 +83,7 @@ export function CustomerSelector({
     };
 
     try {
-      const created = await dispatch(thunks.customers.createOne(values)).unwrap();
+      await dispatch(thunks.customers.createOne(values)).unwrap();
       
       // Create a customer object for the UI
       const newCustomer: Customer = {
