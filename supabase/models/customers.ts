@@ -18,6 +18,8 @@ export interface Customers {
 	monthly_amount: number | null;
 	customer_id: string; // uuid
 	delegate_id: string | null; // uuid
+	commercial_register: string | null;
+	vat_number: string | null;
 }
 
 export type CustomersInsert = Omit<Customers, 'customer_id' | 'created_at' | 'updated_at'> & {

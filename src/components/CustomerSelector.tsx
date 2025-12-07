@@ -7,6 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { toast } from "sonner";
+import { useAppDispatch } from "../redux-toolkit/hooks";
+import { thunks } from "../redux-toolkit/slices";
 
 export interface Customer {
   id: number;
@@ -44,6 +46,7 @@ export function CustomerSelector({
   placeholder = "Search customer...",
   required = false
 }: CustomerSelectorProps) {
+  const dispatch = useAppDispatch();
   const [open, setOpen] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   
@@ -59,41 +62,65 @@ export function CustomerSelector({
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
 
-  const handleAddNewCustomer = () => {
+  const handleAddNewCustomer = async () => {
     if (!newCustomerName.trim() || !newCustomerMobile.trim()) {
       toast.error("Please enter customer name and mobile number");
       return;
     }
 
-    const newCustomer: Customer = {
-      id: Date.now(),
-      name: newCustomerName.trim(),
-      company: newCustomerCompany.trim(),
-      mobile: newCustomerMobile.trim(),
-      email: newCustomerEmail.trim(),
-      location: newCustomerLocation.trim(),
-      commercialRegister: newCustomerCommercialRegister.trim(),
-      taxNumber: newCustomerTaxNumber.trim(),
-      status: "active"
+    const values: any = {
+      customer_name: newCustomerName.trim(),
+      company: newCustomerCompany.trim() || null,
+      contact_num: newCustomerMobile.trim(),
+      customer_email: newCustomerEmail.trim() || null,
+      customer_address: newCustomerLocation.trim() || null,
+      contract_type: null,
+      monthly_amount: 0,
+      status: 'active',
+      delegate_id: null,
+      commercial_register: newCustomerCommercialRegister.trim() || null,
+      vat_number: newCustomerTaxNumber.trim() || null,
     };
 
-    if (onCustomerAdd) {
-      onCustomerAdd(newCustomer);
+    try {
+      const created = await dispatch(thunks.customers.createOne(values)).unwrap();
+      
+      // Create a customer object for the UI
+      const newCustomer: Customer = {
+        id: Date.now(), // Temporary ID, will be replaced when customers list refreshes
+        name: newCustomerName.trim(),
+        company: newCustomerCompany.trim(),
+        mobile: newCustomerMobile.trim(),
+        email: newCustomerEmail.trim(),
+        location: newCustomerLocation.trim(),
+        commercialRegister: newCustomerCommercialRegister.trim(),
+        taxNumber: newCustomerTaxNumber.trim(),
+        status: "active"
+      };
+
+      if (onCustomerAdd) {
+        onCustomerAdd(newCustomer);
+      }
+      
+      onCustomerSelect(newCustomer);
+      
+      // Reset form
+      setNewCustomerName("");
+      setNewCustomerCompany("");
+      setNewCustomerMobile("");
+      setNewCustomerEmail("");
+      setNewCustomerLocation("");
+      setNewCustomerCommercialRegister("");
+      setNewCustomerTaxNumber("");
+      setIsAddDialogOpen(false);
+      
+      toast.success("Customer added successfully!");
+      
+      // Refresh customers list
+      dispatch(thunks.customers.fetchAll(undefined));
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to add customer");
     }
-    
-    onCustomerSelect(newCustomer);
-    
-    // Reset form
-    setNewCustomerName("");
-    setNewCustomerCompany("");
-    setNewCustomerMobile("");
-    setNewCustomerEmail("");
-    setNewCustomerLocation("");
-    setNewCustomerCommercialRegister("");
-    setNewCustomerTaxNumber("");
-    setIsAddDialogOpen(false);
-    
-    toast.success("Customer added successfully!");
   };
 
   return (

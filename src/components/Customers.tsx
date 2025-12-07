@@ -48,6 +48,8 @@ interface Customer {
   representative?: string;
   representativeId?: number;
   delegateDbId?: string;
+  commercialRegister?: string;
+  vatNumber?: string;
 }
 
 interface MessageTemplate {
@@ -101,6 +103,8 @@ export function Customers() {
     contractType: "",
     monthlyAmount: "",
     delegateId: "",
+    commercialRegister: "",
+    vatNumber: "",
   });
   // Map DB rows to UI shape
   const customers: Customer[] = useMemo(() => {
@@ -125,6 +129,8 @@ export function Customers() {
         representative: assignedDelegate?.delegate_name || undefined,
         representativeId: assignedDelegate ? dbDelegates.indexOf(assignedDelegate) + 1 : undefined,
         delegateDbId: c.delegate_id || undefined,
+        commercialRegister: c.commercial_register ?? undefined,
+        vatNumber: c.vat_number ?? undefined,
       };
     });
   }, [dbCustomers, dbDelegates]);
@@ -293,6 +299,8 @@ export function Customers() {
       monthly_amount: editingCustomer.monthlyAmount,
       status: editingCustomer.status,
       delegate_id: editingCustomer.delegateDbId || null,
+      commercial_register: editingCustomer.commercialRegister || null,
+      vat_number: editingCustomer.vatNumber || null,
     };
     dispatch(thunks.customers.updateOne({ id: editingCustomer.dbId, values }))
       .unwrap()
@@ -391,6 +399,16 @@ export function Customers() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <Label>Commercial Register</Label>
+                  <Input placeholder="1010123456" value={createForm.commercialRegister} onChange={(e) => setCreateForm({ ...createForm, commercialRegister: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label>VAT Number</Label>
+                  <Input placeholder="300159475400003" value={createForm.vatNumber} onChange={(e) => setCreateForm({ ...createForm, vatNumber: e.target.value })} />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <Label>Contract Type</Label>
                   <Select value={createForm.contractType} onValueChange={(value) => setCreateForm({ ...createForm, contractType: value })}>
                     <SelectTrigger>
@@ -446,12 +464,14 @@ export function Customers() {
                   monthly_amount: Number(createForm.monthlyAmount || 0),
                   status: 'active',
                   delegate_id: createForm.delegateId || null,
+                  commercial_register: createForm.commercialRegister || null,
+                  vat_number: createForm.vatNumber || null,
                 };
                 dispatch(thunks.customers.createOne(values))
                   .unwrap()
                   .then(() => {
                     setIsCreateDialogOpen(false);
-                    setCreateForm({ name: '', company: '', mobile: '', email: '', location: '', contractType: '', monthlyAmount: '', delegateId: '' });
+                    setCreateForm({ name: '', company: '', mobile: '', email: '', location: '', contractType: '', monthlyAmount: '', delegateId: '', commercialRegister: '', vatNumber: '' });
                     toast.success('Customer added successfully!');
                   })
                   .catch((e: any) => toast.error(e.message || 'Failed to add customer'));
@@ -727,6 +747,24 @@ export function Customers() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <Label>Commercial Register</Label>
+                  <Input 
+                    value={editingCustomer.commercialRegister || ""}
+                    onChange={(e) => setEditingCustomer({ ...editingCustomer, commercialRegister: e.target.value })}
+                    placeholder="1010123456" 
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>VAT Number</Label>
+                  <Input 
+                    value={editingCustomer.vatNumber || ""}
+                    onChange={(e) => setEditingCustomer({ ...editingCustomer, vatNumber: e.target.value })}
+                    placeholder="300159475400003" 
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
                   <Label>Contract Type</Label>
                   <Select 
                     value={(editingCustomer.contractType || '').toLowerCase()}
@@ -861,6 +899,17 @@ export function Customers() {
               <div>
                 <Label className="text-muted-foreground">Location</Label>
                 <p className="font-medium">{selectedCustomer.location}</p>
+              </div>
+              <Separator />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-muted-foreground">Commercial Register</Label>
+                  <p className="font-medium">{selectedCustomer.commercialRegister || "N/A"}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">VAT Number</Label>
+                  <p className="font-medium">{selectedCustomer.vatNumber || "N/A"}</p>
+                </div>
               </div>
               <Separator />
               <div className="grid grid-cols-2 gap-4">

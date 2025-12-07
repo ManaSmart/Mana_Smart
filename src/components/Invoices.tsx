@@ -333,8 +333,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         customerName: customer?.customer_name || "Unknown Customer",
         mobile: customer?.contact_num || "",
         location: customer?.customer_address || "",
-        commercialRegister: customer?.customer_city_of_residence || "",
-        taxNumber: "",
+        commercialRegister: customer?.commercial_register || "",
+        taxNumber: customer?.vat_number || "",
         qrCode: "",
         companyLogo: "",
         stamp: "",
@@ -378,8 +378,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       mobile: c.contact_num ?? "",
       email: c.customer_email ?? "",
       location: c.customer_address ?? "",
-      commercialRegister: c.customer_city_of_residence ?? "",
-      taxNumber: "",
+      commercialRegister: c.commercial_register ?? "",
+      taxNumber: c.vat_number ?? "",
       status: (c.status as any) ?? "active",
     }));
   }, [dbCustomers]);

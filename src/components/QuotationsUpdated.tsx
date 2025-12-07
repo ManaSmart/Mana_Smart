@@ -136,6 +136,17 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       
       const quotationMeta = quotationNumberMap.get(q.quotation_id);
       
+      // Try to get tax info from customer record if customer_id exists
+      let commercialRegister = '';
+      let taxNumber = '';
+      if (q.customer_id) {
+        const customer = dbCustomers.find(c => c.customer_id === q.customer_id);
+        if (customer) {
+          commercialRegister = customer.commercial_register ?? '';
+          taxNumber = customer.vat_number ?? '';
+        }
+      }
+      
       return {
         id: quotationMeta?.sequence ?? idx + 1,
         quotationNumber: quotationMeta?.quotationNumber ?? `QT${String(idx + 1).padStart(3, "0")}`,
@@ -144,8 +155,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         customerName: q.customer_name ?? '',
         mobile: q.phone_number ? String(q.phone_number) : '',
         location: q.location ?? '',
-        commercialRegister: '',
-        taxNumber: '',
+        commercialRegister: commercialRegister,
+        taxNumber: taxNumber,
         notes: q.quotation_notes ?? '',
         items: (items as any[]).map((it, i) => {
           const qty = Number(it.quantity || 0);
@@ -177,7 +188,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         status: ((q.quotation_summary ?? 'pending') as 'pending' | 'sent' | 'cancelled'),
       } as Quotation;
     });
-  }, [dbQuotations]);
+  }, [dbQuotations, dbCustomers, quotationNumberMap]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -193,8 +204,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       mobile: c.contact_num ?? "",
       email: c.customer_email ?? "",
       location: c.customer_address ?? c.customer_city_of_residence ?? "",
-      commercialRegister: "", // Not stored in database
-      taxNumber: "", // Not stored in database
+      commercialRegister: c.commercial_register ?? "",
+      taxNumber: c.vat_number ?? "",
       status: (c.status ?? "active") as "active" | "inactive" | "pending",
     }));
   }, [dbCustomers]);
@@ -928,8 +939,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               </div>
               <div>
                 <div class="section-title">Tax Information</div>
-                ${quotation.commercialRegister ? `<div class="info-row"><span class="label">C.R.:</span> ${quotation.commercialRegister}</div>` : ''}
-                ${quotation.taxNumber ? `<div class="info-row"><span class="label">VAT:</span> ${quotation.taxNumber}</div>` : ''}
+                <div class="info-row"><span class="label">C.R.:</span> ${quotation.commercialRegister || 'N/A'}</div>
+                <div class="info-row"><span class="label">VAT:</span> ${quotation.taxNumber || 'N/A'}</div>
               </div>
             </div>
 
