@@ -471,9 +471,17 @@ const getInitialAuthState = () => {
   return null;
 };
 
-// Helper function to get initial page from localStorage
+// Helper function to get initial page, but reset to dashboard on a brand-new tab/window
 const getInitialPage = (): Page => {
   try {
+    // sessionStorage is cleared when the tab/window is closed, so use it to detect a fresh session
+    const hasSession = sessionStorage.getItem('session_started');
+    if (!hasSession) {
+      sessionStorage.setItem('session_started', 'true');
+      localStorage.setItem('current_page', 'dashboard'); // ensure new tabs start at dashboard
+      return "dashboard";
+    }
+
     const stored = localStorage.getItem('current_page');
     if (stored) {
       return stored as Page;
@@ -516,6 +524,16 @@ export default function App() {
   
   // Login key to force remount and clear form fields on logout
   const [loginKey, setLoginKey] = useState(0);
+
+  // Ensure the sidebar section for the active page is expanded (covers initial load/reload)
+  useEffect(() => {
+    const section = navigationSections.find((s) =>
+      s.items.some((item) => item.id === currentPage)
+    );
+    if (section && !openSections.includes(section.section)) {
+      setOpenSections((prev) => [...prev, section.section]);
+    }
+  }, [currentPage, openSections]);
 
   const handleLogin = (payload: AuthUserPayload) => {
     setCurrentUser(payload.fullName);

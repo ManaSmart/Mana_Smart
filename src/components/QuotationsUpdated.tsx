@@ -46,6 +46,7 @@ interface Quotation {
   location: string;
   commercialRegister: string;
   taxNumber: string;
+  customerEmail?: string;
   companyLogo?: string;
   stamp?: string;
   stampPosition?: { x: number; y: number };
@@ -139,11 +140,13 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       // Try to get tax info from customer record if customer_id exists
       let commercialRegister = '';
       let taxNumber = '';
+      let customerEmail = '';
       if (q.customer_id) {
         const customer = dbCustomers.find(c => c.customer_id === q.customer_id);
         if (customer) {
           commercialRegister = customer.commercial_register ?? '';
           taxNumber = customer.vat_number ?? '';
+          customerEmail = customer.customer_email ?? '';
         }
       }
       
@@ -157,6 +160,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         location: q.location ?? '',
         commercialRegister: commercialRegister,
         taxNumber: taxNumber,
+        customerEmail,
         notes: q.quotation_notes ?? '',
         items: (items as any[]).map((it, i) => {
           const qty = Number(it.quantity || 0);
@@ -210,6 +214,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     }));
   }, [dbCustomers]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | undefined>();
+  const [selectedCustomerDbId, setSelectedCustomerDbId] = useState<string | undefined>();
 
   // Form states
   const [customerName, setCustomerName] = useState("");
@@ -356,9 +361,12 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       setLocation(customer.location || "");
       setCommercialRegister(customer.commercialRegister || "");
       setTaxNumber(customer.taxNumber || "");
+      const original = dbCustomers[customer.id - 1];
+      setSelectedCustomerDbId(original?.customer_id);
     } else {
       // Clear selection
       setSelectedCustomerId(undefined);
+      setSelectedCustomerDbId(undefined);
       setCustomerName("");
       setMobile("");
       setLocation("");
@@ -504,6 +512,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       customer_name: customerName.trim(),
       phone_number: mobile ? parseInt(mobile.replace(/\D/g, ''), 10) : null,
       location: location.trim() || null,
+      customer_id: selectedCustomerDbId || null,
       quotation_validity: parseInt(expiryDays) || 30,
       quotation_items: itemsPayload,
       quotation_notes: notes.trim() || null,
@@ -818,6 +827,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
             border-left: 4px solid #1f2937;
             max-height: none;
             overflow: visible;
+            page-break-inside: avoid;
+            page-break-after: avoid;
           }
           .terms-title {
             font-weight: 600;
@@ -1723,7 +1734,19 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                           onClick={() => {
                             const subject = `Quotation ${quotation.quotationNumber} - ${quotation.customerName}`;
                             const body = `Dear ${quotation.customerName},\n\nPlease find attached quotation ${quotation.quotationNumber} for your review.\n\nQuotation Details:\n- Date: ${new Date(quotation.date).toLocaleDateString('en-GB')}\n- Valid Until: ${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}\n- Total Amount: SAR ${quotation.grandTotal.toFixed(2)}\n\nThank you for your business.\n\nBest regards,\nMana Smart Trading`;
-                            window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                            const recipient = quotation.customerEmail?.trim();
+                            if (!recipient) {
+                              toast.error("No customer email found for this quotation");
+                              return;
+                            }
+                            const mailto = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                            // Use an anchor click to let the OS/browser present available mail apps
+                            const link = document.createElement("a");
+                            link.href = mailto;
+                            link.style.display = "none";
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
                             toast.success("Opening email client...");
                           }}
                           title="Send Email"

@@ -1176,6 +1176,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           .totals-wrapper {
             overflow: hidden;
             margin-bottom: 30px;
+            page-break-inside: avoid;
+            break-inside: avoid;
           }
           .footer {
             clear: both;
@@ -1196,6 +1198,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             border-left: 4px solid #1f2937;
             max-height: none;
             overflow: visible;
+            page-break-inside: avoid;
+            page-break-after: avoid;
           }
           .terms-title {
             font-weight: 600;
@@ -1283,6 +1287,18 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             .terms {
               clear: both;
               margin-top: 30px;
+            }
+            /* Keep totals/terms together when possible */
+            .totals-wrapper {
+              page-break-inside: avoid;
+              break-inside: avoid;
+            }
+            .terms {
+              page-break-inside: avoid;
+              break-inside: avoid;
+              page-break-after: auto;
+              orphans: 3;
+              widows: 3;
             }
           }
         </style>
