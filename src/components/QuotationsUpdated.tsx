@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Search, Printer, Send, Eye, X, Trash2, Upload, FileText, MoreVertical, Download } from "lucide-react";
 import * as XLSX from "@e965/xlsx";
+import QRCode from "qrcode";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -20,6 +21,10 @@ import type { Customer } from "./CustomerSelector";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { thunks, selectors } from "../redux-toolkit/slices";
 import { getPrintLogo } from "../lib/getPrintLogo";
+import { uploadFile } from "../lib/storage";
+import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
+import { supabase } from "../lib/supabaseClient";
+import { getFilesByOwner, getFileUrl } from "../lib/storage";
 
 interface QuotationItem {
   id: number;
@@ -30,6 +35,9 @@ interface QuotationItem {
   quantity: number;
   unitPrice: number;
   discountPercent: number;
+  discountAmount: number; // Fixed discount amount for this item
+  discountType: "percentage" | "fixed"; // Discount type for this item
+  itemDiscount: number; // Calculated discount amount (in currency)
   priceAfterDiscount: number;
   subtotal: number;
   vat: number;
@@ -38,6 +46,7 @@ interface QuotationItem {
 
 interface Quotation {
   id: number;
+  dbQuotationId?: string;
   quotationNumber: string;
   date: string;
   expiryDate: string;
@@ -59,6 +68,10 @@ interface Quotation {
   totalVAT: number;
   grandTotal: number;
   status: "sent" | "pending" | "cancelled";
+  discountType?: "percentage" | "fixed";
+  discountAmount?: number;
+  logoFilename?: string | null;
+  stampFilename?: string | null;
 }
 
 const VAT_RATE = 0.15;
@@ -119,21 +132,44 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const quotations: Quotation[] = useMemo(() => {
     return dbQuotations.map((q, idx) => {
       const items = Array.isArray(q.quotation_items) ? q.quotation_items : [];
-      const totals = items.reduce((acc: any, it: any) => {
+      // Calculate item-level totals
+      const itemTotals = items.reduce((acc: any, it: any) => {
         const qty = Number(it.quantity || 0);
         const unit = Number(it.unitPrice || it.unit_price || 0);
         const disc = Number(it.discountPercent || it.discount_percent || 0);
         const priceAfter = unit * (1 - disc / 100);
         const subtotal = priceAfter * qty;
-        const vat = subtotal * 0.15;
-        const total = subtotal + vat;
         acc.totalBeforeDiscount += unit * qty;
-        acc.totalAfterDiscount += subtotal;
-        acc.totalVAT += vat;
-        acc.grandTotal += total;
-        acc.totalDiscount = acc.totalBeforeDiscount - acc.totalAfterDiscount;
+        acc.totalAfterItemDiscounts += subtotal;
+        acc.itemLevelDiscount = acc.totalBeforeDiscount - acc.totalAfterItemDiscounts;
         return acc;
-      }, { totalBeforeDiscount: 0, totalAfterDiscount: 0, totalDiscount: 0, totalVAT: 0, grandTotal: 0 });
+      }, { totalBeforeDiscount: 0, totalAfterItemDiscounts: 0, itemLevelDiscount: 0 });
+
+      // Apply quotation-level discount if exists
+      let quotationDiscount = 0;
+      const discountType = q.discount_type as "percentage" | "fixed" | undefined;
+      const discountAmount = q.discount_amount ?? 0;
+      
+      if (discountType && discountAmount > 0) {
+        if (discountType === "percentage") {
+          quotationDiscount = itemTotals.totalAfterItemDiscounts * (Math.min(100, discountAmount) / 100);
+        } else if (discountType === "fixed") {
+          quotationDiscount = Math.min(itemTotals.totalAfterItemDiscounts, discountAmount);
+        }
+      }
+      
+      const totalAfterDiscount = Math.max(0, itemTotals.totalAfterItemDiscounts - quotationDiscount);
+      const totalDiscount = itemTotals.itemLevelDiscount + quotationDiscount;
+      const totalVAT = totalAfterDiscount * VAT_RATE;
+      const grandTotal = Math.max(0, totalAfterDiscount + totalVAT);
+      
+      const totals = {
+        totalBeforeDiscount: itemTotals.totalBeforeDiscount,
+        totalDiscount,
+        totalAfterDiscount,
+        totalVAT,
+        grandTotal
+      };
       
       const quotationMeta = quotationNumberMap.get(q.quotation_id);
       
@@ -150,8 +186,12 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         }
       }
       
+      // Logo and stamp URLs will be resolved at print/view time from filenames
+      // For now, we store the filenames in the Quotation interface
+
       return {
         id: quotationMeta?.sequence ?? idx + 1,
+        dbQuotationId: q.quotation_id,
         quotationNumber: quotationMeta?.quotationNumber ?? `QT${String(idx + 1).padStart(3, "0")}`,
         date: (q.created_at ?? '').slice(0,10) || new Date().toISOString().slice(0,10),
         expiryDate: q.quotation_validity ? new Date(Date.now() + Number(q.quotation_validity) * 86400000).toISOString().slice(0,10) : new Date().toISOString().slice(0,10),
@@ -162,14 +202,31 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         taxNumber: taxNumber,
         customerEmail,
         notes: q.quotation_notes ?? '',
+        logoFilename: q.company_logo || null,
+        stampFilename: q.company_stamp || null,
+        discountType: (q.discount_type as "percentage" | "fixed" | undefined) || undefined,
+        discountAmount: q.discount_amount ?? undefined,
         items: (items as any[]).map((it, i) => {
           const qty = Number(it.quantity || 0);
           const unit = Number(it.unitPrice || it.unit_price || 0);
-          const disc = Number(it.discountPercent || it.discount_percent || 0);
-          const priceAfter = unit * (1 - disc / 100);
-          const subtotal = priceAfter * qty;
-          const vat = subtotal * 0.15;
-          const total = subtotal + vat;
+          const discPercent = Number(it.discountPercent || it.discount_percent || 0);
+          const discAmount = Number(it.discountAmount || it.discount_amount || 0);
+          // Determine discount type: if discount_amount > 0, use fixed, otherwise use percentage
+          const discType = discAmount > 0 ? "fixed" : "percentage";
+          
+          // Calculate using new structure
+          const itemSubtotal = qty * unit;
+          let itemDiscount = 0;
+          if (discType === "percentage") {
+            itemDiscount = itemSubtotal * (Math.min(100, Math.max(0, discPercent)) / 100);
+          } else {
+            itemDiscount = Math.min(itemSubtotal, Math.max(0, discAmount));
+          }
+          const itemTotal = itemSubtotal - itemDiscount;
+          const priceAfter = qty > 0 ? itemTotal / qty : unit;
+          const vat = itemTotal * 0.15;
+          const total = itemTotal + vat;
+          
           return {
             id: i + 1,
             isManual: true,
@@ -177,9 +234,12 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
             description: it.description || it.name || '',
             quantity: qty,
             unitPrice: unit,
-            discountPercent: disc,
+            discountPercent: discPercent,
+            discountAmount: discAmount,
+            discountType: discType,
+            itemDiscount: itemDiscount,
             priceAfterDiscount: priceAfter,
-            subtotal: subtotal,
+            subtotal: itemSubtotal,
             vat: vat,
             total: total,
           };
@@ -232,8 +292,19 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     "• Installation and setup included\n" +
     "• One year warranty on all devices"
   );
+  // Discount mode: "individual" for per-item discounts, "global" for applying to all items
+  const [discountMode, setDiscountMode] = useState<"individual" | "global">("individual");
+  // Global discount settings (only used when discountMode === "global")
+  const [globalDiscountType, setGlobalDiscountType] = useState<"percentage" | "fixed">("percentage");
+  const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
   const [companyLogo, setCompanyLogo] = useState("");
   const [stamp, setStamp] = useState("");
+  const [logoFilename, setLogoFilename] = useState<string | null>(null);
+  const [stampFilename, setStampFilename] = useState<string | null>(null);
+  const [defaultLogoUrl, setDefaultLogoUrl] = useState<string | null>(null);
+  const [defaultStampUrl, setDefaultStampUrl] = useState<string | null>(null);
+  const [isUsingDefaultLogo, setIsUsingDefaultLogo] = useState(true);
+  const [isUsingDefaultStamp, setIsUsingDefaultStamp] = useState(true);
   const [_stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
   const [items, setItems] = useState<QuotationItem[]>([{
     id: 1,
@@ -242,6 +313,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     quantity: 1,
     unitPrice: 0,
     discountPercent: 0,
+    discountAmount: 0,
+    discountType: "percentage",
+    itemDiscount: 0,
     priceAfterDiscount: 0,
     subtotal: 0,
     vat: 0,
@@ -250,6 +324,54 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
 
   const logoInputRef = useRef<HTMLInputElement>(null);
   const stampInputRef = useRef<HTMLInputElement>(null);
+
+  // Load default logo and stamp from Settings when dialog opens
+  useEffect(() => {
+    if (isCreateDialogOpen) {
+      const loadDefaultBranding = async () => {
+        try {
+          // Load default logo
+          const logoResult = await getPrintLogo();
+          if (logoResult) {
+            setDefaultLogoUrl(logoResult);
+            if (isUsingDefaultLogo && !companyLogo) {
+              setCompanyLogo(logoResult);
+            }
+          }
+
+          // Load default stamp from Settings
+          const { data: brandingData } = await supabase
+            .from("company_branding")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (brandingData?.branding_id) {
+            const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
+            const stampFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_STAMP);
+            if (stampFile) {
+              const stampUrl = await getFileUrl(
+                stampFile.bucket as any,
+                stampFile.path,
+                stampFile.is_public
+              );
+              if (stampUrl) {
+                setDefaultStampUrl(stampUrl);
+                if (isUsingDefaultStamp && !stamp) {
+                  setStamp(stampUrl);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error loading default branding:', error);
+        }
+      };
+
+      loadDefaultBranding();
+    }
+  }, [isCreateDialogOpen]);
 
   const filteredQuotations = quotations.filter(quotation => {
     const matchesSearch = 
@@ -261,27 +383,119 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     return matchesSearch && matchesStatus;
   });
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCompanyLogo(reader.result as string);
+    if (!file) return;
+
+    try {
+      // Get current user ID
+      const stored = localStorage.getItem('auth_user');
+      let currentUserId: string | null = null;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          currentUserId = parsed.user_id || null;
+        } catch (e) {
+          console.error('Failed to parse auth_user', e);
+        }
+      }
+
+      // Generate a temporary quotation ID for file upload (will be replaced with actual ID after creation)
+      const tempQuotationId = `temp_${Date.now()}`;
+
+      // Upload to S3
+      const uploadResult = await uploadFile({
+        file,
+        category: FILE_CATEGORIES.BRANDING_LOGO,
+        ownerId: tempQuotationId,
+        ownerType: 'quotation',
+        description: `Quotation-specific logo`,
+        userId: currentUserId || undefined,
+      });
+
+      if (!uploadResult.success || !uploadResult.fileMetadata) {
+        throw new Error(uploadResult.error || 'Failed to upload logo');
+      }
+
+      // Save only the filename
+      const filename = uploadResult.fileMetadata.file_name;
+      setLogoFilename(filename);
+      setIsUsingDefaultLogo(false);
+
+      // Get URL for preview
+      const logoUrl = uploadResult.publicUrl || uploadResult.signedUrl || (await getFileUrl(
+        uploadResult.fileMetadata.bucket as any,
+        uploadResult.fileMetadata.path,
+        uploadResult.fileMetadata.is_public
+      ));
+
+      if (logoUrl) {
+        setCompanyLogo(logoUrl);
         toast.success("Logo uploaded successfully");
-      };
-      reader.readAsDataURL(file);
+      } else {
+        toast.error("Logo uploaded but URL retrieval failed");
+      }
+    } catch (error: any) {
+      console.error('Error uploading logo:', error);
+      toast.error(error.message || 'Failed to upload logo');
     }
   };
 
-  const handleStampUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStampUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setStamp(reader.result as string);
+    if (!file) return;
+
+    try {
+      // Get current user ID
+      const stored = localStorage.getItem('auth_user');
+      let currentUserId: string | null = null;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          currentUserId = parsed.user_id || null;
+        } catch (e) {
+          console.error('Failed to parse auth_user', e);
+        }
+      }
+
+      // Generate a temporary quotation ID for file upload
+      const tempQuotationId = `temp_${Date.now()}`;
+
+      // Upload to S3
+      const uploadResult = await uploadFile({
+        file,
+        category: FILE_CATEGORIES.BRANDING_STAMP,
+        ownerId: tempQuotationId,
+        ownerType: 'quotation',
+        description: `Quotation-specific stamp`,
+        userId: currentUserId || undefined,
+      });
+
+      if (!uploadResult.success || !uploadResult.fileMetadata) {
+        throw new Error(uploadResult.error || 'Failed to upload stamp');
+      }
+
+      // Save only the filename
+      const filename = uploadResult.fileMetadata.file_name;
+      setStampFilename(filename);
+      setIsUsingDefaultStamp(false);
+
+      // Get URL for preview
+      const stampUrl = uploadResult.publicUrl || uploadResult.signedUrl || (await getFileUrl(
+        uploadResult.fileMetadata.bucket as any,
+        uploadResult.fileMetadata.path,
+        uploadResult.fileMetadata.is_public
+      ));
+
+      if (stampUrl) {
+        setStamp(stampUrl);
         toast.success("Stamp uploaded successfully");
-      };
-      reader.readAsDataURL(file);
+      } else {
+        toast.error("Stamp uploaded but URL retrieval failed");
+      }
+    } catch (error: any) {
+      console.error('Error uploading stamp:', error);
+      toast.error(error.message || 'Failed to upload stamp');
     }
   };
 
@@ -300,14 +514,37 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const calculateItemTotals = (item: Partial<QuotationItem>) => {
     const quantity = item.quantity || 0;
     const unitPrice = item.unitPrice || 0;
+    const discountType = item.discountType || "percentage";
     const discountPercent = item.discountPercent || 0;
+    const discountAmount = item.discountAmount || 0;
     
-    const priceAfterDiscount = unitPrice * (1 - discountPercent / 100);
-    const subtotal = priceAfterDiscount * quantity;
-    const vat = subtotal * VAT_RATE;
-    const total = subtotal + vat;
+    // Calculate subtotal = quantity × unit price
+    const subtotal = quantity * unitPrice;
+    
+    // Calculate item discount based on type
+    let itemDiscount = 0;
+    if (discountType === "percentage") {
+      // Percentage discount: discount is calculated from subtotal
+      itemDiscount = subtotal * (Math.min(100, Math.max(0, discountPercent)) / 100);
+    } else {
+      // Fixed discount: cannot exceed subtotal
+      itemDiscount = Math.min(subtotal, Math.max(0, discountAmount));
+    }
+    
+    // Item total = subtotal - item discount
+    const itemTotal = subtotal - itemDiscount;
+    
+    // Price after discount per unit (for display purposes)
+    const priceAfterDiscount = quantity > 0 ? itemTotal / quantity : unitPrice;
+    
+    // VAT is calculated on item total (after discount)
+    const vat = itemTotal * VAT_RATE;
+    
+    // Total = item total + VAT
+    const total = itemTotal + vat;
 
     return {
+      itemDiscount,
       priceAfterDiscount,
       subtotal,
       vat,
@@ -323,6 +560,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       quantity: 1,
       unitPrice: 0,
       discountPercent: 0,
+      discountAmount: 0,
+      discountType: "percentage",
+      itemDiscount: 0,
       priceAfterDiscount: 0,
       subtotal: 0,
       vat: 0,
@@ -339,6 +579,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       quantity: 1,
       unitPrice: 0,
       discountPercent: 0,
+      discountAmount: 0,
+      discountType: "percentage",
+      itemDiscount: 0,
       priceAfterDiscount: 0,
       subtotal: 0,
       vat: 0,
@@ -375,33 +618,24 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     }
   };
 
-  const handleCustomerAdd = async (newCustomer: Customer) => {
-    // Create customer in database via Redux
-    const values: any = {
-      customer_name: newCustomer.name.trim(),
-      company: newCustomer.company.trim() || null,
-      contact_num: newCustomer.mobile.trim() || null,
-      customer_email: newCustomer.email.trim() || null,
-      customer_address: newCustomer.location.trim() || null,
-      status: 'active',
-    };
-    
-    try {
-      await dispatch(thunks.customers.createOne(values)).unwrap();
-      // Refresh customers list - the customers array will update via useMemo
-      await dispatch(thunks.customers.fetchAll(undefined));
-      toast.success("Customer added successfully!");
-      // Note: CustomerSelector will call onCustomerSelect with the newCustomer
-      // which will populate the form fields, so we don't need to find it here
-    } catch (e: any) {
-      toast.error(e.message || 'Failed to add customer');
-    }
-  };
+  // Note: adding new customers from this screen has been disabled; use the main customers module instead.
 
   const updateItem = (id: number, field: string, value: any) => {
     setItems(items.map(item => {
       if (item.id === id) {
         const updated = { ...item, [field]: value };
+        // If discount type changed, reset the other discount field
+        if (field === "discountType") {
+          if (value === "percentage") {
+            updated.discountAmount = 0;
+          } else {
+            updated.discountPercent = 0;
+          }
+        }
+        // In global mode, don't allow manual discount changes
+        if (discountMode === "global" && (field === "discountPercent" || field === "discountAmount" || field === "discountType")) {
+          return item; // Ignore manual discount changes in global mode
+        }
         const totals = calculateItemTotals(updated);
         return { ...updated, ...totals };
       }
@@ -430,6 +664,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           image: inv.prod_img || undefined,
           description: inv.en_prod_name || inv.ar_prod_name || '',
           unitPrice: Number(inv.prod_selling_price || 0),
+          discountType: item.discountType || "percentage",
         } as any;
         const totals = calculateItemTotals(updated);
         return { ...updated, ...totals };
@@ -439,14 +674,122 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     toast.success("Product loaded from inventory");
   };
 
-  const calculateQuotationTotals = () => {
-    const totalBeforeDiscount = items.reduce((sum, item) => sum + (item.unitPrice * item.quantity), 0);
-    const totalAfterDiscount = items.reduce((sum, item) => sum + item.subtotal, 0);
-    const totalDiscount = totalBeforeDiscount - totalAfterDiscount;
-    const totalVAT = items.reduce((sum, item) => sum + item.vat, 0);
-    const grandTotal = items.reduce((sum, item) => sum + item.total, 0);
+  // Apply global discount to all items
+  const applyGlobalDiscount = useMemo(() => {
+    return () => {
+      if (discountMode !== "global") return;
+      
+      const discountAmountNum = parseFloat(globalDiscountAmount) || 0;
+      
+      setItems(currentItems => {
+        if (discountAmountNum <= 0) {
+          // Clear all discounts
+          return currentItems.map(item => {
+            const updated = {
+              ...item,
+              discountPercent: 0,
+              discountAmount: 0,
+              discountType: "percentage" as const,
+            };
+            const totals = calculateItemTotals(updated);
+            return { ...updated, ...totals };
+          });
+        }
 
-    return { totalBeforeDiscount, totalDiscount, totalAfterDiscount, totalVAT, grandTotal };
+        // Calculate total subtotal of all items
+        const totalSubtotal = currentItems.reduce((sum, item) => {
+          return sum + (item.quantity * item.unitPrice);
+        }, 0);
+
+        if (totalSubtotal === 0) return currentItems;
+
+        return currentItems.map(item => {
+          const itemSubtotal = item.quantity * item.unitPrice;
+          
+          if (globalDiscountType === "percentage") {
+            // Apply same percentage to each item's subtotal
+            const validPercentage = Math.max(0, Math.min(100, discountAmountNum));
+            const updated = {
+              ...item,
+              discountType: "percentage" as const,
+              discountPercent: validPercentage,
+              discountAmount: 0,
+            };
+            const totals = calculateItemTotals(updated);
+            return { ...updated, ...totals };
+          } else {
+            // Fixed amount: distribute proportionally
+            const itemProportion = itemSubtotal / totalSubtotal;
+            const itemDiscountAmount = discountAmountNum * itemProportion;
+            
+            // Validate: discount cannot exceed item subtotal
+            const validDiscountAmount = Math.min(itemSubtotal, itemDiscountAmount);
+            
+            const updated = {
+              ...item,
+              discountType: "fixed" as const,
+              discountPercent: 0,
+              discountAmount: validDiscountAmount,
+            };
+            const totals = calculateItemTotals(updated);
+            return { ...updated, ...totals };
+          }
+        });
+      });
+    };
+  }, [discountMode, globalDiscountType, globalDiscountAmount]);
+
+  // Apply global discount when mode, type, or amount changes
+  useEffect(() => {
+    if (discountMode === "global") {
+      applyGlobalDiscount();
+    }
+  }, [discountMode, globalDiscountType, globalDiscountAmount, applyGlobalDiscount]);
+  
+  // Track previous item values to detect changes (quantity/unitPrice)
+  const prevItemsKeyRef = useRef<string>("");
+  useEffect(() => {
+    if (discountMode === "global" && globalDiscountAmount) {
+      const currentItemsKey = items.map(i => `${i.id}-${i.quantity}-${i.unitPrice}`).join(',');
+      if (currentItemsKey !== prevItemsKeyRef.current) {
+        prevItemsKeyRef.current = currentItemsKey;
+        applyGlobalDiscount();
+      }
+    }
+  }, [items, discountMode, globalDiscountAmount, applyGlobalDiscount]);
+
+  const calculateQuotationTotals = () => {
+    // Calculate subtotal for each item (quantity × unit price)
+    const totalSubtotal = items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
+    
+    // Calculate total discount (sum of all item discounts)
+    const totalDiscount = items.reduce((sum, item) => sum + (item.itemDiscount || 0), 0);
+    
+    // Calculate item totals (subtotal - discount for each item)
+    const totalItemTotals = items.reduce((sum, item) => {
+      const itemSubtotal = item.quantity * item.unitPrice;
+      const itemDiscount = item.itemDiscount || 0;
+      const itemTotal = itemSubtotal - itemDiscount;
+      return sum + itemTotal;
+    }, 0);
+    
+    // Grand Total = sum of all item totals
+    // Item totals already have VAT included in the item.total field
+    const grandTotal = items.reduce((sum, item) => sum + item.total, 0);
+    
+    // Total VAT = sum of all item VATs
+    const totalVAT = items.reduce((sum, item) => sum + (item.vat || 0), 0);
+    
+    // After discount = total item totals (before VAT)
+    const totalAfterDiscount = totalItemTotals;
+
+    return { 
+      totalBeforeDiscount: totalSubtotal, 
+      totalDiscount, 
+      totalAfterDiscount, 
+      totalVAT, 
+      grandTotal 
+    };
   };
 
   const totals = calculateQuotationTotals();
@@ -459,8 +802,15 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     setCommercialRegister("");
     setTaxNumber("");
     setExpiryDays("30");
+    setDiscountMode("individual");
+    setGlobalDiscountType("percentage");
+    setGlobalDiscountAmount("");
     setCompanyLogo("");
     setStamp("");
+    setLogoFilename(null);
+    setStampFilename(null);
+    setIsUsingDefaultLogo(true);
+    setIsUsingDefaultStamp(true);
     setStampPosition({ x: 50, y: 50 });
     setNotes("");
     setTermsAndConditions(
@@ -478,6 +828,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       quantity: 1,
       unitPrice: 0,
       discountPercent: 0,
+      discountAmount: 0,
+      discountType: "percentage",
+      itemDiscount: 0,
       priceAfterDiscount: 0,
       subtotal: 0,
       vat: 0,
@@ -499,15 +852,50 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       return;
     }
 
+    // Validate discounts
+    if (discountMode === "global") {
+      const globalDiscountAmountNum = parseFloat(globalDiscountAmount) || 0;
+      if (globalDiscountAmountNum < 0) {
+        toast.error("Discount amount cannot be negative");
+        return;
+      }
+      if (globalDiscountType === "percentage" && (globalDiscountAmountNum > 100 || globalDiscountAmountNum < 0)) {
+        toast.error("Discount percentage must be between 0 and 100");
+        return;
+      }
+      const totals = calculateQuotationTotals();
+      if (globalDiscountType === "fixed" && globalDiscountAmountNum > totals.totalBeforeDiscount) {
+        toast.error("Fixed discount cannot exceed total subtotal");
+        return;
+      }
+    } else {
+      // Validate individual item discounts
+      for (const item of items) {
+        if (item.discountType === "percentage" && (item.discountPercent < 0 || item.discountPercent > 100)) {
+          toast.error(`Item "${item.description || 'Untitled'}" has invalid discount percentage`);
+          return;
+        }
+        if (item.discountType === "fixed") {
+          const itemSubtotal = item.quantity * item.unitPrice;
+          if (item.discountAmount < 0 || item.discountAmount > itemSubtotal) {
+            toast.error(`Item "${item.description || 'Untitled'}" discount cannot exceed subtotal`);
+            return;
+          }
+        }
+      }
+    }
+
     // Quotation number will be auto-assigned based on sorted order (like invoices)
     // No need to generate or store it - it's calculated on display
     const itemsPayload = items.filter(i => i.description.trim()).map(i => ({
       description: i.description,
       quantity: i.quantity,
       unit_price: i.unitPrice,
-      discount_percent: i.discountPercent,
+      discount_percent: i.discountType === "percentage" ? i.discountPercent : 0,
+      discount_amount: i.discountType === "fixed" ? i.discountAmount : 0,
       image: i.image || null,
     }));
+    
     const values: any = {
       customer_name: customerName.trim(),
       phone_number: mobile ? parseInt(mobile.replace(/\D/g, ''), 10) : null,
@@ -517,9 +905,15 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       quotation_items: itemsPayload,
       quotation_notes: notes.trim() || null,
       quotation_summary: 'pending',
-      company_logo: companyLogo || null,
-      company_stamp: stamp || null,
+      // Store only filenames, not full URLs
+      company_logo: logoFilename || null,
+      company_stamp: stampFilename || null,
+      // Store discount mode and global discount info if applicable
+      discount_mode: discountMode,
+      discount_type: discountMode === "global" ? globalDiscountType : null,
+      discount_amount: discountMode === "global" && parseFloat(globalDiscountAmount) > 0 ? parseFloat(globalDiscountAmount) : null,
     };
+    
     dispatch(thunks.quotations.createOne(values))
       .unwrap()
       .then(() => {
@@ -581,10 +975,40 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       return;
     }
 
-    // Load logo from Settings if not provided in quotation
+    // Resolve logo: quotation-specific filename > quotation URL > system default
     let logoToUse = quotation.companyLogo;
+    if (!logoToUse && quotation.logoFilename) {
+      // TODO: Resolve filename to S3 URL
+      // For now, fall back to system default
+      logoToUse = (await getPrintLogo()) || undefined;
+    }
     if (!logoToUse) {
       logoToUse = (await getPrintLogo()) || undefined;
+    }
+    
+    // Resolve stamp: quotation-specific filename > quotation URL > system default
+    let stampToUse = quotation.stamp;
+    if (!stampToUse && quotation.stampFilename) {
+      // TODO: Resolve filename to S3 URL
+      // For now, fall back to system default
+      const { data: brandingData } = await supabase
+        .from("company_branding")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (brandingData?.branding_id) {
+        const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
+        const stampFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_STAMP);
+        if (stampFile) {
+          const stampUrl = await getFileUrl(
+            stampFile.bucket as any,
+            stampFile.path,
+            stampFile.is_public
+          );
+          if (stampUrl) stampToUse = stampUrl;
+        }
+      }
     }
 
     // Debug: Log items with images
@@ -600,8 +1024,36 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     const itemsWithImages = quotation.items.filter(item => item.image);
     console.log(`Found ${itemsWithImages.length} items with images out of ${quotation.items.length} total items`);
 
-    // Generate HTML with logo
-    const quotationHTML = generateQuotationHTML(quotation, logoToUse);
+    // Generate a compact preview HTML for QR code (same style as print but optimized for QR code size limits)
+    const escapeHtml = (text: string) => {
+      if (!text) return '';
+      return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    };
+    
+    const previewHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Quotation ${escapeHtml(quotation.quotationNumber)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);min-height:100vh;padding:20px}.container{max-width:800px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}.header{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);color:#fff;padding:30px;text-align:center}.header h1{font-size:32px;margin-bottom:10px}.quotation-num{font-size:24px;font-weight:600;opacity:.9}.validity-badge{display:inline-block;padding:8px 16px;background:#fef3c7;color:#92400e;border-radius:20px;font-size:14px;font-weight:600;margin-top:10px}.content{padding:30px}.section{margin-bottom:25px;padding:20px;background:#f8f9fa;border-radius:8px;border-left:4px solid #f5576c}.section-title{font-size:18px;font-weight:600;color:#333;margin-bottom:15px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.info-item{display:flex;flex-direction:column}.info-label{font-size:12px;color:#666;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}.info-value{font-size:16px;font-weight:600;color:#333}.items-table{width:100%;border-collapse:collapse;margin-top:15px}.items-table th{background:#f5576c;color:#fff;padding:12px;text-align:left;font-size:14px}.items-table td{padding:12px;border-bottom:1px solid #e0e0e0;font-size:14px}.totals{margin-top:20px;text-align:right}.total-row{display:flex;justify-content:space-between;padding:10px 0;font-size:16px}.total-row.grand{font-size:24px;font-weight:bold;color:#f5576c;border-top:2px solid #f5576c;padding-top:15px;margin-top:10px}.badge{display:inline-block;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;margin-top:10px}.badge.sent{background:#10b981;color:#fff}.badge.pending{background:#f59e0b;color:#fff}.badge.cancelled{background:#ef4444;color:#fff}</style></head><body><div class="container"><div class="header"><h1>QUOTATION</h1><div class="quotation-num">${escapeHtml(quotation.quotationNumber)}</div><span class="badge ${quotation.status}">${quotation.status.toUpperCase()}</span><div class="validity-badge">Valid Until: ${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}</div></div><div class="content"><div class="section"><div class="section-title">Quotation Information</div><div class="info-grid"><div class="info-item"><span class="info-label">Date</span><span class="info-value">${new Date(quotation.date).toLocaleDateString('en-GB')}</span></div><div class="info-item"><span class="info-label">Expiry</span><span class="info-value">${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}</span></div></div></div><div class="section"><div class="section-title">Customer</div><div class="info-grid"><div class="info-item"><span class="info-label">Name</span><span class="info-value">${escapeHtml(quotation.customerName)}</span></div><div class="info-item"><span class="info-label">Mobile</span><span class="info-value">${escapeHtml(quotation.mobile)}</span></div>${quotation.location ? `<div class="info-item"><span class="info-label">Location</span><span class="info-value">${escapeHtml(quotation.location)}</span></div>` : ''}</div></div><div class="section"><div class="section-title">Items</div><table class="items-table"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${quotation.items.map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${item.quantity}</td><td>SAR ${item.unitPrice.toFixed(2)}</td><td>SAR ${item.total.toFixed(2)}</td></tr>`).join('')}</tbody></table></div><div class="section"><div class="totals"><div class="total-row"><span>Subtotal:</span><span>SAR ${quotation.totalBeforeDiscount.toFixed(2)}</span></div>${quotation.totalDiscount > 0 ? `<div class="total-row"><span>Discount:</span><span>- SAR ${quotation.totalDiscount.toFixed(2)}</span></div>` : ''}<div class="total-row"><span>VAT (15%):</span><span>SAR ${quotation.totalVAT.toFixed(2)}</span></div><div class="total-row grand"><span>GRAND TOTAL:</span><span>SAR ${quotation.grandTotal.toFixed(2)}</span></div></div></div></div></div></body></html>`;
+    
+    // Generate QR code with data URL
+    let qrCode = "";
+    try {
+      const qrDataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(previewHTML)}`;
+      qrCode = await QRCode.toDataURL(qrDataUrl, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        width: 300
+      });
+    } catch (err) {
+      console.error("QR Code generation error:", err);
+      // Fallback: generate a simple text QR code
+      try {
+        const simpleData = `Quotation: ${quotation.quotationNumber}\nDate: ${new Date(quotation.date).toLocaleDateString('en-GB')}\nValid Until: ${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}\nCustomer: ${quotation.customerName}\nTotal: SAR ${quotation.grandTotal.toFixed(2)}`;
+        qrCode = await QRCode.toDataURL(simpleData);
+      } catch (fallbackErr) {
+        console.error("QR Code fallback generation error:", fallbackErr);
+      }
+    }
+
+    // Generate HTML with logo, stamp, and QR code
+    const quotationHTML = generateQuotationHTML(quotation, logoToUse, stampToUse, qrCode);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -659,9 +1111,11 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     printWindow.print();
   };
 
-  const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null) => {
+  const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null, stampUrl?: string | null, qrCode?: string) => {
     // Use provided logo or fall back to quotation logo
     const companyLogo = logoUrl || quotation.companyLogo;
+    // Use provided stamp or fall back to quotation stamp
+    const companyStamp = stampUrl || quotation.stamp;
     
     return `
       <!DOCTYPE html>
@@ -847,9 +1301,22 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
             margin-top: 40px;
             padding-top: 20px;
             border-top: 2px solid #e2e8f0;
-            text-align: center;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 20px;
+            align-items: center;
             font-size: 11px;
             color: #64748b;
+          }
+          .qr-section {
+            text-align: center;
+          }
+          .qr-code {
+            width: 120px;
+            height: 120px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 5px;
           }
           @media print {
             @page {
@@ -917,7 +1384,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       </head>
       <body>
         <div class="quotation-container">
-          ${quotation.stamp ? `<img src="${quotation.stamp}" class="stamp" alt="Stamp">` : ''}
+          ${companyStamp ? `<img src="${companyStamp}" class="stamp" alt="Stamp">` : ''}
           <div class="content">
             <div class="header">
               <div class="company-info">
@@ -1055,17 +1522,19 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
             </div>
 
             <div class="footer">
-              <div style="font-weight: 600; margin-bottom: 10px;">Thank you for considering our quotation!</div>
               <div>
-                For any questions, please contact us:<br>
-                Phone: +966 50 123 4567 | Email: info@manatrading.sa
+                <div style="font-weight: 600; margin-bottom: 10px;">Thank you for considering our quotation!</div>
+                <div>
+                  For any questions, please contact us:<br>
+                  Phone: +966 50 123 4567 | Email: info@manatrading.sa
+                </div>
               </div>
-              <div style="margin-top: 15px; font-size: 12px; color: #64748b; line-height: 1.6;">
-                <div>Mana Smart Trading Company</div>
-                <div>Al Rajhi Bank</div>
-                <div>A.N.: 301000010006080269328</div>
-                <div>IBAN No.: SA2680000301608010269328</div>
+              ${qrCode ? `
+              <div class="qr-section">
+                <img src="${qrCode}" class="qr-code" alt="QR Code">
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
               </div>
+              ` : ''}
             </div>
           </div>
         </div>
@@ -1137,7 +1606,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                         customers={customers}
                         selectedCustomerId={selectedCustomerId}
                         onCustomerSelect={handleCustomerSelect}
-                        onCustomerAdd={handleCustomerAdd}
+                        hideQuickAdd
                         label="Select Customer"
                         placeholder="Search customer by name, company, or mobile..."
                         required
@@ -1223,10 +1692,21 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Branding & Customization</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-2">
+                  <CardContent className="space-y-3">
+                    <div className="text-xs text-muted-foreground bg-blue-50 p-2 rounded">
+                      Default logo and stamp from Settings are shown below. Upload custom assets to override for this quotation only.
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="space-y-1">
-                        <Label className="text-xs">Company Logo</Label>
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Company Logo</Label>
+                          {isUsingDefaultLogo && defaultLogoUrl && (
+                            <Badge variant="outline" className="text-xs">System Default</Badge>
+                          )}
+                          {!isUsingDefaultLogo && (
+                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
+                          )}
+                        </div>
                         <input
                           ref={logoInputRef}
                           type="file"
@@ -1241,7 +1721,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                           className="w-full h-8 text-xs"
                         >
                           <Upload className="h-3 w-3 mr-1" />
-                          Upload Logo
+                          {isUsingDefaultLogo ? "Override Logo" : "Change Logo"}
                         </Button>
                         {companyLogo && (
                           <div className="relative">
@@ -1255,16 +1735,34 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                               variant="ghost"
                               size="icon"
                               className="absolute top-0 right-0 h-6 w-6"
-                              onClick={() => setCompanyLogo("")}
+                              onClick={() => {
+                                setCompanyLogo(defaultLogoUrl || "");
+                                setLogoFilename(null);
+                                setIsUsingDefaultLogo(true);
+                              }}
+                              title={isUsingDefaultLogo ? "Using system default" : "Reset to default"}
                             >
                               <X className="h-4 w-4" />
                             </Button>
                           </div>
                         )}
+                        {!companyLogo && defaultLogoUrl && (
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Using system default logo
+                          </div>
+                        )}
                       </div>
 
                       <div className="space-y-1">
-                        <Label className="text-xs">Stamp (Optional)</Label>
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Stamp (Optional)</Label>
+                          {isUsingDefaultStamp && defaultStampUrl && (
+                            <Badge variant="outline" className="text-xs">System Default</Badge>
+                          )}
+                          {!isUsingDefaultStamp && (
+                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
+                          )}
+                        </div>
                         <input
                           ref={stampInputRef}
                           type="file"
@@ -1279,7 +1777,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                           className="w-full h-8 text-xs"
                         >
                           <Upload className="h-3 w-3 mr-1" />
-                          Upload Stamp
+                          {isUsingDefaultStamp ? "Override Stamp" : "Change Stamp"}
                         </Button>
                         {stamp && (
                           <div className="relative">
@@ -1293,10 +1791,20 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                               variant="ghost"
                               size="icon"
                               className="absolute top-0 right-0 h-6 w-6"
-                              onClick={() => setStamp("")}
+                              onClick={() => {
+                                setStamp(defaultStampUrl || "");
+                                setStampFilename(null);
+                                setIsUsingDefaultStamp(true);
+                              }}
+                              title={isUsingDefaultStamp ? "Using system default" : "Reset to default"}
                             >
                               <X className="h-4 w-4" />
                             </Button>
+                          </div>
+                        )}
+                        {!stamp && defaultStampUrl && (
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Using system default stamp
                           </div>
                         )}
                       </div>
@@ -1430,22 +1938,92 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                               />
                             </div>
 
-                            <div className="space-y-1">
-                              <Label className="text-xs">Discount %</Label>
-                              <Input 
-                                type="number" 
-                                min="0"
-                                max="100"
-                                value={item.discountPercent} 
-                                onChange={(e) => updateItem(item.id, "discountPercent", parseFloat(e.target.value) || 0)}
-                                className="h-8 text-sm"
-                              />
-                            </div>
+                            {discountMode === "individual" ? (
+                              <>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Discount Type</Label>
+                                  <Select 
+                                    value={item.discountType || "percentage"} 
+                                    onValueChange={(value: "percentage" | "fixed") => updateItem(item.id, "discountType", value)}
+                                  >
+                                    <SelectTrigger className="h-8 text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="percentage">Percentage (%)</SelectItem>
+                                      <SelectItem value="fixed">Fixed (SAR)</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
 
+                                <div className="space-y-1">
+                                  <Label className="text-xs">
+                                    Discount {item.discountType === "percentage" ? "(%)" : "(SAR)"}
+                                  </Label>
+                                  <Input 
+                                    type="number" 
+                                    min="0"
+                                    max={item.discountType === "percentage" ? "100" : undefined}
+                                    step="0.01"
+                                    value={item.discountType === "percentage" ? item.discountPercent : item.discountAmount} 
+                                    onChange={(e) => {
+                                      const value = parseFloat(e.target.value) || 0;
+                                      if (item.discountType === "percentage") {
+                                        updateItem(item.id, "discountPercent", value);
+                                      } else {
+                                        updateItem(item.id, "discountAmount", value);
+                                      }
+                                    }}
+                                    className="h-8 text-sm"
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="space-y-1">
+                                  <Label className="text-xs text-muted-foreground">Discount</Label>
+                                  <div className="h-8 flex items-center">
+                                    <p className="text-sm text-muted-foreground">
+                                      {item.discountType === "percentage" 
+                                        ? `${item.discountPercent.toFixed(2)}%` 
+                                        : `SAR ${item.discountAmount.toFixed(2)}`}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs text-muted-foreground">Item Discount</Label>
+                                  <div className="h-8 flex items-center">
+                                    <p className="text-sm text-muted-foreground">SAR {item.itemDiscount.toFixed(2)}</p>
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                          
+                          {/* Item Totals Display */}
+                          <div className="grid grid-cols-4 gap-3 mt-3 pt-3 border-t">
                             <div className="space-y-1">
-                              <Label className="text-xs text-muted-foreground">Total</Label>
+                              <Label className="text-xs text-muted-foreground">Subtotal</Label>
                               <div className="h-8 flex items-center">
-                                <p className="text-sm font-medium text-primary">SAR {item.total.toFixed(2)}</p>
+                                <p className="text-sm font-medium">SAR {item.subtotal.toFixed(2)}</p>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Item Discount</Label>
+                              <div className="h-8 flex items-center">
+                                <p className="text-sm text-destructive">- SAR {item.itemDiscount.toFixed(2)}</p>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Item Total</Label>
+                              <div className="h-8 flex items-center">
+                                <p className="text-sm font-medium">SAR {(item.subtotal - item.itemDiscount).toFixed(2)}</p>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Total (incl. VAT)</Label>
+                              <div className="h-8 flex items-center">
+                                <p className="text-sm font-bold text-primary">SAR {item.total.toFixed(2)}</p>
                               </div>
                             </div>
                           </div>
@@ -1500,6 +2078,115 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                   </CardContent>
                 </Card>
 
+                {/* Discount Section */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Discount Configuration</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-semibold">Discount Mode</Label>
+                      <Select 
+                        value={discountMode} 
+                        onValueChange={(value: "individual" | "global") => {
+                          setDiscountMode(value);
+                          if (value === "individual") {
+                            // Clear global discount when switching to individual mode
+                            setGlobalDiscountAmount("");
+                            // Reset all item discounts to 0
+                            setItems(items.map(item => {
+                              const updated = {
+                                ...item,
+                                discountPercent: 0,
+                                discountAmount: 0,
+                                discountType: "percentage" as const,
+                              };
+                              const totals = calculateItemTotals(updated);
+                              return { ...updated, ...totals };
+                            }));
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="individual">Individual Item Discounts</SelectItem>
+                          <SelectItem value="global">Apply Discount to All Items</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {discountMode === "global" && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label htmlFor="globalDiscountType" className="text-xs">Discount Type</Label>
+                            <Select 
+                              value={globalDiscountType} 
+                              onValueChange={(value: "percentage" | "fixed") => {
+                                setGlobalDiscountType(value);
+                                setGlobalDiscountAmount("");
+                              }}
+                            >
+                              <SelectTrigger id="globalDiscountType" className="h-8 text-sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="percentage">Percentage (%)</SelectItem>
+                                <SelectItem value="fixed">Fixed Amount (SAR)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor="globalDiscountAmount" className="text-xs">
+                              Discount Amount {globalDiscountType === "percentage" ? "(%)" : "(SAR)"}
+                            </Label>
+                            <Input
+                              id="globalDiscountAmount"
+                              type="number"
+                              min="0"
+                              max={globalDiscountType === "percentage" ? "100" : undefined}
+                              step="0.01"
+                              value={globalDiscountAmount}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                if (globalDiscountType === "percentage") {
+                                  const num = parseFloat(value);
+                                  if (isNaN(num) || num < 0 || num > 100) {
+                                    if (value !== "" && value !== "-") {
+                                      toast.error("Discount percentage must be between 0 and 100");
+                                    }
+                                  }
+                                }
+                                setGlobalDiscountAmount(value);
+                              }}
+                              placeholder={globalDiscountType === "percentage" ? "0.00" : "0.00"}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        </div>
+                        {globalDiscountAmount && parseFloat(globalDiscountAmount) > 0 && (
+                          <div className="text-xs text-muted-foreground bg-blue-50 p-2 rounded">
+                            {globalDiscountType === "percentage" 
+                              ? `Applying ${globalDiscountAmount}% discount to all item subtotals`
+                              : `Distributing SAR ${parseFloat(globalDiscountAmount).toFixed(2)} discount proportionally across all items`}
+                          </div>
+                        )}
+                        <div className="text-xs text-muted-foreground bg-amber-50 p-2 rounded border border-amber-200">
+                          <strong>Note:</strong> Individual item discount fields are disabled in this mode. Discounts are automatically calculated and applied to all items.
+                        </div>
+                      </>
+                    )}
+
+                    {discountMode === "individual" && (
+                      <div className="text-xs text-muted-foreground bg-green-50 p-2 rounded border border-green-200">
+                        <strong>Individual Mode:</strong> You can set discounts for each item independently. Each item supports either percentage or fixed amount discounts.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
                 {/* Summary */}
                 <Card className="bg-muted/30">
                   <CardHeader className="pb-2">
@@ -1508,17 +2195,17 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                   <CardContent>
                     <div className="space-y-1 text-xs">
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Subtotal:</span>
+                        <span className="text-muted-foreground">Subtotal (All Items):</span>
                         <span className="font-medium">SAR {totals.totalBeforeDiscount.toFixed(2)}</span>
                       </div>
                       {totals.totalDiscount > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Discount:</span>
+                          <span className="text-muted-foreground">Total Discount:</span>
                           <span className="font-medium text-destructive">- SAR {totals.totalDiscount.toFixed(2)}</span>
                         </div>
                       )}
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">After Discount:</span>
+                        <span className="text-muted-foreground">Item Totals (After Discount):</span>
                         <span className="font-medium">SAR {totals.totalAfterDiscount.toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between">

@@ -632,10 +632,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }
   };
 
-  const handleCustomerAdd = (_newCustomer: Customer) => {
-    // Local-only quick add to selector list for now; full DB create can be wired separately
-    // This preserves existing UX without breaking Supabase sync
-  };
+  // Note: adding new customers from this screen has been disabled; use the main customers module instead.
 
   const calculateInvoiceTotals = () => {
     // For monthly visit invoices, use contract plan amount as grand total
@@ -884,8 +881,36 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       logoToUse = (await getPrintLogo()) || undefined;
     }
 
-    // Generate HTML with logo
-    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse);
+    // Generate a compact preview HTML for QR code (same style as print but optimized for QR code size limits)
+    const escapeHtml = (text: string) => {
+      if (!text) return '';
+      return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    };
+    
+    const previewHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px}.container{max-width:800px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}.header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:30px;text-align:center}.header h1{font-size:32px;margin-bottom:10px}.invoice-num{font-size:24px;font-weight:600;opacity:.9}.content{padding:30px}.section{margin-bottom:25px;padding:20px;background:#f8f9fa;border-radius:8px;border-left:4px solid #667eea}.section-title{font-size:18px;font-weight:600;color:#333;margin-bottom:15px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.info-item{display:flex;flex-direction:column}.info-label{font-size:12px;color:#666;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}.info-value{font-size:16px;font-weight:600;color:#333}.items-table{width:100%;border-collapse:collapse;margin-top:15px}.items-table th{background:#667eea;color:#fff;padding:12px;text-align:left;font-size:14px}.items-table td{padding:12px;border-bottom:1px solid #e0e0e0;font-size:14px}.totals{margin-top:20px;text-align:right}.total-row{display:flex;justify-content:space-between;padding:10px 0;font-size:16px}.total-row.grand{font-size:24px;font-weight:bold;color:#667eea;border-top:2px solid #667eea;padding-top:15px;margin-top:10px}.badge{display:inline-block;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;margin-top:10px}.badge.paid{background:#10b981;color:#fff}.badge.partial{background:#f59e0b;color:#fff}.badge.draft{background:#6b7280;color:#fff}</style></head><body><div class="container"><div class="header"><h1>INVOICE</h1><div class="invoice-num">${escapeHtml(invoice.invoiceNumber)}</div><span class="badge ${invoice.status}">${invoice.status.toUpperCase()}</span></div><div class="content"><div class="section"><div class="section-title">Invoice Information</div><div class="info-grid"><div class="info-item"><span class="info-label">Date</span><span class="info-value">${new Date(invoice.date).toLocaleDateString('en-GB')}</span></div><div class="info-item"><span class="info-label">Type</span><span class="info-value">${invoice.invoiceType === 'monthly_visit' ? 'Monthly Visit' : 'Normal'}</span></div></div></div><div class="section"><div class="section-title">Customer</div><div class="info-grid"><div class="info-item"><span class="info-label">Name</span><span class="info-value">${escapeHtml(invoice.customerName)}</span></div><div class="info-item"><span class="info-label">Mobile</span><span class="info-value">${escapeHtml(invoice.mobile)}</span></div>${invoice.location ? `<div class="info-item"><span class="info-label">Location</span><span class="info-value">${escapeHtml(invoice.location)}</span></div>` : ''}</div></div><div class="section"><div class="section-title">Items</div><table class="items-table"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${invoice.items.map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${item.quantity}</td><td>SAR ${item.unitPrice.toFixed(2)}</td><td>SAR ${item.total.toFixed(2)}</td></tr>`).join('')}</tbody></table></div><div class="section"><div class="totals"><div class="total-row"><span>Subtotal:</span><span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span></div>${invoice.totalDiscount > 0 ? `<div class="total-row"><span>Discount:</span><span>- SAR ${invoice.totalDiscount.toFixed(2)}</span></div>` : ''}<div class="total-row"><span>VAT (15%):</span><span>SAR ${invoice.totalVAT.toFixed(2)}</span></div><div class="total-row grand"><span>GRAND TOTAL:</span><span>SAR ${invoice.grandTotal.toFixed(2)}</span></div>${invoice.paidAmount > 0 ? `<div class="total-row"><span>Paid:</span><span style="color:#10b981">SAR ${invoice.paidAmount.toFixed(2)}</span></div>` : ''}${invoice.remainingAmount > 0 ? `<div class="total-row"><span>Remaining:</span><span style="color:#ef4444">SAR ${invoice.remainingAmount.toFixed(2)}</span></div>` : ''}</div></div></div></div></body></html>`;
+    
+    // Generate QR code with data URL
+    let qrCode = "";
+    try {
+      const qrDataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(previewHTML)}`;
+      qrCode = await QRCode.toDataURL(qrDataUrl, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        width: 300
+      });
+    } catch (err) {
+      console.error("QR Code generation error:", err);
+      // Fallback: generate a simple text QR code
+      try {
+        const simpleData = `Invoice: ${invoice.invoiceNumber}\nDate: ${new Date(invoice.date).toLocaleDateString('en-GB')}\nCustomer: ${invoice.customerName}\nTotal: SAR ${invoice.grandTotal.toFixed(2)}`;
+        qrCode = await QRCode.toDataURL(simpleData);
+      } catch (fallbackErr) {
+        console.error("QR Code fallback generation error:", fallbackErr);
+      }
+    }
+
+    // Generate HTML with logo and QR code
+    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -939,7 +964,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     printWindow.print();
   };
 
-  const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null) => {
+  const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string) => {
     // Use provided logo or fall back to invoice logo
     const companyLogo = logoUrl || invoice.companyLogo;
     // Escape HTML special characters in text content
@@ -1456,15 +1481,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                 If you have any questions about this invoice, please contact us at:<br>
                 Email: sales@mana.sa | Phone: +966 556 292 500
               </div>
-              <div style="margin-top: 15px; font-size: 12px; color: #64748b; line-height: 1.6;">
-                <div>Mana Smart Trading Company</div>
-                <div>Al Rajhi Bank</div>
-                <div>A.N.: 301000010006080269328</div>
-                <div>IBAN No.: SA2680000301608010269328</div>
-              </div>
-              ${invoice.qrCode ? `
+              ${qrCode ? `
               <div class="qr-section">
-                <img src="${invoice.qrCode}" class="qr-code" alt="QR Code">
+                <img src="${qrCode}" class="qr-code" alt="QR Code">
                 <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
               </div>
               ` : ''}
@@ -1561,7 +1580,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                         customers={customers}
                         selectedCustomerId={selectedCustomerId}
                         onCustomerSelect={handleCustomerSelect}
-                        onCustomerAdd={handleCustomerAdd}
+                        hideQuickAdd
                         label="Select Customer"
                         placeholder="Search customer by name, company, or mobile..."
                         required

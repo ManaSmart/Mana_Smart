@@ -997,6 +997,7 @@ export default function App() {
             reminders={reminders}
             setReminders={setReminders}
             onActivityAdd={addActivity}
+            currentPermissions={permissions}
           />,
         );
       case "customers":
