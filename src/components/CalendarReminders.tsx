@@ -35,6 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { ScrollArea } from "./ui/scroll-area";
 import { supabase } from "../lib/supabaseClient";
 import type { Reminder, Activity } from "../types/activity";
+import { hasPermission, type ResolvedPermissions } from "../lib/permissions";
 
 const typeColors = {
   visit: "bg-blue-100 text-blue-700 border-blue-200",
@@ -70,6 +71,7 @@ interface CalendarRemindersProps {
   reminders?: Reminder[]; // Deprecated - kept for backward compatibility but not used
   setReminders?: React.Dispatch<React.SetStateAction<Reminder[]>>; // Deprecated - kept for backward compatibility but not used
   onActivityAdd?: (activity: Omit<Activity, "id" | "timestamp">) => void;
+  currentPermissions?: ResolvedPermissions; // User permissions for access control
 }
 
 interface VisitData {
@@ -89,8 +91,13 @@ interface VisitData {
 export function CalendarReminders({ 
   reminders: _reminders, 
   setReminders: _setReminders, 
-  onActivityAdd 
+  onActivityAdd,
+  currentPermissions = "all" // Default to "all" if not provided for backward compatibility
 }: CalendarRemindersProps) {
+  // Check if user has permissions for calendar
+  const canCreateReminders = hasPermission(currentPermissions, "calendar", "create");
+  const canUpdateReminders = hasPermission(currentPermissions, "calendar", "update");
+  const canDeleteReminders = hasPermission(currentPermissions, "calendar", "delete");
   const initialSelectedDate = new Date();
   initialSelectedDate.setHours(0, 0, 0, 0);
   const [selectedDate, setSelectedDate] = useState<Date>(initialSelectedDate);
@@ -410,6 +417,162 @@ export function CalendarReminders({
     }
   }, []);
 
+  // Auto-create next month's scheduled monthly visits for active contracts
+  const autoCreateNextMonthVisits = useCallback(async () => {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const endOfThisMonth = new Date(
+        today.getFullYear(),
+        today.getMonth() + 1,
+        0
+      );
+      endOfThisMonth.setHours(0, 0, 0, 0);
+
+      const msPerDay = 1000 * 60 * 60 * 24;
+      const daysUntilEnd =
+        (endOfThisMonth.getTime() - today.getTime()) / msPerDay;
+
+      // Only run in the last 7 days of the month
+      if (daysUntilEnd > 7 || daysUntilEnd < 0) {
+        return;
+      }
+
+      // Fetch active contracts
+      const { data: contracts, error: contractsError } = await supabase
+        .from("contracts")
+        .select("contract_id, contract_number, contract_status, customer_id, location, notes, delegate_id, contract_start_date")
+        .eq("contract_status", "active");
+
+      if (contractsError) {
+        throw contractsError;
+      }
+
+      if (!contracts || contracts.length === 0) {
+        return;
+      }
+
+      // Get current user ID if available
+      const stored = localStorage.getItem("auth_user");
+      let currentUserId: string | null = null;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          currentUserId = parsed.user_id || null;
+        } catch (e) {
+          console.error("Failed to parse auth_user", e);
+        }
+      }
+
+      const nextMonthFirstDay = new Date(
+        today.getFullYear(),
+        today.getMonth() + 1,
+        1
+      );
+      nextMonthFirstDay.setHours(0, 0, 0, 0);
+
+      for (const contract of contracts as any[]) {
+        let additionalData: any = {};
+        try {
+          if (contract.notes) {
+            additionalData = JSON.parse(contract.notes);
+          }
+        } catch {
+          additionalData = { notes: contract.notes };
+        }
+
+        // Skip contracts where automatic monthly visits are disabled
+        if (additionalData.autoMonthlyVisitsEnabled === false) {
+          continue;
+        }
+
+        const baseDateStr =
+          additionalData.monthlyVisitStartDate || contract.contract_start_date;
+        if (!baseDateStr) continue;
+
+        const baseDate = new Date(baseDateStr);
+        if (Number.isNaN(baseDate.getTime())) continue;
+
+        // Compute expected visit day (same day-of-month as base date) in next month
+        const targetYear = nextMonthFirstDay.getFullYear();
+        const targetMonth = nextMonthFirstDay.getMonth(); // already next month
+        const day = baseDate.getDate();
+        const lastDayOfTargetMonth = new Date(
+          targetYear,
+          targetMonth + 1,
+          0
+        ).getDate();
+        const targetDay = Math.min(day, lastDayOfTargetMonth);
+
+        const nextVisitDate = new Date(targetYear, targetMonth, targetDay);
+        nextVisitDate.setHours(0, 0, 0, 0);
+        const visitDateIso = nextVisitDate.toISOString().split("T")[0];
+
+        // Check if a monthly visit already exists for that contract & date
+        const { data: existingVisits, error: existingError } = await supabase
+          .from("monthly_visits")
+          .select("visit_id")
+          .eq("contract_id", contract.contract_id)
+          .eq("visit_date", visitDateIso);
+
+        if (existingError) {
+          throw existingError;
+        }
+
+        if (existingVisits && existingVisits.length > 0) {
+          continue;
+        }
+
+        // Fallbacks for delegate and address
+        let delegateId = contract.delegate_id ?? null;
+        let address = contract.location ?? null;
+
+        if (!delegateId || !address) {
+          const { data: customerRow, error: customerError } = await supabase
+            .from("customers")
+            .select("delegate_id, customer_address")
+            .eq("customer_id", contract.customer_id)
+            .maybeSingle();
+
+          if (customerError) {
+            throw customerError;
+          }
+
+          if (customerRow) {
+            if (!delegateId) {
+              delegateId = customerRow.delegate_id ?? null;
+            }
+            if (!address) {
+              address = customerRow.customer_address ?? null;
+            }
+          }
+        }
+
+        // Create the next month's scheduled visit
+        const { error: insertError } = await supabase.from("monthly_visits").insert({
+          contract_id: contract.contract_id,
+          customer_id: contract.customer_id,
+          visit_date: visitDateIso,
+          visit_time: null,
+          status: "scheduled",
+          address,
+          notes: `Monthly visit for contract ${contract.contract_number}`,
+          delegate_id: delegateId,
+          created_by: currentUserId,
+          updated_by: currentUserId,
+        });
+
+        if (insertError) {
+          throw insertError;
+        }
+      }
+    } catch (error) {
+      console.error("Error auto-creating next month's visits:", error);
+      // Silent failure is acceptable here; no toast to avoid user noise on background task
+    }
+  }, []);
+
   // Fetch invoices with due dates
   const fetchInvoices = useCallback(async () => {
     setLoadingInvoices(true);
@@ -444,7 +607,8 @@ export function CalendarReminders({
     void fetchReminders();
     void fetchVisits();
     void fetchInvoices();
-  }, [fetchReminders, fetchVisits, fetchInvoices]);
+    void autoCreateNextMonthVisits();
+  }, [fetchReminders, fetchVisits, fetchInvoices, autoCreateNextMonthVisits]);
 
   const getRemindersForDate = useCallback((targetDate: Date) => {
     const normalized = new Date(
@@ -544,6 +708,12 @@ export function CalendarReminders({
       return;
     }
 
+    // Check create permission
+    if (!canCreateReminders) {
+      toast.error("You do not have permission to create reminders");
+      return;
+    }
+
     try {
       const { error } = await supabase
         .from("reminders")
@@ -624,9 +794,9 @@ export function CalendarReminders({
       return;
     }
 
-    // Only update database reminders, not visit or invoice reminders
-    if (editingReminder.relatedVisitId || (editingReminder as any).relatedInvoiceId) {
-      toast.error("Cannot edit visit or invoice reminders");
+    // Check update permission for all reminders
+    if (!canUpdateReminders) {
+      toast.error("You do not have permission to update reminders");
       return;
     }
 
@@ -688,9 +858,26 @@ export function CalendarReminders({
   const handleDeleteReminder = async (id: number) => {
     const reminderToDelete = allReminders.find((r) => r.id === id);
     
-    // Only delete database reminders, not visit or invoice reminders
-    if (reminderToDelete?.relatedVisitId || (reminderToDelete as any)?.relatedInvoiceId) {
-      toast.error("Cannot delete visit or invoice reminders");
+    if (!reminderToDelete) {
+      toast.error("Reminder not found");
+      return;
+    }
+
+    // Check permissions for visit/invoice reminders
+    if (reminderToDelete.relatedVisitId || (reminderToDelete as any)?.relatedInvoiceId) {
+      if (!canDeleteReminders) {
+        toast.error("You do not have permission to delete visit or invoice reminders");
+        return;
+      }
+      // Note: Visit/invoice reminders are derived from visits/invoices, so we don't delete them
+      // We only allow deleting the underlying visit/invoice if user has permissions
+      toast.info("Visit and invoice reminders are managed through their respective modules");
+      return;
+    }
+
+    // Check delete permission for regular reminders
+    if (!canDeleteReminders) {
+      toast.error("You do not have permission to delete reminders");
       return;
     }
 
@@ -732,29 +919,64 @@ export function CalendarReminders({
   const markAsCompleted = async (id: number) => {
     const reminder = allReminders.find(r => r.id === id);
     
-    // Only update database reminders
-    if (reminder?.relatedVisitId || (reminder as any)?.relatedInvoiceId) {
-      toast.error("Cannot update visit or invoice reminders");
+    if (!reminder) {
+      toast.error("Reminder not found");
       return;
+    }
+
+    // Check permissions for visit/invoice reminders
+    if (reminder.relatedVisitId || (reminder as any)?.relatedInvoiceId) {
+      if (!canUpdateReminders) {
+        toast.error("You do not have permission to update visit or invoice reminders");
+        return;
+      }
     }
 
     try {
       const now = new Date().toISOString();
-      const { error } = await supabase
-        .from("reminders")
-        .update({
-          status: "completed",
-          completed_at: now,
-          updated_at: now,
-        })
-        .eq("reminder_id", id);
+      
+      // If it's a visit reminder, update the visit status in the database
+      if (reminder.relatedVisitId) {
+        // Determine which table to update based on visit type
+        const visit = visits.find(v => v.id === reminder.relatedVisitId);
+        if (visit) {
+          const tableName = visit.type === "monthly" ? "monthly_visits" : "manual_visits";
+          const { error: visitError } = await supabase
+            .from(tableName)
+            .update({
+              status: "completed",
+              updated_at: now,
+            })
+            .eq("visit_id", reminder.relatedVisitId);
 
-      if (error) {
-        throw error;
+          if (visitError) {
+            console.error("Error updating visit:", visitError);
+            toast.error("Failed to update visit status");
+            return;
+          }
+        }
       }
 
-      // Refresh reminders from database
+      // Update reminder in database (if it exists there)
+      // Note: Visit/invoice reminders might not exist in reminders table
+      if (!reminder.relatedVisitId && !(reminder as any)?.relatedInvoiceId) {
+        const { error } = await supabase
+          .from("reminders")
+          .update({
+            status: "completed",
+            completed_at: now,
+            updated_at: now,
+          })
+          .eq("reminder_id", id);
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      // Refresh data
       await fetchReminders();
+      await fetchVisits();
       
       // Log activity
       if (reminder && onActivityAdd) {
@@ -782,28 +1004,62 @@ export function CalendarReminders({
   const markAsPending = async (id: number) => {
     const reminder = allReminders.find((r) => r.id === id);
     
-    // Only update database reminders
-    if (reminder?.relatedVisitId || (reminder as any)?.relatedInvoiceId) {
-      toast.error("Cannot update visit or invoice reminders");
+    if (!reminder) {
+      toast.error("Reminder not found");
       return;
     }
 
-    try {
-      const { error } = await supabase
-        .from("reminders")
-        .update({
-          status: "pending",
-          completed_at: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("reminder_id", id);
+    // Check permissions for visit/invoice reminders
+    if (reminder.relatedVisitId || (reminder as any)?.relatedInvoiceId) {
+      if (!canUpdateReminders) {
+        toast.error("You do not have permission to update visit or invoice reminders");
+        return;
+      }
+    }
 
-      if (error) {
-        throw error;
+    try {
+      const now = new Date().toISOString();
+      
+      // If it's a visit reminder, update the visit status in the database
+      if (reminder.relatedVisitId) {
+        const visit = visits.find(v => v.id === reminder.relatedVisitId);
+        if (visit) {
+          const tableName = visit.type === "monthly" ? "monthly_visits" : "manual_visits";
+          const { error: visitError } = await supabase
+            .from(tableName)
+            .update({
+              status: "scheduled",
+              updated_at: now,
+            })
+            .eq("visit_id", reminder.relatedVisitId);
+
+          if (visitError) {
+            console.error("Error updating visit:", visitError);
+            toast.error("Failed to update visit status");
+            return;
+          }
+        }
       }
 
-      // Refresh reminders from database
+      // Update reminder in database (if it exists there)
+      if (!reminder.relatedVisitId && !(reminder as any)?.relatedInvoiceId) {
+        const { error } = await supabase
+          .from("reminders")
+          .update({
+            status: "pending",
+            completed_at: null,
+            updated_at: now,
+          })
+          .eq("reminder_id", id);
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      // Refresh data
       await fetchReminders();
+      await fetchVisits();
 
       if (reminder && onActivityAdd) {
         onActivityAdd({
@@ -830,28 +1086,62 @@ export function CalendarReminders({
   const markAsCancelled = async (id: number) => {
     const reminder = allReminders.find((r) => r.id === id);
     
-    // Only update database reminders
-    if (reminder?.relatedVisitId || (reminder as any)?.relatedInvoiceId) {
-      toast.error("Cannot update visit or invoice reminders");
+    if (!reminder) {
+      toast.error("Reminder not found");
       return;
     }
 
-    try {
-      const { error } = await supabase
-        .from("reminders")
-        .update({
-          status: "cancelled",
-          completed_at: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("reminder_id", id);
+    // Check permissions for visit/invoice reminders
+    if (reminder.relatedVisitId || (reminder as any)?.relatedInvoiceId) {
+      if (!canUpdateReminders) {
+        toast.error("You do not have permission to update visit or invoice reminders");
+        return;
+      }
+    }
 
-      if (error) {
-        throw error;
+    try {
+      const now = new Date().toISOString();
+      
+      // If it's a visit reminder, update the visit status in the database
+      if (reminder.relatedVisitId) {
+        const visit = visits.find(v => v.id === reminder.relatedVisitId);
+        if (visit) {
+          const tableName = visit.type === "monthly" ? "monthly_visits" : "manual_visits";
+          const { error: visitError } = await supabase
+            .from(tableName)
+            .update({
+              status: "cancelled",
+              updated_at: now,
+            })
+            .eq("visit_id", reminder.relatedVisitId);
+
+          if (visitError) {
+            console.error("Error updating visit:", visitError);
+            toast.error("Failed to update visit status");
+            return;
+          }
+        }
       }
 
-      // Refresh reminders from database
+      // Update reminder in database (if it exists there)
+      if (!reminder.relatedVisitId && !(reminder as any)?.relatedInvoiceId) {
+        const { error } = await supabase
+          .from("reminders")
+          .update({
+            status: "cancelled",
+            completed_at: null,
+            updated_at: now,
+          })
+          .eq("reminder_id", id);
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      // Refresh data
       await fetchReminders();
+      await fetchVisits();
 
       if (reminder && onActivityAdd) {
         onActivityAdd({
@@ -1041,7 +1331,11 @@ export function CalendarReminders({
           </Button>
           <Dialog open={isAddReminderOpen} onOpenChange={setIsAddReminderOpen}>
           <DialogTrigger asChild>
-            <Button className="gap-2 bg-purple-600 hover:bg-purple-700 text-white">
+            <Button 
+              className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+              disabled={!canCreateReminders}
+              title={!canCreateReminders ? "You do not have permission to create reminders" : ""}
+            >
               <Plus className="h-4 w-4" />
               Add Reminder
             </Button>
@@ -1150,7 +1444,11 @@ export function CalendarReminders({
               <Button variant="outline" onClick={() => setIsAddReminderOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleCreateReminder} className="bg-purple-600 hover:bg-purple-700 text-white">
+              <Button 
+                onClick={handleCreateReminder} 
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+                disabled={!canCreateReminders}
+              >
                 Create Reminder
               </Button>
             </div>
@@ -1323,7 +1621,11 @@ export function CalendarReminders({
               >
                 Cancel
               </Button>
-              <Button onClick={handleUpdateReminder} className="bg-purple-600 hover:bg-purple-700 text-white">
+              <Button 
+                onClick={handleUpdateReminder} 
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+                disabled={!canUpdateReminders}
+              >
                 Save Changes
               </Button>
             </div>

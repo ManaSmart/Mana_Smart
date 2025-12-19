@@ -87,6 +87,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { toast } from "sonner";
 import type { PageId } from "./config/page-map";
 import { normalizePermissions, hasPermission, type ResolvedPermissions } from "./lib/permissions";
+import { refreshUserPermissions, verifyUserStatus } from "./lib/permissionRefresh";
 import { getFilesByOwner, getFileUrl } from "./lib/storage";
 import { FILE_CATEGORIES } from "../supabase/models/file_metadata";
 import { supabase } from "./lib/supabaseClient";
@@ -554,6 +555,50 @@ export default function App() {
     }
   }, [currentPage, isLoggedIn]);
 
+  // Periodically check if user is still active and refresh permissions
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) return;
+
+    const performLogout = () => {
+      setIsLoggedIn(false);
+      setCurrentUser("");
+      setCurrentUserEmail("");
+      setCurrentUserId("");
+      setUserRole("");
+      setCurrentPage("dashboard");
+      setPermissions({} as ResolvedPermissions);
+      localStorage.removeItem('auth_user');
+      localStorage.removeItem('current_page');
+      setLoginKey(prev => prev + 1);
+    };
+
+    // Check user status every 5 minutes
+    const checkInterval = setInterval(async () => {
+      const isActive = await verifyUserStatus(currentUserId);
+      if (!isActive) {
+        // User is inactive, force logout
+        performLogout();
+        toast.error("Your account has been deactivated. You have been logged out.");
+      } else {
+        // Refresh permissions in case role was updated
+        const refreshedPermissions = await refreshUserPermissions(currentUserId);
+        if (refreshedPermissions) {
+          setPermissions(refreshedPermissions);
+        }
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+
+    // Also check immediately on mount
+    verifyUserStatus(currentUserId).then((isActive) => {
+      if (!isActive) {
+        performLogout();
+        toast.error("Your account has been deactivated. You have been logged out.");
+      }
+    });
+
+    return () => clearInterval(checkInterval);
+  }, [isLoggedIn, currentUserId]);
+
   // Update favicon and page title when company logo/name changes
   useEffect(() => {
     const updateFavicon = (logoUrl: string) => {
@@ -997,6 +1042,7 @@ export default function App() {
             reminders={reminders}
             setReminders={setReminders}
             onActivityAdd={addActivity}
+            currentPermissions={permissions}
           />,
         );
       case "customers":

@@ -59,6 +59,7 @@ import {
   type PermissionMap,
   type ResolvedPermissions,
 } from "../lib/permissions";
+import { refreshPermissionsForRole, refreshUserPermissions } from "../lib/permissionRefresh";
 
 type NormalizedRole = Roles & { resolvedPermissions: ResolvedPermissions };
 
@@ -950,6 +951,22 @@ export function Settings({
 
   const handleAddUser = async (userData: AddUserFormValues) => {
     try {
+      // Check if email already exists
+      const { data: existingUser, error: checkError } = await supabase
+        .from("system_users")
+        .select("user_id, email")
+        .eq("email", userData.email.trim())
+        .maybeSingle();
+
+      if (checkError && checkError.code !== "PGRST116") {
+        throw new Error(`Error checking email: ${checkError.message}`);
+      }
+
+      if (existingUser) {
+        toast.error(`Email ${userData.email} is already in use. Please use a different email address.`);
+        return;
+      }
+
       const role = normalizedRoles.find((r) => r.role_id === userData.roleId);
       if (!role) {
         toast.error("Selected role not found in database");
@@ -962,7 +979,7 @@ export function Settings({
       }
       const password_hash = await sha256Hex(password);
       const values: any = {
-        email: userData.email,
+        email: userData.email.trim(),
         full_name: userData.name,
         password_hash,
         status: 'active',
@@ -975,7 +992,12 @@ export function Settings({
       toast.success(`System user created for ${userData.name}`);
       dispatch(thunks.system_users.fetchAll(undefined));
     } catch (e: any) {
-      toast.error(e.message || 'Failed to create system user');
+      const errorMessage = e.message || 'Failed to create system user';
+      if (errorMessage.includes("duplicate key") || errorMessage.includes("system_users_email_key")) {
+        toast.error(`Email ${userData.email} is already in use. Please use a different email address.`);
+      } else {
+        toast.error(errorMessage);
+      }
     }
   };
 
@@ -985,6 +1007,22 @@ export function Settings({
       return;
     }
     try {
+      // Check if email already exists
+      const { data: existingUser, error: checkError } = await supabase
+        .from("system_users")
+        .select("user_id, email")
+        .eq("email", userData.email.trim())
+        .maybeSingle();
+
+      if (checkError && checkError.code !== "PGRST116") {
+        throw new Error(`Error checking email: ${checkError.message}`);
+      }
+
+      if (existingUser) {
+        toast.error(`Email ${userData.email} is already in use. Please use a different email address.`);
+        return;
+      }
+
       const role = normalizedRoles.find((r) => r.role_id === userData.roleId);
       if (!role) {
         toast.error("Selected role not found in database");
@@ -1002,7 +1040,7 @@ export function Settings({
       }
       const password_hash = await sha256Hex(password);
       const values: any = {
-        email: userData.email,
+        email: userData.email.trim(),
         full_name: userData.name,
         password_hash,
         status: 'active',
@@ -1015,7 +1053,12 @@ export function Settings({
       toast.success(`Admin user created successfully: ${userData.name}`);
       dispatch(thunks.system_users.fetchAll(undefined));
     } catch (e: any) {
-      toast.error(e.message || 'Failed to create admin user');
+      const errorMessage = e.message || 'Failed to create admin user';
+      if (errorMessage.includes("duplicate key") || errorMessage.includes("system_users_email_key")) {
+        toast.error(`Email ${userData.email} is already in use. Please use a different email address.`);
+      } else {
+        toast.error(errorMessage);
+      }
     }
   };
 
@@ -1120,6 +1163,24 @@ export function Settings({
       return;
     }
     try {
+      // Check if email is being changed and if new email already exists
+      if (userData.email.trim() !== userBeingEdited.user.email) {
+        const { data: existingUser, error: checkError } = await supabase
+          .from("system_users")
+          .select("user_id, email")
+          .eq("email", userData.email.trim())
+          .maybeSingle();
+
+        if (checkError && checkError.code !== "PGRST116") {
+          throw new Error(`Error checking email: ${checkError.message}`);
+        }
+
+        if (existingUser && existingUser.user_id !== userBeingEdited.user.user_id) {
+          toast.error(`Email ${userData.email} is already in use. Please use a different email address.`);
+          return;
+        }
+      }
+
       const role = normalizedRoles.find((r) => r.role_id === userData.roleId);
       if (!role) {
         toast.error("Selected role not found in database");
@@ -1127,7 +1188,7 @@ export function Settings({
       }
 
       const updates: Partial<SystemUsers> = {
-        email: userData.email,
+        email: userData.email.trim(),
         full_name: userData.name,
         role_id: role.role_id,
         employee_id: userData.employeeId ?? null,
@@ -1145,8 +1206,21 @@ export function Settings({
       setUserBeingEdited(null);
       toast.success(`System user updated: ${userData.name}`);
       dispatch(thunks.system_users.fetchAll(undefined));
+      
+      // Refresh permissions if role changed
+      if (userBeingEdited.user.role_id !== role.role_id) {
+        await refreshPermissionsForRole(role.role_id);
+        if (userBeingEdited.user.role_id) {
+          await refreshPermissionsForRole(userBeingEdited.user.role_id);
+        }
+      }
     } catch (e: any) {
-      toast.error(e.message || 'Failed to update system user');
+      const errorMessage = e.message || 'Failed to update system user';
+      if (errorMessage.includes("duplicate key") || errorMessage.includes("system_users_email_key")) {
+        toast.error(`Email ${userData.email} is already in use. Please use a different email address.`);
+      } else {
+        toast.error(errorMessage);
+      }
     }
   };
 
@@ -1156,7 +1230,7 @@ export function Settings({
       return;
     }
     try {
-      await dispatch(
+      const result = await dispatch(
         thunks.roles.createOne({
           role_name: roleData.role_name,
           permissions: roleData.permissions === "all" ? "all" : roleData.permissions,
@@ -1166,6 +1240,11 @@ export function Settings({
       setIsAddRoleOpen(false);
       toast.success("Role created successfully");
       dispatch(thunks.roles.fetchAll(undefined));
+      
+      // Refresh permissions for users with this role (if any)
+      if (result?.role_id) {
+        await refreshPermissionsForRole(result.role_id);
+      }
     } catch (e: any) {
       const message = e?.message ?? "Failed to create role";
       if (message.includes("roles_role_name_key") || e?.code === "23505") {
@@ -1201,8 +1280,13 @@ export function Settings({
       ).unwrap();
       toast.success(`Role updated successfully (${roleData.role_name})`);
       setIsEditRoleOpen(false);
+      const updatedRoleId = roleBeingEdited.role_id;
       setRoleBeingEdited(null);
       dispatch(thunks.roles.fetchAll(undefined));
+      
+      // Refresh permissions for all users with this role
+      await refreshPermissionsForRole(updatedRoleId);
+      toast.info("Permissions refreshed for all users with this role");
     } catch (e: any) {
       const message = e?.message ?? "Failed to update role";
       if (message.includes("roles_role_name_key") || e?.code === "23505") {

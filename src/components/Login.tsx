@@ -206,9 +206,19 @@ export function Login({ onLogin }: LoginProps) {
         .select('*')
         .eq('email', email)
         .eq('password_hash', passHash)
-        .eq('status', 'active')
         .single();
-      if (qErr || !user) throw qErr || new Error('Invalid credentials');
+      
+      if (qErr || !user) {
+        throw qErr || new Error('Invalid credentials');
+      }
+      
+      // Check if user is inactive
+      if (user.status !== 'active') {
+        const errorMsg = 'Your account has been deactivated. Please contact the administrator for support. / تم تعطيل حسابك. يرجى الاتصال بالمسؤول للحصول على الدعم.';
+        setError(errorMsg);
+        toast.error(errorMsg);
+        return;
+      }
       // Fetch role
       let roleName: string | undefined;
       let rolePermissions: any = null;

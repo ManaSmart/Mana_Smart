@@ -74,6 +74,7 @@ interface Contract {
   reactivatedDate?: string;
   notes?: string;
   historyLog?: HistoryLog[];
+  autoMonthlyVisitsEnabled?: boolean;
 }
 
 const mockContracts: Contract[] = [
@@ -251,6 +252,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
           reactivatedDate: additionalData.reactivatedDate,
           notes: typeof additionalData.notes === 'string' ? additionalData.notes : dbContract.notes || "",
           historyLog: additionalData.historyLog || [],
+          autoMonthlyVisitsEnabled: additionalData.autoMonthlyVisitsEnabled ?? true,
         };
       });
       setContracts(mappedContracts);
@@ -295,6 +297,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
     clientPhone: "",
     clientEmail: "",
     notes: "",
+    autoMonthlyVisitsEnabled: true,
   });
 
   const filteredContracts = contracts.filter((contract) => {
@@ -420,6 +423,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
       assignedDelegateId: selectedDelegateId,
       assignedDelegateName: hasRepresentative ? formData.clientRepresentative : undefined,
       historyLog: [initialLog],
+      autoMonthlyVisitsEnabled: formData.autoMonthlyVisitsEnabled,
     };
 
     // Prepare database contract
@@ -470,6 +474,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
       clientPhone: "",
       clientEmail: "",
       notes: "",
+      autoMonthlyVisitsEnabled: true,
     });
     setSelectedCustomerId(undefined);
     setHasRepresentative(false);
@@ -519,12 +524,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
     }
   };
 
-  // Handle customer add (when new customer is added via CustomerSelector)
-  const handleCustomerAdd = (newCustomer: Customer) => {
-    // Customer is already added to the list by CustomerSelector
-    // Just select it
-    handleCustomerSelect(newCustomer);
-  };
+  // Note: adding new customers from this screen has been disabled; use the main customers module instead.
 
   const handleSendContract = (contract: Contract) => {
     const currentUser = localStorage.getItem('userName') || 'System Admin';
@@ -745,13 +745,25 @@ export function Contracts({ systemLogo }: ContractsProps) {
       
       dispatch(thunks.contracts.fetchAll(undefined));
       
-      const nextVisitDate = await generateMonthlyVisit(dbContract, visitStartDate);
-      const formattedDate = nextVisitDate ? new Date(nextVisitDate).toLocaleDateString('en-GB') : null;
-      toast.success(
-        `Contract attached and activated! File: ${file.name}. ${
-          formattedDate ? `Next visit scheduled for ${formattedDate}.` : "Next visit already scheduled."
-        }`
-      );
+      // Auto-create first monthly visit only if automatic visits are enabled
+      if (additionalData.autoMonthlyVisitsEnabled !== false) {
+        const nextVisitDate = await generateMonthlyVisit(dbContract, visitStartDate);
+        const formattedDate = nextVisitDate
+          ? new Date(nextVisitDate).toLocaleDateString("en-GB")
+          : null;
+
+        toast.success(
+          `Contract attached and activated! File: ${file.name}. ${
+            formattedDate
+              ? `First monthly visit scheduled for ${formattedDate}.`
+              : "Visit already scheduled for this contract."
+          }`
+        );
+      } else {
+        toast.success(
+          `Contract attached and activated! File: ${file.name}. Automatic monthly visits are disabled for this contract.`
+        );
+      }
     } catch (error: any) {
       console.error('Failed to upload contract file:', error);
       toast.error(`Failed to upload contract file: ${error.message || 'Unknown error'}`);
@@ -2179,7 +2191,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
                   customers={customers}
                   selectedCustomerId={selectedCustomerId}
                   onCustomerSelect={handleCustomerSelect}
-                  onCustomerAdd={handleCustomerAdd}
+                  hideQuickAdd
                   label="Select Customer (or enter manually)"
                   placeholder="Search customer by name, company, or mobile..."
                   required={false}
@@ -2284,6 +2296,20 @@ export function Contracts({ systemLogo }: ContractsProps) {
                 <p className="text-blue-800">
                   <strong>Note:</strong> Only the pricing input for your selected payment plan is enabled. Fill in the amount for the selected plan above.
                 </p>
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <input
+                  id="autoMonthlyVisitsEnabled"
+                  type="checkbox"
+                  checked={formData.autoMonthlyVisitsEnabled}
+                  onChange={(e) =>
+                    setFormData({ ...formData, autoMonthlyVisitsEnabled: e.target.checked })
+                  }
+                  className="h-4 w-4 rounded border-gray-300 text-blue-100 focus:ring-blue-500"
+                />
+                <Label htmlFor="autoMonthlyVisitsEnabled" className="cursor-pointer">
+                  Enable automatic monthly visits before 7 days
+                </Label>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
@@ -2635,6 +2661,23 @@ export function Contracts({ systemLogo }: ContractsProps) {
                   <p className="text-blue-800">
                     <strong>Note:</strong> Only the pricing input for your selected payment plan is enabled. Fill in the amount for the selected plan above.
                   </p>
+                </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    id="edit-autoMonthlyVisitsEnabled"
+                    type="checkbox"
+                    checked={editingContract.autoMonthlyVisitsEnabled ?? true}
+                    onChange={(e) =>
+                      setEditingContract({
+                        ...editingContract,
+                        autoMonthlyVisitsEnabled: e.target.checked,
+                      })
+                    }
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <Label htmlFor="edit-autoMonthlyVisitsEnabled" className="cursor-pointer">
+                    Enable automatic creation of monthly visits (next month’s visit scheduled automatically)
+                  </Label>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <div className="space-y-2">

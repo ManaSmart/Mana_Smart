@@ -35,6 +35,7 @@ interface CustomerSelectorProps {
   label?: string;
   placeholder?: string;
   required?: boolean;
+  hideQuickAdd?: boolean;
 }
 
 export function CustomerSelector({
@@ -44,7 +45,8 @@ export function CustomerSelector({
   onCustomerAdd,
   label = "Customer",
   placeholder = "Search customer...",
-  required = false
+  required = false,
+  hideQuickAdd = false,
 }: CustomerSelectorProps) {
   const dispatch = useAppDispatch();
   const [open, setOpen] = useState(false);
@@ -194,113 +196,115 @@ export function CustomerSelector({
           </Button>
         )}
 
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button 
-              variant="default" 
-              size="icon" 
-              title="Add new customer"
-              className="shrink-0 bg-green-600 hover:bg-green-700"
-            >
-              <Plus className="h-4 w-4" />
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>Add New Customer</DialogTitle>
-              <DialogDescription>
-                Quickly add a new customer without leaving this page
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="grid grid-cols-2 gap-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="newCustomerName">
-                  Customer Name <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="newCustomerName"
-                  value={newCustomerName}
-                  onChange={(e) => setNewCustomerName(e.target.value)}
-                  placeholder="Ahmed Mohammed"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newCustomerCompany">Company Name</Label>
-                <Input
-                  id="newCustomerCompany"
-                  value={newCustomerCompany}
-                  onChange={(e) => setNewCustomerCompany(e.target.value)}
-                  placeholder="Palm Trading Company"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newCustomerMobile">
-                  Mobile Number <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="newCustomerMobile"
-                  value={newCustomerMobile}
-                  onChange={(e) => setNewCustomerMobile(e.target.value)}
-                  placeholder="0501234567"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newCustomerEmail">Email</Label>
-                <Input
-                  id="newCustomerEmail"
-                  type="email"
-                  value={newCustomerEmail}
-                  onChange={(e) => setNewCustomerEmail(e.target.value)}
-                  placeholder="customer@example.com"
-                />
-              </div>
-
-              <div className="col-span-2 space-y-2">
-                <Label htmlFor="newCustomerLocation">Location</Label>
-                <Input
-                  id="newCustomerLocation"
-                  value={newCustomerLocation}
-                  onChange={(e) => setNewCustomerLocation(e.target.value)}
-                  placeholder="Riyadh, Al Malaz District"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newCustomerCommercialRegister">Commercial Register</Label>
-                <Input
-                  id="newCustomerCommercialRegister"
-                  value={newCustomerCommercialRegister}
-                  onChange={(e) => setNewCustomerCommercialRegister(e.target.value)}
-                  placeholder="1010123456"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newCustomerTaxNumber">VAT Number</Label>
-                <Input
-                  id="newCustomerTaxNumber"
-                  value={newCustomerTaxNumber}
-                  onChange={(e) => setNewCustomerTaxNumber(e.target.value)}
-                  placeholder="300159475400003"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
-                Cancel
+        {!hideQuickAdd && (
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button 
+                variant="default" 
+                size="icon" 
+                title="Add new customer"
+                className="shrink-0 bg-green-600 hover:bg-green-700"
+              >
+                <Plus className="h-4 w-4" />
               </Button>
-              <Button onClick={handleAddNewCustomer}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Customer
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Add New Customer</DialogTitle>
+                <DialogDescription>
+                  Quickly add a new customer without leaving this page
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid grid-cols-2 gap-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="newCustomerName">
+                    Customer Name <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="newCustomerName"
+                    value={newCustomerName}
+                    onChange={(e) => setNewCustomerName(e.target.value)}
+                    placeholder="Ahmed Mohammed"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newCustomerCompany">Company Name</Label>
+                  <Input
+                    id="newCustomerCompany"
+                    value={newCustomerCompany}
+                    onChange={(e) => setNewCustomerCompany(e.target.value)}
+                    placeholder="Palm Trading Company"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newCustomerMobile">
+                    Mobile Number <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="newCustomerMobile"
+                    value={newCustomerMobile}
+                    onChange={(e) => setNewCustomerMobile(e.target.value)}
+                    placeholder="0501234567"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newCustomerEmail">Email</Label>
+                  <Input
+                    id="newCustomerEmail"
+                    type="email"
+                    value={newCustomerEmail}
+                    onChange={(e) => setNewCustomerEmail(e.target.value)}
+                    placeholder="customer@example.com"
+                  />
+                </div>
+
+                <div className="col-span-2 space-y-2">
+                  <Label htmlFor="newCustomerLocation">Location</Label>
+                  <Input
+                    id="newCustomerLocation"
+                    value={newCustomerLocation}
+                    onChange={(e) => setNewCustomerLocation(e.target.value)}
+                    placeholder="Riyadh, Al Malaz District"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newCustomerCommercialRegister">Commercial Register</Label>
+                  <Input
+                    id="newCustomerCommercialRegister"
+                    value={newCustomerCommercialRegister}
+                    onChange={(e) => setNewCustomerCommercialRegister(e.target.value)}
+                    placeholder="1010123456"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newCustomerTaxNumber">VAT Number</Label>
+                  <Input
+                    id="newCustomerTaxNumber"
+                    value={newCustomerTaxNumber}
+                    onChange={(e) => setNewCustomerTaxNumber(e.target.value)}
+                    placeholder="300159475400003"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleAddNewCustomer}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Customer
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       {selectedCustomer && (
