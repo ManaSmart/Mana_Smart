@@ -94,8 +94,12 @@ export function CalendarReminders({
   onActivityAdd,
   currentPermissions = "all" // Default to "all" if not provided for backward compatibility
 }: CalendarRemindersProps) {
+<<<<<<< HEAD
   // Check if user has permissions for calendar
   const canCreateReminders = hasPermission(currentPermissions, "calendar", "create");
+=======
+  // Check if user has update permission for calendar
+>>>>>>> 52da8055d7ac5a5542c6c785b37b52caae8c5d53
   const canUpdateReminders = hasPermission(currentPermissions, "calendar", "update");
   const canDeleteReminders = hasPermission(currentPermissions, "calendar", "delete");
   const initialSelectedDate = new Date();
@@ -794,10 +798,20 @@ export function CalendarReminders({
       return;
     }
 
+<<<<<<< HEAD
     // Check update permission for all reminders
     if (!canUpdateReminders) {
       toast.error("You do not have permission to update reminders");
       return;
+=======
+    // Check permissions for visit/invoice reminders
+    if (editingReminder.relatedVisitId || (editingReminder as any).relatedInvoiceId) {
+      if (!canUpdateReminders) {
+        toast.error("You do not have permission to update visit or invoice reminders");
+        return;
+      }
+      // Allow editing if user has update permission
+>>>>>>> 52da8055d7ac5a5542c6c785b37b52caae8c5d53
     }
 
     try {
