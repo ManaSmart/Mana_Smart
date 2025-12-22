@@ -18,6 +18,8 @@ export interface Invoices {
 	updated_at: string | null; // timestamptz
 	updated_by: string | null; // uuid
 	remaining_amount: number | null;
+	discount_type: string | null;
+	discount_amount: number | null;
 }
 
 export type InvoicesInsert = Omit<Invoices, 'invoice_id' | 'created_at' | 'updated_at'> & {

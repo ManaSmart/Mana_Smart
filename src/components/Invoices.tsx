@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
@@ -35,6 +35,9 @@ interface InvoiceItem {
   quantity: number;
   unitPrice: number;
   discountPercent: number;
+  discountAmount: number; // Fixed discount amount for this item
+  discountType: "percentage" | "fixed"; // Discount type for this item
+  itemDiscount: number; // Calculated discount amount (in currency)
   priceAfterDiscount: number;
   subtotal: number;
   vat: number;
@@ -72,6 +75,8 @@ interface Invoice {
   contractId?: string | null;
   visitId?: string | null;
   visitDate?: string | null; // Date of the monthly visit
+  discountType?: "percentage" | "fixed";
+  discountAmount?: number;
   paymentHistory?: Array<{
     id: number;
     date: string;
@@ -233,34 +238,90 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       const invoiceItems = Array.isArray(dbInv.invoice_items) ? dbInv.invoice_items : [];
 
       // Parse invoice items
-      const items: InvoiceItem[] = invoiceItems.map((item: any, itemIdx: number) => ({
-        id: itemIdx + 1,
-        inventoryItem: undefined,
-        isManual: true,
-        image: item.image,
-        description: item.description || "",
-        quantity: item.quantity || 1,
-        unitPrice: item.unitPrice || 0,
-        discountPercent: item.discountPercent || 0,
-        priceAfterDiscount: (item.unitPrice || 0) * (1 - (item.discountPercent || 0) / 100),
-        subtotal: ((item.unitPrice || 0) * (1 - (item.discountPercent || 0) / 100)) * (item.quantity || 1),
-        vat: ((item.unitPrice || 0) * (1 - (item.discountPercent || 0) / 100)) * (item.quantity || 1) * VAT_RATE,
-        total: ((item.unitPrice || 0) * (1 - (item.discountPercent || 0) / 100)) * (item.quantity || 1) * (1 + VAT_RATE),
-      }));
+      const items: InvoiceItem[] = invoiceItems.map((item: any, itemIdx: number) => {
+        const qty = item.quantity || 1;
+        const unit = item.unitPrice || 0;
+        const discPercent = item.discountPercent || 0;
+        const discAmount = item.discountAmount || 0;
+        // Determine discount type: if discount_amount > 0, use fixed, otherwise use percentage
+        const discType = discAmount > 0 ? "fixed" : "percentage";
+        
+        // Calculate item discount based on type
+        let itemDiscount = 0;
+        if (discType === "percentage") {
+          itemDiscount = (unit * qty) * (Math.min(100, Math.max(0, discPercent)) / 100);
+        } else {
+          itemDiscount = Math.min(unit * qty, Math.max(0, discAmount));
+        }
+        
+        const priceAfter = unit - (discType === "percentage" ? unit * (discPercent / 100) : Math.min(unit, discAmount));
+        const itemSubtotal = priceAfter * qty;
+        
+        return {
+          id: itemIdx + 1,
+          inventoryItem: undefined,
+          isManual: true,
+          image: item.image,
+          description: item.description || "",
+          quantity: qty,
+          unitPrice: unit,
+          discountPercent: discPercent,
+          discountAmount: discAmount,
+          discountType: discType,
+          itemDiscount: itemDiscount,
+          priceAfterDiscount: priceAfter,
+          subtotal: itemSubtotal,
+          vat: itemSubtotal * VAT_RATE,
+          total: itemSubtotal * (1 + VAT_RATE),
+        };
+      });
 
-      const totalBeforeDiscount = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-      const totalAfterDiscount = items.reduce((sum, item) => sum + item.subtotal, 0);
-      const totalDiscount = totalBeforeDiscount - totalAfterDiscount;
-      const totalVAT = items.reduce((sum, item) => sum + item.vat, 0);
-      const calculatedGrandTotal = items.reduce((sum, item) => sum + item.total, 0);
+      // Calculate item-level totals
+      const itemTotals = items.reduce((acc: any, it: any) => {
+        const qty = Number(it.quantity || 0);
+        const unit = Number(it.unitPrice || 0);
+        const disc = Number(it.discountPercent || it.discount_percent || 0);
+        const priceAfter = unit * (1 - disc / 100);
+        const subtotal = priceAfter * qty;
+        acc.totalBeforeDiscount += unit * qty;
+        acc.totalAfterItemDiscounts += subtotal;
+        acc.itemLevelDiscount = acc.totalBeforeDiscount - acc.totalAfterItemDiscounts;
+        return acc;
+      }, { totalBeforeDiscount: 0, totalAfterItemDiscounts: 0, itemLevelDiscount: 0 });
+
+      // Apply invoice-level discount if exists
+      let invoiceDiscount = 0;
+      const discountType = dbInv.discount_type as "percentage" | "fixed" | undefined;
+      const discountAmount = dbInv.discount_amount ?? 0;
+      
+      if (discountType && discountAmount > 0) {
+        if (discountType === "percentage") {
+          invoiceDiscount = itemTotals.totalAfterItemDiscounts * (Math.min(100, discountAmount) / 100);
+        } else if (discountType === "fixed") {
+          invoiceDiscount = Math.min(itemTotals.totalAfterItemDiscounts, discountAmount);
+        }
+      }
+      
+      const totalAfterDiscount = Math.max(0, itemTotals.totalAfterItemDiscounts - invoiceDiscount);
+      const totalDiscount = itemTotals.itemLevelDiscount + invoiceDiscount;
+      const totalVAT = totalAfterDiscount * VAT_RATE;
+      const grandTotal = Math.max(0, totalAfterDiscount + totalVAT);
+      
+      const totals = {
+        totalBeforeDiscount: itemTotals.totalBeforeDiscount,
+        totalDiscount,
+        totalAfterDiscount,
+        totalVAT,
+        grandTotal
+      };
 
       const subtotalPlusTax = Number(dbInv.subtotal ?? 0) + Number(dbInv.tax_amount ?? 0);
       let totalAmount = Number(dbInv.total_amount ?? 0);
       if (totalAmount <= 0) {
         if (subtotalPlusTax > 0) {
           totalAmount = subtotalPlusTax;
-        } else if (calculatedGrandTotal > 0) {
-          totalAmount = calculatedGrandTotal;
+        } else if (totals.grandTotal > 0) {
+          totalAmount = totals.grandTotal;
         }
       }
 
@@ -342,10 +403,10 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         notes: dbInv.invoice_notes || "",
         termsAndConditions: "",
         items,
-        totalBeforeDiscount,
-        totalDiscount,
-        totalAfterDiscount,
-        totalVAT,
+        totalBeforeDiscount: totals.totalBeforeDiscount,
+        totalDiscount: totals.totalDiscount,
+        totalAfterDiscount: totals.totalAfterDiscount,
+        totalVAT: totals.totalVAT,
         grandTotal: totalAmount,
         paidAmount,
         remainingAmount: displayRemaining,
@@ -354,6 +415,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         contractId: dbInv.contract_id || null,
         visitId: null, // Can be extracted from notes if needed
         visitDate: extractedVisitDate,
+        discountType: (dbInv.discount_type as "percentage" | "fixed" | undefined) || undefined,
+        discountAmount: dbInv.discount_amount ?? undefined,
         paymentHistory,
       };
     });
@@ -411,6 +474,11 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     "• Installation and setup included\n" +
     "• One year warranty on all devices"
   );
+  // Discount mode: "individual" for per-item discounts, "global" for applying to all items
+  const [discountMode, setDiscountMode] = useState<"individual" | "global">("individual");
+  // Global discount settings (only used when discountMode === "global")
+  const [globalDiscountType, setGlobalDiscountType] = useState<"percentage" | "fixed">("percentage");
+  const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
   const [companyLogo, setCompanyLogo] = useState("");
   const [stamp, setStamp] = useState("");
   const [stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
@@ -422,6 +490,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     quantity: 1,
     unitPrice: 0,
     discountPercent: 0,
+    discountAmount: 0,
+    discountType: "percentage",
+    itemDiscount: 0,
     priceAfterDiscount: 0,
     subtotal: 0,
     vat: 0,
@@ -514,16 +585,36 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const calculateItemTotals = (item: Partial<InvoiceItem>) => {
     const quantity = item.quantity || 0;
     const unitPrice = item.unitPrice || 0;
+    const discountType = item.discountType || "percentage";
     const discountPercent = item.discountPercent || 0;
+    const discountAmount = item.discountAmount || 0;
     
-    const priceAfterDiscount = unitPrice * (1 - discountPercent / 100);
-    const subtotal = priceAfterDiscount * quantity;
-    const vat = subtotal * VAT_RATE;
-    const total = subtotal + vat;
+    // Calculate subtotal = quantity × unit price
+    const subtotal = quantity * unitPrice;
+    
+    // Calculate item discount based on type
+    let itemDiscount = 0;
+    if (discountType === "percentage") {
+      // Percentage discount: discount is calculated from subtotal
+      itemDiscount = subtotal * (Math.min(100, Math.max(0, discountPercent)) / 100);
+    } else {
+      // Fixed discount: cannot exceed subtotal
+      itemDiscount = Math.min(subtotal, Math.max(0, discountAmount));
+    }
+    
+    // Item total = subtotal - item discount
+    const priceAfterDiscount = unitPrice - (discountType === "percentage" ? unitPrice * (discountPercent / 100) : Math.min(unitPrice, discountAmount));
+    const finalSubtotal = priceAfterDiscount * quantity;
+    const vat = finalSubtotal * VAT_RATE;
+    const total = finalSubtotal + vat;
 
     return {
+      discountType,
+      discountPercent,
+      discountAmount,
+      itemDiscount,
       priceAfterDiscount,
-      subtotal,
+      subtotal: finalSubtotal,
       vat,
       total
     };
@@ -537,6 +628,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       quantity: 1,
       unitPrice: 0,
       discountPercent: 0,
+      discountAmount: 0,
+      discountType: "percentage",
+      itemDiscount: 0,
       priceAfterDiscount: 0,
       subtotal: 0,
       vat: 0,
@@ -553,6 +647,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       quantity: 1,
       unitPrice: 0,
       discountPercent: 0,
+      discountAmount: 0,
+      discountType: "percentage",
+      itemDiscount: 0,
       priceAfterDiscount: 0,
       subtotal: 0,
       vat: 0,
@@ -571,6 +668,18 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     setItems(items.map(item => {
       if (item.id === id) {
         const updated = { ...item, [field]: value };
+        // If discount type changed, reset the other discount field
+        if (field === "discountType") {
+          if (value === "percentage") {
+            updated.discountAmount = 0;
+          } else {
+            updated.discountPercent = 0;
+          }
+        }
+        // In global mode, don't allow manual discount changes
+        if (discountMode === "global" && (field === "discountPercent" || field === "discountAmount" || field === "discountType")) {
+          return item; // Ignore manual discount changes in global mode
+        }
         const totals = calculateItemTotals(updated);
         return { ...updated, ...totals };
       }
@@ -608,6 +717,85 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }));
     toast.success("Product loaded from inventory");
   };
+
+  // Apply global discount to all items
+  const applyGlobalDiscount = useCallback(() => {
+    return () => {
+      if (discountMode !== "global") return;
+      
+      const discountAmountNum = parseFloat(globalDiscountAmount) || 0;
+      
+      setItems(currentItems => {
+        if (discountAmountNum <= 0) {
+          // Clear all discounts
+          return currentItems.map(item => {
+            const updated = {
+              ...item,
+              discountPercent: 0,
+              discountAmount: 0,
+              discountType: "percentage" as const,
+            };
+            const totals = calculateItemTotals(updated);
+            return { ...updated, ...totals };
+          });
+        }
+        
+        const totalSubtotal = currentItems.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);
+        
+        return currentItems.map(item => {
+          const itemSubtotal = item.quantity * item.unitPrice;
+          
+          if (globalDiscountType === "percentage") {
+            // Apply same percentage to each item's subtotal
+            const validPercentage = Math.max(0, Math.min(100, discountAmountNum));
+            const updated = {
+              ...item,
+              discountType: "percentage" as const,
+              discountPercent: validPercentage,
+              discountAmount: 0,
+            };
+            const totals = calculateItemTotals(updated);
+            return { ...updated, ...totals };
+          } else {
+            // Fixed amount: distribute proportionally
+            const itemProportion = itemSubtotal / totalSubtotal;
+            const itemDiscountAmount = discountAmountNum * itemProportion;
+            
+            // Validate: discount cannot exceed item subtotal
+            const validDiscountAmount = Math.min(itemSubtotal, itemDiscountAmount);
+            
+            const updated = {
+              ...item,
+              discountType: "fixed" as const,
+              discountPercent: 0,
+              discountAmount: validDiscountAmount,
+            };
+            const totals = calculateItemTotals(updated);
+            return { ...updated, ...totals };
+          }
+        });
+      });
+    };
+  }, [discountMode, globalDiscountType, globalDiscountAmount]);
+
+  // Apply global discount when mode, type, or amount changes
+  useEffect(() => {
+    if (discountMode === "global") {
+      applyGlobalDiscount();
+    }
+  }, [discountMode, globalDiscountType, globalDiscountAmount, applyGlobalDiscount]);
+  
+  // Track previous item values to detect changes (quantity/unitPrice)
+  const prevItemsKeyRef = useRef<string>("");
+  useEffect(() => {
+    if (discountMode === "global" && globalDiscountAmount) {
+      const currentItemsKey = items.map(i => `${i.id}-${i.quantity}-${i.unitPrice}`).join(',');
+      if (currentItemsKey !== prevItemsKeyRef.current) {
+        prevItemsKeyRef.current = currentItemsKey;
+        applyGlobalDiscount();
+      }
+    }
+  }, [items, discountMode, globalDiscountAmount, applyGlobalDiscount]);
 
   const handleCustomerSelect = (customer: Customer) => {
     if (customer.id) {
@@ -674,6 +862,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     setLocation("");
     setCommercialRegister("");
     setTaxNumber("");
+    setDiscountMode("individual");
+    setGlobalDiscountType("percentage");
+    setGlobalDiscountAmount("");
     setCompanyLogo("");
     setStamp("");
     setStampPosition({ x: 50, y: 50 });
@@ -694,6 +885,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       quantity: 1,
       unitPrice: 0,
       discountPercent: 0,
+      discountAmount: 0,
+      discountType: "percentage",
+      itemDiscount: 0,
       priceAfterDiscount: 0,
       subtotal: 0,
       vat: 0,
@@ -762,6 +956,39 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       status = "partial";
     }
 
+    // Validate discounts
+    if (discountMode === "global") {
+      const globalDiscountAmountNum = parseFloat(globalDiscountAmount) || 0;
+      if (globalDiscountAmountNum < 0) {
+        toast.error("Discount amount cannot be negative");
+        return;
+      }
+      if (globalDiscountType === "percentage" && (globalDiscountAmountNum > 100 || globalDiscountAmountNum < 0)) {
+        toast.error("Discount percentage must be between 0 and 100");
+        return;
+      }
+      const totals = calculateInvoiceTotals();
+      if (globalDiscountType === "fixed" && globalDiscountAmountNum > totals.totalBeforeDiscount) {
+        toast.error("Fixed discount cannot exceed total subtotal");
+        return;
+      }
+    } else {
+      // Validate individual item discounts
+      for (const item of items) {
+        if (item.discountType === "percentage" && (item.discountPercent < 0 || item.discountPercent > 100)) {
+          toast.error(`Item "${item.description || 'Untitled'}" has invalid discount percentage`);
+          return;
+        }
+        if (item.discountType === "fixed") {
+          const itemSubtotal = item.quantity * item.unitPrice;
+          if (item.discountAmount < 0 || item.discountAmount > itemSubtotal) {
+            toast.error(`Item "${item.description || 'Untitled'}" discount cannot exceed subtotal`);
+            return;
+          }
+        }
+      }
+    }
+
     // Validate contract selection and visit date for monthly visit invoices
     if (invoiceType === "monthly_visit") {
       if (!selectedContractId) {
@@ -828,7 +1055,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         description: item.description,
         quantity: item.quantity,
         unitPrice: item.unitPrice,
-        discountPercent: item.discountPercent,
+        discountPercent: item.discountType === "percentage" ? item.discountPercent : 0,
+        discountAmount: item.discountType === "fixed" ? item.discountAmount : 0,
         priceAfterDiscount: item.priceAfterDiscount,
         subtotal: item.subtotal,
         vat: item.vat,
@@ -852,6 +1080,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           ? `Monthly visit invoice${visitDate ? ` for visit on ${visitDate}` : ''}${notes.trim() ? ` - ${notes.trim()}` : ''}`
           : notes.trim() || null,
         payment_status,
+        // Store discount info if applicable
+        discount_type: discountMode === "global" ? globalDiscountType : null,
+        discount_amount: discountMode === "global" && parseFloat(globalDiscountAmount) > 0 ? parseFloat(globalDiscountAmount) : null,
       };
       
       await dispatch(thunks.invoices.createOne(insertPayload)).unwrap();
@@ -867,6 +1098,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     
     toast.success(`Invoice ${invoiceNumber} created successfully!`);
   };
+
+  // Print date selection state
+  const [printDateOption, setPrintDateOption] = useState<"invoice_date" | "today">("invoice_date");
 
   const printInvoice = async (invoice: Invoice) => {
     const printWindow = window.open('', '_blank');
@@ -910,7 +1144,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }
 
     // Generate HTML with logo and QR code
-    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode);
+    const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : invoice.date;
+    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -964,9 +1199,11 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     printWindow.print();
   };
 
-  const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string) => {
+  const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string, displayDate?: string) => {
     // Use provided logo or fall back to invoice logo
     const companyLogo = logoUrl || invoice.companyLogo;
+    // Use provided display date or fall back to invoice date
+    const dateToDisplay = displayDate || invoice.date;
     // Escape HTML special characters in text content
     const escapeHtml = (text: string) => {
       if (!text) return '';
@@ -1352,7 +1589,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
               <div class="invoice-info">
                 <div class="invoice-number">INVOICE</div>
                 <div style="font-size: 16px; color: #64748b; margin-bottom: 5px;">${invoice.invoiceNumber}</div>
-                <div style="font-size: 13px; color: #94a3b8;">Date: ${new Date(invoice.date).toLocaleDateString('en-GB')}</div>
+                <div style="font-size: 13px; color: #94a3b8;">Date: ${new Date(dateToDisplay).toLocaleDateString('en-GB')}</div>
                 ${invoice.invoiceType === 'monthly_visit' && invoice.visitDate ? `
                 <div style="font-size: 13px; color: #3b82f6; font-weight: 600; margin-top: 5px;">
                   For Monthly Visit: ${new Date(invoice.visitDate).toLocaleDateString('en-GB')}
@@ -1384,12 +1621,13 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                 <tr>
                   <th style="width: 60px;">Image</th>
                   <th>Description</th>
-                  <th style="width: 80px; text-align: center;">Qty</th>
-                  <th style="width: 100px; text-align: right;">Price</th>
+                  <th style="width: 60px; text-align: center;">Qty</th>
+                  <th style="width: 100px; text-align: center;">Price</th>
                   <th style="width: 80px; text-align: center;">Disc. %</th>
-                  <th style="width: 100px; text-align: right;">Subtotal</th>
-                  <th style="width: 80px; text-align: right;">VAT 15%</th>
-                  <th style="width: 100px; text-align: right;">Total</th>
+                  <th style="width: 100px; text-align: center;">Before Disc.</th>
+                  <th style="width: 100px; text-align: center;">After Disc.</th>
+                  <th style="width: 80px; text-align: center;">VAT 15%</th>
+                  <th style="width: 100px; text-align: center;">Total</th>
                 </tr>
               </thead>
               <tbody>
@@ -1405,6 +1643,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                     <td style="text-align: center;">${item.quantity}</td>
                     <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
                     <td style="text-align: center;">${item.discountPercent}%</td>
+                    <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
                     <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
                     <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
                     <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
@@ -1668,6 +1907,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                             quantity: 1,
                             unitPrice: 0,
                             discountPercent: 0,
+                            discountAmount: 0,
+                            discountType: "percentage",
+                            itemDiscount: 0,
                             priceAfterDiscount: 0,
                             subtotal: 0,
                             vat: 0,
@@ -1685,6 +1927,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                             quantity: 1,
                             unitPrice: 0,
                             discountPercent: 0,
+                            discountAmount: 0,
+                            discountType: "percentage",
+                            itemDiscount: 0,
                             priceAfterDiscount: 0,
                             subtotal: 0,
                             vat: 0,
@@ -1754,6 +1999,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                                     quantity: 1,
                                     unitPrice: invoiceAmount,
                                     discountPercent: 0,
+                                    discountAmount: 0,
+                                    discountType: "percentage" as const,
+                                    itemDiscount: 0,
                                     priceAfterDiscount: invoiceAmount,
                                     subtotal: subtotal,
                                     vat: vat,
@@ -1775,6 +2023,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                                 quantity: 1,
                                 unitPrice: 0,
                                 discountPercent: 0,
+                                discountAmount: 0,
+                                discountType: "percentage",
+                                itemDiscount: 0,
                                 priceAfterDiscount: 0,
                                 subtotal: 0,
                                 vat: 0,
@@ -1918,6 +2169,85 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
                 {/* Items - Only show for normal invoices */}
                 {invoiceType === "normal" && (
+                <>
+                {/* Global Discount Controls */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Discount Settings</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-xs">Discount Mode</Label>
+                        <Select 
+                          value={discountMode} 
+                          onValueChange={(value: "individual" | "global") => {
+                            setDiscountMode(value);
+                            if (value === "individual") {
+                              setGlobalDiscountAmount("");
+                              // Reset all item discounts to 0
+                              setItems(currentItems => currentItems.map(item => {
+                                const updated = {
+                                  ...item,
+                                  discountPercent: 0,
+                                  discountAmount: 0,
+                                  discountType: "percentage" as const,
+                                };
+                                const totals = calculateItemTotals(updated);
+                                return { ...updated, ...totals };
+                              }));
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="individual">Individual Items</SelectItem>
+                            <SelectItem value="global">Global Discount</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {discountMode === "global" && (
+                        <>
+                          <div className="space-y-2">
+                            <Label className="text-xs">Global Discount Type</Label>
+                            <Select 
+                              value={globalDiscountType} 
+                              onValueChange={(value: "percentage" | "fixed") => setGlobalDiscountType(value)}
+                            >
+                              <SelectTrigger className="h-8 text-sm">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="percentage">Percentage (%)</SelectItem>
+                                <SelectItem value="fixed">Fixed (ر.س)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2 col-span-2">
+                            <Label className="text-xs">
+                              Global Discount {globalDiscountType === "percentage" ? "(%)" : "(ر.س)"}
+                            </Label>
+                            <Input 
+                              type="number" 
+                              min="0"
+                              max={globalDiscountType === "percentage" ? "100" : undefined}
+                              step="0.01"
+                              value={globalDiscountAmount} 
+                              onChange={(e) => setGlobalDiscountAmount(e.target.value)}
+                              placeholder={globalDiscountType === "percentage" ? "Enter percentage" : "Enter fixed amount"}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Invoice Items</CardTitle>
@@ -2037,15 +2367,54 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                             </div>
 
                             <div className="space-y-1">
-                              <Label className="text-xs">Discount %</Label>
-                              <Input
-                                type="number"
+                              <Label className="text-xs">Discount Type</Label>
+                              <Select 
+                                value={item.discountType || "percentage"} 
+                                onValueChange={(value: "percentage" | "fixed") => updateItem(item.id, "discountType", value)}
+                                disabled={discountMode === "global"}
+                              >
+                                <SelectTrigger className="h-8 text-sm" disabled={discountMode === "global"}>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="percentage">Percentage (%)</SelectItem>
+                                  <SelectItem value="fixed">Fixed (ر.س)</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-1">
+                              <Label className="text-xs">
+                                Discount {item.discountType === "percentage" ? "(%)" : "(ر.س)"}
+                              </Label>
+                              <Input 
+                                type="number" 
                                 min="0"
-                                max="100"
-                                value={item.discountPercent}
-                                onChange={(e) => updateItem(item.id, 'discountPercent', parseFloat(e.target.value) || 0)}
+                                max={item.discountType === "percentage" ? "100" : undefined}
+                                step="0.01"
+                                value={item.discountType === "percentage" ? item.discountPercent : item.discountAmount} 
+                                onChange={(e) => {
+                                  const value = parseFloat(e.target.value) || 0;
+                                  if (item.discountType === "percentage") {
+                                    updateItem(item.id, "discountPercent", value);
+                                  } else {
+                                    updateItem(item.id, "discountAmount", value);
+                                  }
+                                }}
+                                disabled={discountMode === "global"}
                                 className="h-8 text-sm"
                               />
+                            </div>
+
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">Discount</Label>
+                              <div className="h-8 flex items-center">
+                                <p className="text-sm text-muted-foreground">
+                                  {item.discountType === "percentage" 
+                                    ? `${item.discountPercent.toFixed(2)}%` 
+                                    : `ر.س ${item.discountAmount.toFixed(2)}`}
+                                </p>
+                              </div>
                             </div>
 
                             <div className="space-y-1">
@@ -2086,6 +2455,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                     </div>
                   </CardContent>
                 </Card>
+                </>
                 )}
 
                 {/* Totals Summary */}
@@ -2790,6 +3160,30 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                       <span className="text-orange-600">Remaining:</span>
                       <span className="text-orange-600">{selectedInvoice.remainingAmount.toFixed(2)} ر.س</span>
                     </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Print Date Selection */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Print Date Options</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Choose date to display on printed invoice:</Label>
+                    <Select 
+                      value={printDateOption} 
+                      onValueChange={(value: "invoice_date" | "today") => setPrintDateOption(value)}
+                    >
+                      <SelectTrigger className="h-8 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="invoice_date">Invoice Date ({new Date(selectedInvoice.date).toLocaleDateString('en-GB')})</SelectItem>
+                        <SelectItem value="today">Today's Date ({new Date().toLocaleDateString('en-GB')})</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                 </CardContent>
               </Card>
