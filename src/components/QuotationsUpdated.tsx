@@ -306,6 +306,10 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const [isUsingDefaultLogo, setIsUsingDefaultLogo] = useState(true);
   const [isUsingDefaultStamp, setIsUsingDefaultStamp] = useState(true);
   const [_stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
+
+  // Print date selection state
+  const [printDateOption, setPrintDateOption] = useState<"quotation_date" | "today" | "custom">("quotation_date");
+  const [customPrintDate, setCustomPrintDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [items, setItems] = useState<QuotationItem[]>([{
     id: 1,
     isManual: true,
@@ -1053,7 +1057,10 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     }
 
     // Generate HTML with logo, stamp, and QR code
-    const quotationHTML = generateQuotationHTML(quotation, logoToUse, stampToUse, qrCode);
+    const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : 
+                        printDateOption === "custom" ? customPrintDate : 
+                        quotation.date;
+    const quotationHTML = generateQuotationHTML(quotation, logoToUse, stampToUse, qrCode, displayDate);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -1111,7 +1118,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     printWindow.print();
   };
 
-  const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null, stampUrl?: string | null, qrCode?: string) => {
+  const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null, stampUrl?: string | null, qrCode?: string, displayDate?: string) => {
     // Use provided logo or fall back to quotation logo
     const companyLogo = logoUrl || quotation.companyLogo;
     // Use provided stamp or fall back to quotation stamp
@@ -1400,7 +1407,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                 <div class="quotation-number">QUOTATION</div>
                 <div style="margin-top: 10px;">
                   <div style="font-weight: 600; color: #475569;">${quotation.quotationNumber}</div>
-                  <div style="color: #64748b; font-size: 12px;">Date: ${new Date(quotation.date).toLocaleDateString('en-GB')}</div>
+                  <div style="color: #64748b; font-size: 12px;">Date: ${new Date(displayDate || quotation.date).toLocaleDateString('en-GB')}</div>
                   <div class="validity">
                     <strong>Valid Until:</strong> ${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}
                   </div>
@@ -2590,6 +2597,42 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                   </CardContent>
                 </Card>
               )}
+
+              {/* Print Date Selection */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Print Date Options</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Choose date to display on printed quotation:</Label>
+                    <Select 
+                      value={printDateOption} 
+                      onValueChange={(value: "quotation_date" | "today" | "custom") => setPrintDateOption(value)}
+                    >
+                      <SelectTrigger className="h-8 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="quotation_date">Quotation Date ({new Date(selectedQuotation.date).toLocaleDateString('en-GB')})</SelectItem>
+                        <SelectItem value="today">Today's Date ({new Date().toLocaleDateString('en-GB')})</SelectItem>
+                        <SelectItem value="custom">Custom Date</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {printDateOption === "custom" && (
+                      <div className="mt-2">
+                        <Label className="text-xs">Select Custom Date:</Label>
+                        <Input
+                          type="date"
+                          value={customPrintDate}
+                          onChange={(e) => setCustomPrintDate(e.target.value)}
+                          className="h-8 text-sm mt-1"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
 
               <div className="flex justify-end gap-2 pt-4 border-t">
                 <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>

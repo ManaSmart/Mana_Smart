@@ -1100,7 +1100,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   };
 
   // Print date selection state
-  const [printDateOption, setPrintDateOption] = useState<"invoice_date" | "today">("invoice_date");
+  const [printDateOption, setPrintDateOption] = useState<"invoice_date" | "today" | "custom">("invoice_date");
+  const [customPrintDate, setCustomPrintDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   const printInvoice = async (invoice: Invoice) => {
     const printWindow = window.open('', '_blank');
@@ -1144,7 +1145,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }
 
     // Generate HTML with logo and QR code
-    const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : invoice.date;
+    const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : 
+                        printDateOption === "custom" ? customPrintDate : 
+                        invoice.date;
     const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate);
     
     // Write HTML to print window
@@ -3174,7 +3177,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                     <Label className="text-xs">Choose date to display on printed invoice:</Label>
                     <Select 
                       value={printDateOption} 
-                      onValueChange={(value: "invoice_date" | "today") => setPrintDateOption(value)}
+                      onValueChange={(value: "invoice_date" | "today" | "custom") => setPrintDateOption(value)}
                     >
                       <SelectTrigger className="h-8 text-sm">
                         <SelectValue />
@@ -3182,8 +3185,20 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                       <SelectContent>
                         <SelectItem value="invoice_date">Invoice Date ({new Date(selectedInvoice.date).toLocaleDateString('en-GB')})</SelectItem>
                         <SelectItem value="today">Today's Date ({new Date().toLocaleDateString('en-GB')})</SelectItem>
+                        <SelectItem value="custom">Custom Date</SelectItem>
                       </SelectContent>
                     </Select>
+                    {printDateOption === "custom" && (
+                      <div className="mt-2">
+                        <Label className="text-xs">Select Custom Date:</Label>
+                        <Input
+                          type="date"
+                          value={customPrintDate}
+                          onChange={(e) => setCustomPrintDate(e.target.value)}
+                          className="h-8 text-sm mt-1"
+                        />
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>
