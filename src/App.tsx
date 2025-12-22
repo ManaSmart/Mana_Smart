@@ -88,6 +88,7 @@ import { toast } from "sonner";
 import type { PageId } from "./config/page-map";
 import { normalizePermissions, hasPermission, type ResolvedPermissions } from "./lib/permissions";
 import { refreshUserPermissions, verifyUserStatus } from "./lib/permissionRefresh";
+import { permissionEvents, PERMISSION_EVENTS } from "./lib/permissionEvents";
 import { getFilesByOwner, getFileUrl } from "./lib/storage";
 import { FILE_CATEGORIES } from "../supabase/models/file_metadata";
 import { supabase } from "./lib/supabaseClient";
@@ -598,6 +599,68 @@ export default function App() {
 
     return () => clearInterval(checkInterval);
   }, [isLoggedIn, currentUserId]);
+
+  // Listen for real-time permission updates
+  useEffect(() => {
+    if (!isLoggedIn || !currentUserId) return;
+
+    const handlePermissionsUpdated = (data: any) => {
+      // If the updated user is the current user, refresh permissions
+      if (data.userId === currentUserId) {
+        console.log('Permissions updated for current user:', data);
+        setPermissions(data.permissions || {} as ResolvedPermissions);
+        
+        // Update role info if provided
+        if (data.roleName !== undefined) {
+          setUserRole(data.roleName);
+        }
+        
+        toast.success('Your permissions have been updated');
+      }
+    };
+
+    const handleRoleUpdated = (data: any) => {
+      // When a role is updated, check if current user has that role
+      // This handles cases where the current user's role was updated
+      if (userRole && data.roleId) {
+        console.log('Role updated:', data);
+        // The refreshPermissionsForRole function already updated localStorage
+        // and emitted the PERMISSIONS_UPDATED event, so we just need to
+        // ensure the UI reflects the changes
+        const stored = localStorage.getItem('auth_user');
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            if (parsed.user_id === currentUserId) {
+              const refreshedPermissions = normalizePermissions(parsed.role_permissions);
+              setPermissions(refreshedPermissions);
+              setUserRole(parsed.role_name || "");
+              toast.success('Your role permissions have been updated');
+            }
+          } catch (e) {
+            console.error('Error parsing auth_user after role update:', e);
+          }
+        }
+      }
+    };
+
+    // Subscribe to permission events
+    const unsubscribePermissions = permissionEvents.subscribe(
+      PERMISSION_EVENTS.PERMISSIONS_UPDATED,
+      handlePermissionsUpdated
+    );
+
+    const unsubscribeRole = permissionEvents.subscribe(
+      PERMISSION_EVENTS.ROLE_UPDATED,
+      handleRoleUpdated
+    );
+
+    // Cleanup
+    return () => {
+      unsubscribePermissions();
+      unsubscribeRole();
+    };
+  }, [isLoggedIn, currentUserId, userRole]);
 
   // Update favicon and page title when company logo/name changes
   useEffect(() => {

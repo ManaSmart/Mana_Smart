@@ -4,6 +4,7 @@
 
 import { supabase } from "./supabaseClient";
 import { normalizePermissions, type ResolvedPermissions } from "./permissions";
+import { permissionEvents, PERMISSION_EVENTS } from "./permissionEvents";
 
 /**
  * Refresh user permissions from the database and update localStorage
@@ -66,6 +67,14 @@ export async function refreshUserPermissions(userId: string): Promise<ResolvedPe
 
     localStorage.setItem("auth_user", JSON.stringify(authData));
 
+    // Emit global event that permissions have been updated
+    permissionEvents.emit(PERMISSION_EVENTS.PERMISSIONS_UPDATED, {
+      userId,
+      permissions: resolvedPermissions,
+      rolePermissions,
+      roleName,
+    });
+
     return resolvedPermissions;
   } catch (error) {
     console.error("Error refreshing permissions:", error);
@@ -93,9 +102,18 @@ export async function refreshPermissionsForRole(roleId: string): Promise<void> {
 
     // Refresh permissions for each user
     // Use Promise.allSettled to handle errors gracefully
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       (users || []).map((user) => refreshUserPermissions(user.user_id))
     );
+
+    // Emit role updated event
+    permissionEvents.emit(PERMISSION_EVENTS.ROLE_UPDATED, {
+      roleId,
+      userCount: users?.length || 0,
+      results: results.map(r => r.status === 'fulfilled' ? r.value : null),
+    });
+
+    console.log(`Refreshed permissions for ${users?.length || 0} users with role ${roleId}`);
   } catch (error) {
     console.error("Error refreshing permissions for role:", error);
   }
@@ -121,6 +139,47 @@ export async function verifyUserStatus(userId: string): Promise<boolean> {
   } catch (error) {
     console.error("Error verifying user status:", error);
     return false;
+  }
+}
+
+/**
+ * Force refresh permissions for all active users
+ * This is useful for debugging or when you want to ensure all users have the latest permissions
+ */
+export async function refreshAllPermissions(): Promise<void> {
+  try {
+    // Get all active users
+    const { data: users, error } = await supabase
+      .from("system_users")
+      .select("user_id")
+      .eq("status", "active");
+
+    if (error) {
+      console.error("Error fetching all active users:", error);
+      return;
+    }
+
+    console.log(`Refreshing permissions for all ${users?.length || 0} active users...`);
+    
+    // Refresh permissions for each user
+    const results = await Promise.allSettled(
+      (users || []).map((user) => refreshUserPermissions(user.user_id))
+    );
+
+    const successful = results.filter(r => r.status === 'fulfilled').length;
+    const failed = results.filter(r => r.status === 'rejected').length;
+
+    console.log(`Permission refresh completed: ${successful} successful, ${failed} failed`);
+
+    // Emit global event for all permissions refresh
+    permissionEvents.emit('all-permissions-refreshed', {
+      totalUsers: users?.length || 0,
+      successful,
+      failed,
+      results: results.map(r => r.status === 'fulfilled' ? r.value : null),
+    });
+  } catch (error) {
+    console.error("Error refreshing all permissions:", error);
   }
 }
 

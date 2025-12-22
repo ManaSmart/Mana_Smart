@@ -28,6 +28,7 @@ import {
   Square,
   Loader2,
   Database,
+  RefreshCcw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
@@ -59,7 +60,8 @@ import {
   type PermissionMap,
   type ResolvedPermissions,
 } from "../lib/permissions";
-import { refreshPermissionsForRole, refreshUserPermissions } from "../lib/permissionRefresh";
+import { refreshPermissionsForRole, refreshAllPermissions } from "../lib/permissionRefresh";
+import { permissionEvents, PERMISSION_EVENTS } from "../lib/permissionEvents";
 
 type NormalizedRole = Roles & { resolvedPermissions: ResolvedPermissions };
 
@@ -1209,10 +1211,21 @@ export function Settings({
       
       // Refresh permissions if role changed
       if (userBeingEdited.user.role_id !== role.role_id) {
+        // Refresh permissions for the new role
         await refreshPermissionsForRole(role.role_id);
+        // Refresh permissions for the old role (in case other users are affected)
         if (userBeingEdited.user.role_id) {
           await refreshPermissionsForRole(userBeingEdited.user.role_id);
         }
+        
+        // Emit user role change event
+        permissionEvents.emit(PERMISSION_EVENTS.USER_ROLE_CHANGED, {
+          userId: userBeingEdited.user.user_id,
+          oldRoleId: userBeingEdited.user.role_id,
+          newRoleId: role.role_id,
+          oldRoleName: userBeingEdited.role?.role_name,
+          newRoleName: role.role_name,
+        });
       }
     } catch (e: any) {
       const errorMessage = e.message || 'Failed to update system user';
@@ -1312,6 +1325,22 @@ export function Settings({
       toast.success("Role deleted successfully");
     } catch (e: any) {
       toast.error(e.message || "Failed to delete role");
+    }
+  };
+
+  const handleRefreshAllPermissions = async () => {
+    if (!canEditAllRoles) {
+      toast.error("You do not have permission to refresh permissions.");
+      return;
+    }
+
+    try {
+      toast.info("Refreshing permissions for all users...");
+      await refreshAllPermissions();
+      toast.success("All permissions have been refreshed successfully!");
+    } catch (error: any) {
+      console.error("Error refreshing all permissions:", error);
+      toast.error(error.message || "Failed to refresh permissions");
     }
   };
 
@@ -2067,16 +2096,25 @@ export function Settings({
                   )}
                 </div>
                 {canManageRoles && (
-                  <Dialog open={isAddRoleOpen} onOpenChange={setIsAddRoleOpen}>
-                    <DialogTrigger asChild>
-                      <Button
-                        className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
-                        disabled={isDataLoading}
-                      >
-                        <Plus className="h-4 w-4" />
-                        Add Role
-                      </Button>
-                    </DialogTrigger>
+                  <div className="flex gap-2">
+                    <Button
+                      className="gap-2 bg-cyan-600 hover:bg-cyan-700 text-white"
+                      disabled={isDataLoading}
+                      onClick={handleRefreshAllPermissions}
+                    >
+                      <RefreshCcw className="h-4 w-4" />
+                      Refresh All Permissions
+                    </Button>
+                    <Dialog open={isAddRoleOpen} onOpenChange={setIsAddRoleOpen}>
+                      <DialogTrigger asChild>
+                        <Button
+                          className="gap-2 bg-purple-600 hover:bg-purple-700 text-white"
+                          disabled={isDataLoading}
+                        >
+                          <Plus className="h-4 w-4" />
+                          Add Role
+                        </Button>
+                      </DialogTrigger>
                     <DialogContent className="max-w-2xl">
                       <DialogHeader>
                         <DialogTitle>Create New Role</DialogTitle>
@@ -2085,6 +2123,7 @@ export function Settings({
                       <AddRoleForm onSubmit={handleAddRole} existingRoles={normalizedRoles} />
                     </DialogContent>
                   </Dialog>
+                  </div>
                 )}
               </div>
             </CardHeader>

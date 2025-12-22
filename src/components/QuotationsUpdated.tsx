@@ -1621,7 +1621,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                     </div>
                     
                     {selectedCustomerId && (
-                      <div className="grid grid-cols-2 gap-2 pt-2 border-t">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t">
                         <div className="space-y-1">
                           <Label htmlFor="customerName" className="text-xs">Customer Name</Label>
                           <Input 
@@ -1703,7 +1703,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                     <div className="text-xs text-muted-foreground bg-blue-50 p-2 rounded">
                       Default logo and stamp from Settings are shown below. Upload custom assets to override for this quotation only.
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <Label className="text-xs">Company Logo</Label>
@@ -1871,7 +1871,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                             )}
                           </div>
 
-                          <div className="grid grid-cols-4 gap-3 items-end">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
                             <div className="space-y-1">
                               <Label className="text-xs">Image</Label>
                               <input
@@ -1910,7 +1910,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                                 </div>
                               )}
                             </div>
-                            <div className="col-span-3 space-y-1">
+                            <div className="col-span-1 sm:col-span-2 lg:col-span-3 space-y-1">
                               <Label className="text-xs">Description *</Label>
                               <Input 
                                 value={item.description} 
@@ -1921,7 +1921,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-4 gap-3 mt-3 items-end">
+                          {/* First row: Quantity and Unit Price */}
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3 items-end">
                             <div className="space-y-1">
                               <Label className="text-xs">Quantity *</Label>
                               <Input 
@@ -1944,71 +1945,75 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                                 className="h-8 text-sm"
                               />
                             </div>
-
-                            {discountMode === "individual" ? (
-                              <>
-                                <div className="space-y-1">
-                                  <Label className="text-xs">Discount Type</Label>
-                                  <Select 
-                                    value={item.discountType || "percentage"} 
-                                    onValueChange={(value: "percentage" | "fixed") => updateItem(item.id, "discountType", value)}
-                                  >
-                                    <SelectTrigger className="h-8 text-sm">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="percentage">Percentage (%)</SelectItem>
-                                      <SelectItem value="fixed">Fixed (SAR)</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-
-                                <div className="space-y-1">
-                                  <Label className="text-xs">
-                                    Discount {item.discountType === "percentage" ? "(%)" : "(SAR)"}
-                                  </Label>
-                                  <Input 
-                                    type="number" 
-                                    min="0"
-                                    max={item.discountType === "percentage" ? "100" : undefined}
-                                    step="0.01"
-                                    value={item.discountType === "percentage" ? item.discountPercent : item.discountAmount} 
-                                    onChange={(e) => {
-                                      const value = parseFloat(e.target.value) || 0;
-                                      if (item.discountType === "percentage") {
-                                        updateItem(item.id, "discountPercent", value);
-                                      } else {
-                                        updateItem(item.id, "discountAmount", value);
-                                      }
-                                    }}
-                                    className="h-8 text-sm"
-                                  />
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div className="space-y-1">
-                                  <Label className="text-xs text-muted-foreground">Discount</Label>
-                                  <div className="h-8 flex items-center">
-                                    <p className="text-sm text-muted-foreground">
-                                      {item.discountType === "percentage" 
-                                        ? `${item.discountPercent.toFixed(2)}%` 
-                                        : `SAR ${item.discountAmount.toFixed(2)}`}
-                                    </p>
-                                  </div>
-                                </div>
-                                <div className="space-y-1">
-                                  <Label className="text-xs text-muted-foreground">Item Discount</Label>
-                                  <div className="h-8 flex items-center">
-                                    <p className="text-sm text-muted-foreground">SAR {item.itemDiscount.toFixed(2)}</p>
-                                  </div>
-                                </div>
-                              </>
-                            )}
                           </div>
+
+                          {/* Second row: Discount fields */}
+                          {discountMode === "individual" && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3 items-end">
+                              <div className="space-y-1">
+                                <Label className="text-xs">Discount Type</Label>
+                                <Select 
+                                  value={item.discountType || "percentage"} 
+                                  onValueChange={(value: "percentage" | "fixed") => updateItem(item.id, "discountType", value)}
+                                >
+                                  <SelectTrigger className="h-8 text-sm">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="percentage">Percentage (%)</SelectItem>
+                                    <SelectItem value="fixed">Fixed (SAR)</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              <div className="space-y-1">
+                                <Label className="text-xs">
+                                  Discount {item.discountType === "percentage" ? "(%)" : "(SAR)"}
+                                </Label>
+                                <Input 
+                                  type="number" 
+                                  min="0"
+                                  max={item.discountType === "percentage" ? "100" : undefined}
+                                  step="0.01"
+                                  value={item.discountType === "percentage" ? item.discountPercent : item.discountAmount} 
+                                  onChange={(e) => {
+                                    const value = parseFloat(e.target.value) || 0;
+                                    if (item.discountType === "percentage") {
+                                      updateItem(item.id, "discountPercent", value);
+                                    } else {
+                                      updateItem(item.id, "discountAmount", value);
+                                    }
+                                  }}
+                                  className="h-8 text-sm"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Global discount mode display */}
+                          {discountMode === "global" && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                              <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground">Discount</Label>
+                                <div className="h-8 flex items-center">
+                                  <p className="text-sm text-muted-foreground">
+                                    {item.discountType === "percentage" 
+                                      ? `${item.discountPercent.toFixed(2)}%` 
+                                      : `SAR ${item.discountAmount.toFixed(2)}`}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground">Item Discount</Label>
+                                <div className="h-8 flex items-center">
+                                  <p className="text-sm text-muted-foreground">SAR {item.itemDiscount.toFixed(2)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                           
                           {/* Item Totals Display */}
-                          <div className="grid grid-cols-4 gap-3 mt-3 pt-3 border-t">
+                          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-3 pt-3 border-t">
                             <div className="space-y-1">
                               <Label className="text-xs text-muted-foreground">Subtotal</Label>
                               <div className="h-8 flex items-center">
@@ -2038,7 +2043,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                       </Card>
                     ))}
 
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <Button onClick={addManualItem} variant="outline" size="sm" className="w-full h-8 text-xs">
                         <Plus className="h-3 w-3 mr-1" />
                         Add Manual Item
