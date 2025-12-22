@@ -9,6 +9,7 @@ export interface Quotations {
 	customer_id: string | null; // uuid
 	phone_number: number | null;
 	quotation_validity: number | null;
+	vat_enabled: boolean | null;
 	discount_type: "percentage" | "fixed" | null;
 	discount_amount: number | null;
 	updated_at: string | null; // timestamptz

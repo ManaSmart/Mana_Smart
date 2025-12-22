@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
+import { Switch } from "./ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 import { Separator } from "./ui/separator";
@@ -132,6 +133,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const quotations: Quotation[] = useMemo(() => {
     return dbQuotations.map((q, idx) => {
       const items = Array.isArray(q.quotation_items) ? q.quotation_items : [];
+
+      const vatRateFromDb = q.vat_enabled === false ? 0 : VAT_RATE;
+
       // Calculate item-level totals
       const itemTotals = items.reduce((acc: any, it: any) => {
         const qty = Number(it.quantity || 0);
@@ -160,7 +164,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       
       const totalAfterDiscount = Math.max(0, itemTotals.totalAfterItemDiscounts - quotationDiscount);
       const totalDiscount = itemTotals.itemLevelDiscount + quotationDiscount;
-      const totalVAT = totalAfterDiscount * VAT_RATE;
+      const totalVAT = totalAfterDiscount * vatRateFromDb;
       const grandTotal = Math.max(0, totalAfterDiscount + totalVAT);
       
       const totals = {
@@ -224,7 +228,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           }
           const itemTotal = itemSubtotal - itemDiscount;
           const priceAfter = qty > 0 ? itemTotal / qty : unit;
-          const vat = itemTotal * 0.15;
+          const vat = itemTotal * vatRateFromDb;
           const total = itemTotal + vat;
           
           return {
@@ -306,6 +310,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const [isUsingDefaultLogo, setIsUsingDefaultLogo] = useState(true);
   const [isUsingDefaultStamp, setIsUsingDefaultStamp] = useState(true);
   const [_stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
+  const [vatEnabled, setVatEnabled] = useState(true);
 
   // Print date selection state
   const [printDateOption, setPrintDateOption] = useState<"quotation_date" | "today" | "custom">("quotation_date");
@@ -515,7 +520,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     }
   };
 
-  const calculateItemTotals = (item: Partial<QuotationItem>) => {
+  const calculateItemTotals = (item: Partial<QuotationItem>, vatEnabled: boolean = true) => {
     const quantity = item.quantity || 0;
     const unitPrice = item.unitPrice || 0;
     const discountType = item.discountType || "percentage";
@@ -542,7 +547,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     const priceAfterDiscount = quantity > 0 ? itemTotal / quantity : unitPrice;
     
     // VAT is calculated on item total (after discount)
-    const vat = itemTotal * VAT_RATE;
+    const vat = vatEnabled ? itemTotal * VAT_RATE : 0;
     
     // Total = item total + VAT
     const total = itemTotal + vat;
@@ -640,7 +645,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         if (discountMode === "global" && (field === "discountPercent" || field === "discountAmount" || field === "discountType")) {
           return item; // Ignore manual discount changes in global mode
         }
-        const totals = calculateItemTotals(updated);
+        const totals = calculateItemTotals(updated, vatEnabled);
         return { ...updated, ...totals };
       }
       return item;
@@ -670,7 +675,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           unitPrice: Number(inv.prod_selling_price || 0),
           discountType: item.discountType || "percentage",
         } as any;
-        const totals = calculateItemTotals(updated);
+        const totals = calculateItemTotals(updated, vatEnabled);
         return { ...updated, ...totals };
       }
       return item;
@@ -695,7 +700,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               discountAmount: 0,
               discountType: "percentage" as const,
             };
-            const totals = calculateItemTotals(updated);
+            const totals = calculateItemTotals(updated, vatEnabled);
             return { ...updated, ...totals };
           });
         }
@@ -719,7 +724,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               discountPercent: validPercentage,
               discountAmount: 0,
             };
-            const totals = calculateItemTotals(updated);
+            const totals = calculateItemTotals(updated, vatEnabled);
             return { ...updated, ...totals };
           } else {
             // Fixed amount: distribute proportionally
@@ -735,20 +740,20 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               discountPercent: 0,
               discountAmount: validDiscountAmount,
             };
-            const totals = calculateItemTotals(updated);
+            const totals = calculateItemTotals(updated, vatEnabled);
             return { ...updated, ...totals };
           }
         });
       });
     };
-  }, [discountMode, globalDiscountType, globalDiscountAmount]);
+  }, [discountMode, globalDiscountType, globalDiscountAmount, vatEnabled]);
 
   // Apply global discount when mode, type, or amount changes
   useEffect(() => {
     if (discountMode === "global") {
       applyGlobalDiscount();
     }
-  }, [discountMode, globalDiscountType, globalDiscountAmount, applyGlobalDiscount]);
+  }, [discountMode, globalDiscountType, globalDiscountAmount, vatEnabled, applyGlobalDiscount]);
   
   // Track previous item values to detect changes (quantity/unitPrice)
   const prevItemsKeyRef = useRef<string>("");
@@ -760,7 +765,15 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         applyGlobalDiscount();
       }
     }
-  }, [items, discountMode, globalDiscountAmount, applyGlobalDiscount]);
+  }, [items, discountMode, globalDiscountAmount, vatEnabled, applyGlobalDiscount]);
+
+  // Recalculate all items when VAT toggle changes
+  useEffect(() => {
+    setItems(currentItems => currentItems.map(item => {
+      const totals = calculateItemTotals(item, vatEnabled);
+      return { ...item, ...totals };
+    }));
+  }, [vatEnabled]);
 
   const calculateQuotationTotals = () => {
     // Calculate subtotal for each item (quantity × unit price)
@@ -809,6 +822,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     setDiscountMode("individual");
     setGlobalDiscountType("percentage");
     setGlobalDiscountAmount("");
+    setVatEnabled(true);
     setCompanyLogo("");
     setStamp("");
     setLogoFilename(null);
@@ -912,6 +926,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       // Store only filenames, not full URLs
       company_logo: logoFilename || null,
       company_stamp: stampFilename || null,
+      vat_enabled: vatEnabled,
       // Store discount mode and global discount info if applicable
       discount_mode: discountMode,
       discount_type: discountMode === "global" ? globalDiscountType : null,
@@ -2096,37 +2111,52 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                     <CardTitle className="text-sm">Discount Configuration</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="space-y-2">
-                      <Label className="text-xs font-semibold">Discount Mode</Label>
-                      <Select 
-                        value={discountMode} 
-                        onValueChange={(value: "individual" | "global") => {
-                          setDiscountMode(value);
-                          if (value === "individual") {
-                            // Clear global discount when switching to individual mode
-                            setGlobalDiscountAmount("");
-                            // Reset all item discounts to 0
-                            setItems(items.map(item => {
-                              const updated = {
-                                ...item,
-                                discountPercent: 0,
-                                discountAmount: 0,
-                                discountType: "percentage" as const,
-                              };
-                              const totals = calculateItemTotals(updated);
-                              return { ...updated, ...totals };
-                            }));
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="h-8 text-sm">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="individual">Individual Item Discounts</SelectItem>
-                          <SelectItem value="global">Apply Discount to All Items</SelectItem>
-                        </SelectContent>
-                      </Select>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold">Discount Mode</Label>
+                        <Select 
+                          value={discountMode} 
+                          onValueChange={(value: "individual" | "global") => {
+                            setDiscountMode(value);
+                            if (value === "individual") {
+                              // Clear global discount when switching to individual mode
+                              setGlobalDiscountAmount("");
+                              // Reset all item discounts to 0
+                              setItems(items.map(item => {
+                                const updated = {
+                                  ...item,
+                                  discountPercent: 0,
+                                  discountAmount: 0,
+                                  discountType: "percentage" as const,
+                                };
+                                const totals = calculateItemTotals(updated, vatEnabled);
+                                return { ...updated, ...totals };
+                              }));
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-8 text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="individual">Individual Item Discounts</SelectItem>
+                            <SelectItem value="global">Apply Discount to All Items</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label className="text-xs font-semibold">VAT (15%)</Label>
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            checked={vatEnabled}
+                            onCheckedChange={setVatEnabled}
+                          />
+                          <span className="text-sm text-gray-600">
+                            {vatEnabled ? "Enabled" : "Disabled"}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
                     {discountMode === "global" && (

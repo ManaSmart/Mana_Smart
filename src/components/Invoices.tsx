@@ -237,6 +237,13 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       const customer = dbCustomers.find((c) => c.customer_id === dbInv.customer_id);
       const invoiceItems = Array.isArray(dbInv.invoice_items) ? dbInv.invoice_items : [];
 
+      const vatRateFromDb =
+        dbInv.vat_enabled === false
+          ? 0
+          : typeof dbInv.tax_rate === "number"
+            ? dbInv.tax_rate
+            : VAT_RATE;
+
       // Parse invoice items
       const items: InvoiceItem[] = invoiceItems.map((item: any, itemIdx: number) => {
         const qty = item.quantity || 1;
@@ -271,8 +278,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           itemDiscount: itemDiscount,
           priceAfterDiscount: priceAfter,
           subtotal: itemSubtotal,
-          vat: itemSubtotal * VAT_RATE,
-          total: itemSubtotal * (1 + VAT_RATE),
+          vat: itemSubtotal * vatRateFromDb,
+          total: itemSubtotal + itemSubtotal * vatRateFromDb,
         };
       });
 
@@ -304,7 +311,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       
       const totalAfterDiscount = Math.max(0, itemTotals.totalAfterItemDiscounts - invoiceDiscount);
       const totalDiscount = itemTotals.itemLevelDiscount + invoiceDiscount;
-      const totalVAT = totalAfterDiscount * VAT_RATE;
+      const totalVAT = totalAfterDiscount * vatRateFromDb;
       const grandTotal = Math.max(0, totalAfterDiscount + totalVAT);
       
       const totals = {
@@ -483,6 +490,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [stamp, setStamp] = useState("");
   const [stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
   const [paidAmount, setPaidAmount] = useState("");
+  const [vatEnabled, setVatEnabled] = useState(true);
   const [items, setItems] = useState<InvoiceItem[]>([{
     id: 1,
     isManual: true,
@@ -582,7 +590,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }
   };
 
-  const calculateItemTotals = (item: Partial<InvoiceItem>) => {
+  const calculateItemTotals = (item: Partial<InvoiceItem>, vatEnabled: boolean = true) => {
     const quantity = item.quantity || 0;
     const unitPrice = item.unitPrice || 0;
     const discountType = item.discountType || "percentage";
@@ -605,7 +613,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     // Item total = subtotal - item discount
     const priceAfterDiscount = unitPrice - (discountType === "percentage" ? unitPrice * (discountPercent / 100) : Math.min(unitPrice, discountAmount));
     const finalSubtotal = priceAfterDiscount * quantity;
-    const vat = finalSubtotal * VAT_RATE;
+    const vat = vatEnabled ? finalSubtotal * VAT_RATE : 0;
     const total = finalSubtotal + vat;
 
     return {
@@ -680,7 +688,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         if (discountMode === "global" && (field === "discountPercent" || field === "discountAmount" || field === "discountType")) {
           return item; // Ignore manual discount changes in global mode
         }
-        const totals = calculateItemTotals(updated);
+        const totals = calculateItemTotals(updated, vatEnabled);
         return { ...updated, ...totals };
       }
       return item;
@@ -710,7 +718,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           description: inventoryItem.name,
           unitPrice: inventoryItem.unitPrice
         };
-        const totals = calculateItemTotals(updated);
+        const totals = calculateItemTotals(updated, vatEnabled);
         return { ...updated, ...totals };
       }
       return item;
@@ -735,7 +743,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
               discountAmount: 0,
               discountType: "percentage" as const,
             };
-            const totals = calculateItemTotals(updated);
+            const totals = calculateItemTotals(updated, vatEnabled);
             return { ...updated, ...totals };
           });
         }
@@ -754,7 +762,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
               discountPercent: validPercentage,
               discountAmount: 0,
             };
-            const totals = calculateItemTotals(updated);
+            const totals = calculateItemTotals(updated, vatEnabled);
             return { ...updated, ...totals };
           } else {
             // Fixed amount: distribute proportionally
@@ -770,20 +778,20 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
               discountPercent: 0,
               discountAmount: validDiscountAmount,
             };
-            const totals = calculateItemTotals(updated);
+            const totals = calculateItemTotals(updated, vatEnabled);
             return { ...updated, ...totals };
           }
         });
       });
     };
-  }, [discountMode, globalDiscountType, globalDiscountAmount]);
+  }, [discountMode, globalDiscountType, globalDiscountAmount, vatEnabled]);
 
   // Apply global discount when mode, type, or amount changes
   useEffect(() => {
     if (discountMode === "global") {
       applyGlobalDiscount();
     }
-  }, [discountMode, globalDiscountType, globalDiscountAmount, applyGlobalDiscount]);
+  }, [discountMode, globalDiscountType, globalDiscountAmount, vatEnabled, applyGlobalDiscount]);
   
   // Track previous item values to detect changes (quantity/unitPrice)
   const prevItemsKeyRef = useRef<string>("");
@@ -795,7 +803,15 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         applyGlobalDiscount();
       }
     }
-  }, [items, discountMode, globalDiscountAmount, applyGlobalDiscount]);
+  }, [items, discountMode, globalDiscountAmount, vatEnabled, applyGlobalDiscount]);
+
+  // Recalculate all items when VAT toggle changes
+  useEffect(() => {
+    setItems(currentItems => currentItems.map(item => {
+      const totals = calculateItemTotals(item, vatEnabled);
+      return { ...item, ...totals };
+    }));
+  }, [vatEnabled]);
 
   const handleCustomerSelect = (customer: Customer) => {
     if (customer.id) {
@@ -826,7 +842,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     // For monthly visit invoices, use contract plan amount as grand total
     if (invoiceType === "monthly_visit" && contractPlanAmount !== null) {
       const subtotal = contractPlanAmount;
-      const totalVAT = subtotal * VAT_RATE;
+      const totalVAT = vatEnabled ? subtotal * VAT_RATE : 0;
       const grandTotal = subtotal + totalVAT;
       
       return {
@@ -878,6 +894,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       "• One year warranty on all devices"
     );
     setPaidAmount("");
+    setVatEnabled(true);
     setItems([{
       id: 1,
       isManual: true,
@@ -925,7 +942,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     let finalGrandTotal = totals.grandTotal;
     if (invoiceType === "monthly_visit" && contractPlanAmount !== null) {
       const subtotal = contractPlanAmount;
-      const totalVAT = subtotal * VAT_RATE;
+      const totalVAT = vatEnabled ? subtotal * VAT_RATE : 0;
       finalGrandTotal = subtotal + totalVAT;
     }
     
@@ -1070,7 +1087,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         invoice_items: cleanedItems,
         invoice_date: today.toISOString().split('T')[0],
         due_date: today.toISOString().split('T')[0],
-        tax_rate: VAT_RATE,
+        tax_rate: vatEnabled ? VAT_RATE : 0,
+        vat_enabled: vatEnabled,
         subtotal: totals.totalBeforeDiscount,
         tax_amount: totals.totalVAT,
         total_amount: finalGrandTotal,
@@ -1992,7 +2010,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                                   // Auto-create invoice item for monthly visit (for display/record keeping)
                                   const itemDescription = `Monthly service payment - ${paymentPlan === 'monthly' ? 'Monthly' : paymentPlan === 'semi-annual' ? 'Semi-Annual' : 'Annual'} plan`;
                                   const subtotal = invoiceAmount;
-                                  const vat = subtotal * VAT_RATE;
+                                  const vat = vatEnabled ? subtotal * VAT_RATE : 0;
                                   const total = subtotal + vat;
                                   
                                   setItems([{
@@ -2196,7 +2214,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                                   discountAmount: 0,
                                   discountType: "percentage" as const,
                                 };
-                                const totals = calculateItemTotals(updated);
+                                const totals = calculateItemTotals(updated, vatEnabled);
                                 return { ...updated, ...totals };
                               }));
                             }
@@ -2212,6 +2230,18 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                         </Select>
                       </div>
 
+                      <div className="space-y-2">
+                        <Label className="text-xs">VAT (15%)</Label>
+                        <div className="flex items-center space-x-2">
+                          <Switch
+                            checked={vatEnabled}
+                            onCheckedChange={setVatEnabled}
+                          />
+                          <span className="text-sm text-gray-600">
+                            {vatEnabled ? "Enabled" : "Disabled"}
+                          </span>
+                        </div>
+                      </div>
                       {discountMode === "global" && (
                         <>
                           <div className="space-y-2">

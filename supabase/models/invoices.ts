@@ -12,6 +12,7 @@ export interface Invoices {
 	total_amount: number;
 	tax_amount: number;
 	tax_rate: number;
+	vat_enabled: boolean | null;
 	paid_amount: number | null;
 	created_at: string | null; // timestamptz
 	created_by: string | null; // uuid
