@@ -305,6 +305,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const [stamp, setStamp] = useState("");
   const [logoFilename, setLogoFilename] = useState<string | null>(null);
   const [stampFilename, setStampFilename] = useState<string | null>(null);
+  const [tempBrandingOwnerId, setTempBrandingOwnerId] = useState<string | null>(null);
   const [defaultLogoUrl, setDefaultLogoUrl] = useState<string | null>(null);
   const [defaultStampUrl, setDefaultStampUrl] = useState<string | null>(null);
   const [isUsingDefaultLogo, setIsUsingDefaultLogo] = useState(true);
@@ -334,9 +335,23 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const logoInputRef = useRef<HTMLInputElement>(null);
   const stampInputRef = useRef<HTMLInputElement>(null);
 
+  const generateUuid = () => {
+    const cryptoObj = (globalThis as any)?.crypto as undefined | { randomUUID?: () => string };
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    // Fallback UUIDv4 generator
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
   // Load default logo and stamp from Settings when dialog opens
-  useEffect(() => {
+  useEffect(() => { 
     if (isCreateDialogOpen) {
+      if (!tempBrandingOwnerId) {
+        setTempBrandingOwnerId(generateUuid());
+      }
       const loadDefaultBranding = async () => {
         try {
           // Load default logo
@@ -409,14 +424,14 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         }
       }
 
-      // Generate a temporary quotation ID for file upload (will be replaced with actual ID after creation)
-      const tempQuotationId = `temp_${Date.now()}`;
+      const ownerId = tempBrandingOwnerId || generateUuid();
+      if (!tempBrandingOwnerId) setTempBrandingOwnerId(ownerId);
 
       // Upload to S3
       const uploadResult = await uploadFile({
         file,
         category: FILE_CATEGORIES.BRANDING_LOGO,
-        ownerId: tempQuotationId,
+        ownerId,
         ownerType: 'quotation',
         description: `Quotation-specific logo`,
         userId: currentUserId || undefined,
@@ -467,14 +482,14 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         }
       }
 
-      // Generate a temporary quotation ID for file upload
-      const tempQuotationId = `temp_${Date.now()}`;
+      const ownerId = tempBrandingOwnerId || generateUuid();
+      if (!tempBrandingOwnerId) setTempBrandingOwnerId(ownerId);
 
       // Upload to S3
       const uploadResult = await uploadFile({
         file,
         category: FILE_CATEGORIES.BRANDING_STAMP,
-        ownerId: tempQuotationId,
+        ownerId,
         ownerType: 'quotation',
         description: `Quotation-specific stamp`,
         userId: currentUserId || undefined,
@@ -829,6 +844,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     setStampFilename(null);
     setIsUsingDefaultLogo(true);
     setIsUsingDefaultStamp(true);
+    setTempBrandingOwnerId(null);
     setStampPosition({ x: 50, y: 50 });
     setNotes("");
     setTermsAndConditions(
@@ -933,18 +949,23 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       discount_amount: discountMode === "global" && parseFloat(globalDiscountAmount) > 0 ? parseFloat(globalDiscountAmount) : null,
     };
     
-    dispatch(thunks.quotations.createOne(values))
-      .unwrap()
-      .then(() => {
-        resetForm();
-        setIsCreateDialogOpen(false);
-        // Get the new quotation number from the map after refresh
-        dispatch(thunks.quotations.fetchAll(undefined)).then(() => {
-          // The quotation number will be calculated automatically based on sorted order
-          toast.success("Quotation created successfully!");
-        });
-      })
-      .catch((e: any) => toast.error(e.message || 'Failed to create quotation'));
+    try {
+      const created = await dispatch(thunks.quotations.createOne(values)).unwrap();
+      const createdId = (created as any)?.quotation_id as string | undefined;
+      if (createdId && tempBrandingOwnerId) {
+        await supabase
+          .from('file_metadata')
+          .update({ owner_id: createdId })
+          .eq('owner_type', 'quotation')
+          .eq('owner_id', tempBrandingOwnerId);
+      }
+      resetForm();
+      setIsCreateDialogOpen(false);
+      await dispatch(thunks.quotations.fetchAll(undefined));
+      toast.success("Quotation created successfully!");
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to create quotation');
+    }
   };
 
   const handleStatusChange = (quotationId: number, newStatus: "sent" | "pending" | "cancelled") => {
@@ -994,22 +1015,45 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       return;
     }
 
-    // Resolve logo: quotation-specific filename > quotation URL > system default
+    const resolveOwnerFileUrl = async (
+      ownerId: string | undefined,
+      category: string,
+      preferredFilename?: string | null
+    ): Promise<string | undefined> => {
+      if (!ownerId) return undefined;
+      const files = await getFilesByOwner(ownerId, 'quotation', category as any);
+      const match = preferredFilename
+        ? files.find((f) => f.file_name === preferredFilename)
+        : files[0];
+      const chosen = match || files[0];
+      if (!chosen) return undefined;
+      const url = await getFileUrl(
+        chosen.bucket as any,
+        chosen.path,
+        chosen.is_public
+      );
+      return url || undefined;
+    };
+
+    // Resolve logo: filename > URL > system default
     let logoToUse = quotation.companyLogo;
-    if (!logoToUse && quotation.logoFilename) {
-      // TODO: Resolve filename to S3 URL
-      // For now, fall back to system default
-      logoToUse = (await getPrintLogo()) || undefined;
-    }
     if (!logoToUse) {
-      logoToUse = (await getPrintLogo()) || undefined;
+      logoToUse =
+        (await resolveOwnerFileUrl(quotation.dbQuotationId, FILE_CATEGORIES.BRANDING_LOGO, quotation.logoFilename)) ||
+        (await getPrintLogo()) ||
+        undefined;
     }
     
-    // Resolve stamp: quotation-specific filename > quotation URL > system default
+    // Resolve stamp: filename > URL > system default
     let stampToUse = quotation.stamp;
-    if (!stampToUse && quotation.stampFilename) {
-      // TODO: Resolve filename to S3 URL
-      // For now, fall back to system default
+    if (!stampToUse) {
+      stampToUse = await resolveOwnerFileUrl(
+        quotation.dbQuotationId,
+        FILE_CATEGORIES.BRANDING_STAMP,
+        quotation.stampFilename
+      );
+    }
+    if (!stampToUse) {
       const { data: brandingData } = await supabase
         .from("company_branding")
         .select("*")
@@ -1018,7 +1062,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         .maybeSingle();
       if (brandingData?.branding_id) {
         const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
-        const stampFile = brandingFiles.find(f => f.category === FILE_CATEGORIES.BRANDING_STAMP);
+        const stampFile = brandingFiles.find((f) => f.category === FILE_CATEGORIES.BRANDING_STAMP);
         if (stampFile) {
           const stampUrl = await getFileUrl(
             stampFile.bucket as any,
@@ -1137,7 +1181,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     // Use provided logo or fall back to quotation logo
     const companyLogo = logoUrl || quotation.companyLogo;
     // Use provided stamp or fall back to quotation stamp
-    const companyStamp = stampUrl || quotation.stamp;
+    const stampToRender = stampUrl || quotation.stamp;
     
     return `
       <!DOCTYPE html>
@@ -1157,26 +1201,59 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
             position: relative;
           }
           .quotation-container { max-width: 800px; margin: 0 auto; padding: 20px; position: relative; background: white; border-radius: 8px; }
-          .stamp {
-            max-width: 50px;
-            max-height: 50px;
-            filter: brightness(0) saturate(100%) invert(23%) sepia(98%) saturate(7466%) hue-rotate(357deg) brightness(91%) contrast(118%);
-            opacity: 0.8;
+          .company-stamp {
+            width: 90px;
+            height: 90px;
+            object-fit: contain;
+            display: block;
           }
           .content { position: relative; z-index: 1; }
           .header { 
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
             padding-bottom: 20px;
             border-bottom: 3px solid #cbd5e1;
             margin-bottom: 20px;
           }
-          .company-info { text-align: left; }
+          .company-info { text-align: left; flex: 0 0 auto; }
           .company-logo { 
-            max-width: 180px;
+            max-width: 240px;
             height: auto;
-            margin-bottom: 10px;
+            margin: 8px 0 12px 0;
+          }
+          .bank-details {
+            flex: 1 1 auto;
+            text-align: center;
+            color: #475569;
+            font-size: 12px;
+            line-height: 1.4;
+            padding: 0 8px;
+            white-space: pre-line;
+          }
+          .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
+          .bank-stamp-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-top: 20px;
+            padding: 15px 0;
+            border-top: 1px solid #e2e8f0;
+            font-size: 13px;
+            color: #333;
+            line-height: 1.6;
+          }
+          .bank-stamp-row .bank-text {
+            flex: 1 1 auto;
+            white-space: pre-line;
+          }
+          .bank-stamp-row .bank-stamp {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
           }
           .company-name {
             font-size: 22px; 
@@ -1406,7 +1483,6 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       </head>
       <body>
         <div class="quotation-container">
-          ${companyStamp ? `<img src="${companyStamp}" class="stamp" alt="Stamp">` : ''}
           <div class="content">
             <div class="header">
               <div class="company-info">
@@ -1452,7 +1528,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                   <th style="width: 80px; text-align: center;">Qty</th>
                   <th style="width: 100px; text-align: right;">Price</th>
                   <th style="width: 80px; text-align: center;">Disc. %</th>
-                  <th style="width: 100px; text-align: right;">Subtotal</th>
+                  <th style="width: 100px; text-align: center;">Before Disc.</th>
+                  <th style="width: 100px; text-align: center;">After Disc.</th>
                   <th style="width: 80px; text-align: right;">VAT 15%</th>
                   <th style="width: 100px; text-align: right;">Total</th>
                 </tr>
@@ -1482,6 +1559,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
                     <td style="text-align: center;">${item.quantity}</td>
                     <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
                     <td style="text-align: center;">${item.discountPercent}%</td>
+                    <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
                     <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
                     <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
                     <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
@@ -1536,11 +1614,14 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
 • One year warranty on all devices`}</div>
             </div>
 
-            <div style="margin-top: 20px; padding: 15px 0; border-top: 1px solid #e2e8f0; font-size: 13px; color: #333; line-height: 1.6;">
-              <div>Mana Smart Trading Company</div>
-              <div>Al Rajhi Bank</div>
-              <div>A.N.: 301000010006080269328</div>
-              <div>IBAN No.: SA2680000301608010269328</div>
+            <div class="bank-stamp-row">
+              <div class="bank-text">Mana Smart Trading Company
+Al Rajhi Bank
+A.N.: 301000010006080269328
+IBAN No.: SA2680000301608010269328</div>
+              <div class="bank-stamp">
+                ${stampToRender ? `<img src="${stampToRender}" class="company-stamp" alt="Stamp">` : ''}
+              </div>
             </div>
 
             <div class="footer">

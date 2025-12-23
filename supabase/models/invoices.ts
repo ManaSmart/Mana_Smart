@@ -1,4 +1,6 @@
 export interface Invoices {
+	company_stamp: string | null; // Filename only (not full URL)
+	company_logo: string | null; // Filename only (not full URL)
 	invoice_items: any; // jsonb
 	due_date: string; // date
 	customer_id: string; // uuid

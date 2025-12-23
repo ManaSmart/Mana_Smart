@@ -25,6 +25,9 @@ import type { Customers } from "../../supabase/models/customers";
 import type { Invoices as InvoicesRow } from "../../supabase/models/invoices";
 import type { Payments as PaymentRow } from "../../supabase/models/payments";
 import { getPrintLogo } from "../lib/getPrintLogo";
+import { uploadFile, getFilesByOwner, getFileUrl } from "../lib/storage";
+import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
+import { supabase } from "../lib/supabaseClient";
 
 interface InvoiceItem {
   id: number;
@@ -60,6 +63,8 @@ interface Invoice {
   companyLogo?: string;
   stamp?: string;
   stampPosition?: { x: number; y: number };
+  logoFilename?: string | null;
+  stampFilename?: string | null;
   notes?: string;
   termsAndConditions?: string;
   items: InvoiceItem[];
@@ -406,6 +411,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         qrCode: "",
         companyLogo: "",
         stamp: "",
+        logoFilename: (dbInv as any).company_logo ?? null,
+        stampFilename: (dbInv as any).company_stamp ?? null,
         stampPosition: { x: 50, y: 50 },
         notes: dbInv.invoice_notes || "",
         termsAndConditions: "",
@@ -488,6 +495,13 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
   const [companyLogo, setCompanyLogo] = useState("");
   const [stamp, setStamp] = useState("");
+  const [logoFilename, setLogoFilename] = useState<string | null>(null);
+  const [stampFilename, setStampFilename] = useState<string | null>(null);
+  const [defaultLogoUrl, setDefaultLogoUrl] = useState<string | null>(null);
+  const [defaultStampUrl, setDefaultStampUrl] = useState<string | null>(null);
+  const [isUsingDefaultLogo, setIsUsingDefaultLogo] = useState(true);
+  const [isUsingDefaultStamp, setIsUsingDefaultStamp] = useState(true);
+  const [tempBrandingOwnerId, setTempBrandingOwnerId] = useState<string | null>(null);
   const [stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
   const [paidAmount, setPaidAmount] = useState("");
   const [vatEnabled, setVatEnabled] = useState(true);
@@ -509,6 +523,66 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
   const logoInputRef = useRef<HTMLInputElement>(null);
   const stampInputRef = useRef<HTMLInputElement>(null);
+
+  const generateUuid = () => {
+    const cryptoObj = (globalThis as any)?.crypto as undefined | { randomUUID?: () => string };
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === 'x' ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
+  // Load default logo and stamp from Settings when dialog opens
+  useEffect(() => {
+    if (!isCreateDialogOpen) return;
+
+    if (!tempBrandingOwnerId) {
+      setTempBrandingOwnerId(generateUuid());
+    }
+
+    const loadDefaultBranding = async () => {
+      try {
+        const logoResult = await getPrintLogo();
+        if (logoResult) {
+          setDefaultLogoUrl(logoResult);
+          if (isUsingDefaultLogo && !companyLogo) {
+            setCompanyLogo(logoResult);
+          }
+        }
+
+        const { data: brandingData } = await supabase
+          .from("company_branding")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (brandingData?.branding_id) {
+          const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
+          const stampFile = brandingFiles.find((f) => f.category === FILE_CATEGORIES.BRANDING_STAMP);
+          if (stampFile) {
+            const stampUrl = await getFileUrl(
+              stampFile.bucket as any,
+              stampFile.path,
+              stampFile.is_public
+            );
+            if (stampUrl) {
+              setDefaultStampUrl(stampUrl);
+              if (isUsingDefaultStamp && !stamp) {
+                setStamp(stampUrl);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error loading default branding:', error);
+      }
+    };
+
+    void loadDefaultBranding();
+  }, [isCreateDialogOpen]);
 
   // Handle pending quotation data from conversion
   useEffect(() => {
@@ -554,27 +628,109 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     return matchesSearch && matchesStatus;
   });
 
-  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCompanyLogo(reader.result as string);
+    if (!file) return;
+
+    try {
+      const stored = localStorage.getItem('auth_user');
+      let currentUserId: string | null = null;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          currentUserId = parsed.user_id || null;
+        } catch (err) {
+          console.error('Failed to parse auth_user', err);
+        }
+      }
+
+      const ownerId = tempBrandingOwnerId || generateUuid();
+      if (!tempBrandingOwnerId) setTempBrandingOwnerId(ownerId);
+
+      const uploadResult = await uploadFile({
+        file,
+        category: FILE_CATEGORIES.BRANDING_LOGO,
+        ownerId,
+        ownerType: 'invoice',
+        description: `Invoice-specific logo`,
+        userId: currentUserId || undefined,
+      });
+
+      if (!uploadResult.success || !uploadResult.fileMetadata) {
+        throw new Error(uploadResult.error || 'Failed to upload logo');
+      }
+
+      setLogoFilename(uploadResult.fileMetadata.file_name);
+      setIsUsingDefaultLogo(false);
+
+      const logoUrl = uploadResult.publicUrl || uploadResult.signedUrl || (await getFileUrl(
+        uploadResult.fileMetadata.bucket as any,
+        uploadResult.fileMetadata.path,
+        uploadResult.fileMetadata.is_public
+      ));
+
+      if (logoUrl) {
+        setCompanyLogo(logoUrl);
         toast.success("Logo uploaded successfully");
-      };
-      reader.readAsDataURL(file);
+      } else {
+        toast.error("Logo uploaded but URL retrieval failed");
+      }
+    } catch (error: any) {
+      console.error('Error uploading logo:', error);
+      toast.error(error.message || 'Failed to upload logo');
     }
   };
 
-  const handleStampUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleStampUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setStamp(reader.result as string);
+    if (!file) return;
+
+    try {
+      const stored = localStorage.getItem('auth_user');
+      let currentUserId: string | null = null;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          currentUserId = parsed.user_id || null;
+        } catch (err) {
+          console.error('Failed to parse auth_user', err);
+        }
+      }
+
+      const ownerId = tempBrandingOwnerId || generateUuid();
+      if (!tempBrandingOwnerId) setTempBrandingOwnerId(ownerId);
+
+      const uploadResult = await uploadFile({
+        file,
+        category: FILE_CATEGORIES.BRANDING_STAMP,
+        ownerId,
+        ownerType: 'invoice',
+        description: `Invoice-specific stamp`,
+        userId: currentUserId || undefined,
+      });
+
+      if (!uploadResult.success || !uploadResult.fileMetadata) {
+        throw new Error(uploadResult.error || 'Failed to upload stamp');
+      }
+
+      setStampFilename(uploadResult.fileMetadata.file_name);
+      setIsUsingDefaultStamp(false);
+
+      const stampUrl = uploadResult.publicUrl || uploadResult.signedUrl || (await getFileUrl(
+        uploadResult.fileMetadata.bucket as any,
+        uploadResult.fileMetadata.path,
+        uploadResult.fileMetadata.is_public
+      ));
+
+      if (stampUrl) {
+        setStamp(stampUrl);
         toast.success("Stamp uploaded successfully");
-      };
-      reader.readAsDataURL(file);
+      } else {
+        toast.error("Stamp uploaded but URL retrieval failed");
+      }
+    } catch (error: any) {
+      console.error('Error uploading stamp:', error);
+      toast.error(error.message || 'Failed to upload stamp');
     }
   };
 
@@ -881,8 +1037,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     setDiscountMode("individual");
     setGlobalDiscountType("percentage");
     setGlobalDiscountAmount("");
-    setCompanyLogo("");
-    setStamp("");
+    setIsUsingDefaultLogo(true);
+    setIsUsingDefaultStamp(true);
     setStampPosition({ x: 50, y: 50 });
     setNotes("");
     setTermsAndConditions(
@@ -895,6 +1051,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     );
     setPaidAmount("");
     setVatEnabled(true);
+    setTempBrandingOwnerId(null);
     setItems([{
       id: 1,
       isManual: true,
@@ -1089,6 +1246,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         due_date: today.toISOString().split('T')[0],
         tax_rate: vatEnabled ? VAT_RATE : 0,
         vat_enabled: vatEnabled,
+        company_logo: logoFilename || null,
+        company_stamp: stampFilename || null,
         subtotal: totals.totalBeforeDiscount,
         tax_amount: totals.totalVAT,
         total_amount: finalGrandTotal,
@@ -1103,7 +1262,15 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         discount_amount: discountMode === "global" && parseFloat(globalDiscountAmount) > 0 ? parseFloat(globalDiscountAmount) : null,
       };
       
-      await dispatch(thunks.invoices.createOne(insertPayload)).unwrap();
+      const created = await dispatch(thunks.invoices.createOne(insertPayload)).unwrap();
+      const createdId = (created as any)?.invoice_id as string | undefined;
+      if (createdId && tempBrandingOwnerId) {
+        await supabase
+          .from('file_metadata')
+          .update({ owner_id: createdId })
+          .eq('owner_type', 'invoice')
+          .eq('owner_id', tempBrandingOwnerId);
+      }
       dispatch(thunks.invoices.fetchAll(undefined));
     } catch (err: any) {
       console.error('Failed to persist invoice', err);
@@ -1128,10 +1295,45 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return;
     }
 
-    // Load logo from Settings if not provided in invoice
+    const resolveOwnerFileUrl = async (
+      ownerId: string | undefined,
+      category: string,
+      preferredFilename?: string | null
+    ) => {
+      if (!ownerId) return null;
+      const files = await getFilesByOwner(ownerId, 'invoice', category as any);
+      const match = preferredFilename
+        ? files.find((f) => f.file_name === preferredFilename)
+        : files[0];
+      const chosen = match || files[0];
+      if (!chosen) return null;
+      const url = await getFileUrl(
+        chosen.bucket as any,
+        chosen.path,
+        chosen.is_public
+      );
+      return url || null;
+    };
+
+    // Resolve logo: filename > URL > system default
     let logoToUse = invoice.companyLogo;
     if (!logoToUse) {
-      logoToUse = (await getPrintLogo()) || undefined;
+      logoToUse =
+        (await resolveOwnerFileUrl(invoice.dbInvoiceId, FILE_CATEGORIES.BRANDING_LOGO, invoice.logoFilename)) ||
+        (await getPrintLogo()) ||
+        undefined;
+    }
+
+    // Resolve stamp: filename > URL > system default
+    if (!invoice.stamp) {
+      const stampUrl = await resolveOwnerFileUrl(
+        invoice.dbInvoiceId,
+        FILE_CATEGORIES.BRANDING_STAMP,
+        invoice.stampFilename
+      );
+      if (stampUrl) {
+        invoice = { ...invoice, stamp: stampUrl };
+      }
     }
 
     // Generate a compact preview HTML for QR code (same style as print but optimized for QR code size limits)
@@ -1275,18 +1477,12 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             background: white; 
             min-height: 100vh;
           }
-          ${invoice.stamp ? `
-          .stamp {
-            position: absolute;
-            top: ${invoice.stampPosition?.y || 50}%;
-            left: ${invoice.stampPosition?.x || 50}%;
-            transform: translate(-50%, -50%) rotate(-15deg);
-            opacity: 0.12;
-            z-index: 0;
-            max-width: 80px;
-            pointer-events: none;
+          .company-stamp {
+            width: 90px;
+            height: 90px;
+            object-fit: contain;
+            display: block;
           }
-          ` : ''}
           ${invoice.status === 'paid' ? `
           .paid-stamp {
             position: absolute;
@@ -1332,18 +1528,51 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           ` : ''}
           .content { position: relative; z-index: 1; }
           .header { 
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
             padding-bottom: 20px;
             border-bottom: 3px solid #cbd5e1;
             margin-bottom: 20px;
           }
-          .company-info { text-align: left; }
+          .company-info { text-align: left; flex: 0 0 auto; }
           .company-logo { 
-            max-width: 180px;
+            max-width: 240px;
             height: auto;
-            margin-bottom: 10px;
+            margin: 8px 0 12px 0;
+          }
+          .bank-details {
+            flex: 1 1 auto;
+            text-align: center;
+            color: #475569;
+            font-size: 12px;
+            line-height: 1.4;
+            padding: 0 8px;
+            white-space: pre-line;
+          }
+          .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
+          .bank-stamp-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-top: 20px;
+            padding: 15px 0;
+            border-top: 1px solid #e2e8f0;
+            font-size: 13px;
+            color: #333;
+            line-height: 1.6;
+          }
+          .bank-stamp-row .bank-text {
+            flex: 1 1 auto;
+            white-space: pre-line;
+          }
+          .bank-stamp-row .bank-stamp {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
           }
           .company-name {
             font-size: 22px; 
@@ -1588,7 +1817,6 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       </head>
       <body>
         <div class="invoice-container">
-          ${invoice.stamp ? `<img src="${invoice.stamp}" class="stamp" alt="Stamp">` : ''}
           ${invoice.status === 'paid' ? `
           <div class="paid-stamp">
             <div class="paid-stamp-text">✓ PAID</div>
@@ -1728,11 +1956,14 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 • Please reference invoice number in payment`}</div>
             </div>
 
-            <div style="margin-top: 20px; padding: 15px 0; border-top: 1px solid #e2e8f0; font-size: 13px; color: #333; line-height: 1.6;">
-              <div>Mana Smart Trading Company</div>
-              <div>Al Rajhi Bank</div>
-              <div>A.N.: 301000010006080269328</div>
-              <div>IBAN No.: SA2680000301608010269328</div>
+            <div class="bank-stamp-row">
+              <div class="bank-text">Mana Smart Trading Company
+Al Rajhi Bank
+A.N.: 301000010006080269328
+IBAN No.: SA2680000301608010269328</div>
+              <div class="bank-stamp">
+                ${invoice.stamp ? `<img src="${invoice.stamp}" class="company-stamp" alt="Stamp">` : ''}
+              </div>
             </div>
 
             <div class="footer">
@@ -2107,10 +2338,21 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm">Branding & Customization</CardTitle>
                   </CardHeader>
-                  <CardContent className="space-y-2">
-                    <div className="grid grid-cols-2 gap-2">
+                  <CardContent className="space-y-3">
+                    <div className="text-xs text-muted-foreground bg-blue-50 p-2 rounded">
+                      Default logo and stamp from Settings are shown below. Upload custom assets to override for this quotation only.
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div className="space-y-1">
-                        <Label className="text-xs">Company Logo</Label>
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Company Logo</Label>
+                          {isUsingDefaultLogo && defaultLogoUrl && (
+                            <Badge variant="outline" className="text-xs">System Default</Badge>
+                          )}
+                          {!isUsingDefaultLogo && (
+                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
+                          )}
+                        </div>
                         <input
                           ref={logoInputRef}
                           type="file"
@@ -2125,7 +2367,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                           className="w-full h-8 text-xs"
                         >
                           <Upload className="h-3 w-3 mr-1" />
-                          Upload Logo
+                          {isUsingDefaultLogo ? "Override Logo" : "Change Logo"}
                         </Button>
                         {companyLogo && (
                           <div className="relative">
@@ -2139,16 +2381,34 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                               variant="ghost"
                               size="icon"
                               className="absolute top-0 right-0 h-6 w-6"
-                              onClick={() => setCompanyLogo("")}
+                              onClick={() => {
+                                setCompanyLogo(defaultLogoUrl || "");
+                                setLogoFilename(null);
+                                setIsUsingDefaultLogo(true);
+                              }}
+                              title={isUsingDefaultLogo ? "Using system default" : "Reset to default"}
                             >
                               <X className="h-4 w-4" />
                             </Button>
                           </div>
                         )}
+                        {!companyLogo && defaultLogoUrl && (
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Using system default logo
+                          </div>
+                        )}
                       </div>
 
                       <div className="space-y-1">
-                        <Label className="text-xs">Stamp (Optional)</Label>
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Stamp (Optional)</Label>
+                          {isUsingDefaultStamp && defaultStampUrl && (
+                            <Badge variant="outline" className="text-xs">System Default</Badge>
+                          )}
+                          {!isUsingDefaultStamp && (
+                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
+                          )}
+                        </div>
                         <input
                           ref={stampInputRef}
                           type="file"
@@ -2163,7 +2423,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                           className="w-full h-8 text-xs"
                         >
                           <Upload className="h-3 w-3 mr-1" />
-                          Upload Stamp
+                          {isUsingDefaultStamp ? "Override Stamp" : "Change Stamp"}
                         </Button>
                         {stamp && (
                           <div className="relative">
@@ -2177,10 +2437,20 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
                               variant="ghost"
                               size="icon"
                               className="absolute top-0 right-0 h-6 w-6"
-                              onClick={() => setStamp("")}
+                              onClick={() => {
+                                setStamp(defaultStampUrl || "");
+                                setStampFilename(null);
+                                setIsUsingDefaultStamp(true);
+                              }}
+                              title={isUsingDefaultStamp ? "Using system default" : "Reset to default"}
                             >
                               <X className="h-4 w-4" />
                             </Button>
+                          </div>
+                        )}
+                        {!stamp && defaultStampUrl && (
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Using system default stamp
                           </div>
                         )}
                       </div>
