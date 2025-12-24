@@ -1440,11 +1440,578 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     printWindow.print();
   };
 
-  const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string, displayDate?: string) => {
+//   const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string, displayDate?: string) => {
+//     // Use provided logo or fall back to invoice logo
+//     const companyLogo = logoUrl || invoice.companyLogo;
+//     // Use provided display date or fall back to invoice date
+//     const dateToDisplay = displayDate || invoice.date;
+//     // Escape HTML special characters in text content
+//     const escapeHtml = (text: string) => {
+//       if (!text) return '';
+//       return String(text)
+//         .replace(/&/g, '&amp;')
+//         .replace(/</g, '&lt;')
+//         .replace(/>/g, '&gt;')
+//         .replace(/"/g, '&quot;')
+//         .replace(/'/g, '&#039;');
+//     };
+    
+//     return `
+//       <!DOCTYPE html>
+//       <html>
+//       <head>
+//         <meta charset="UTF-8">
+//         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+//         <title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
+//         <style>
+//           @page { 
+//             size: A4; 
+//             margin: 15mm;
+//           }
+//           * { 
+//             margin: 0; 
+//             padding: 0; 
+//             box-sizing: border-box; 
+//           }
+//           html, body {
+//             width: 100%;
+//             height: 100%;
+//           }
+//           body { 
+//             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif, Arial, Helvetica;
+//             line-height: 1.6;
+//             color: #333;
+//             font-size: 14px;
+//             background: #ffffff;
+//             position: relative;
+//             padding: 0;
+//             margin: 0;
+//           }
+//           .invoice-container { 
+//             max-width: 800px; 
+//             margin: 0 auto; 
+//             padding: 20px; 
+//             position: relative; 
+//             background: white; 
+//             min-height: 100vh;
+//           }
+//           .company-stamp {
+//             width: 130px;
+//             height: 130px;
+//             object-fit: contain;
+//             display: block;
+//           }
+//           ${invoice.status === 'paid' ? `
+//           .paid-stamp {
+//             position: absolute;
+//             top: 120px;
+//             right: 80px;
+//             width: 220px;
+//             height: 220px;
+//             border: 10px solid #22c55e;
+//             border-radius: 16px;
+//             transform: rotate(-18deg);
+//             display: flex;
+//             flex-direction: column;
+//             align-items: center;
+//             justify-content: center;
+//             opacity: 0.3;
+//             z-index: 5;
+//             pointer-events: none;
+//             box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.1);
+//           }
+//           .paid-stamp-text {
+//             font-size: 48px;
+//             font-weight: 900;
+//             color: #22c55e;
+//             letter-spacing: 6px;
+//             text-align: center;
+//             line-height: 1.1;
+//             text-transform: uppercase;
+//           }
+//           .paid-stamp-ar {
+//             font-size: 40px;
+//             font-weight: 900;
+//             color: #22c55e;
+//             margin-top: 10px;
+//             letter-spacing: 2px;
+//           }
+//           @media print {
+//             .paid-stamp {
+//               opacity: 0.35;
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//           }
+//           ` : ''}
+//           .content { position: relative; z-index: 1; }
+//           .header { 
+//             display: flex;
+//             align-items: center;
+//             justify-content: space-between;
+//             gap: 16px;
+//             padding-bottom: 20px;
+//             border-bottom: 3px solid #cbd5e1;
+//             margin-bottom: 20px;
+//           }
+//           .company-info { text-align: left; flex: 0 0 auto; }
+//           .company-logo { 
+//             max-width: 240px;
+//             height: auto;
+//             margin: 8px 0 12px 0;
+//           }
+//           .bank-details {
+//             flex: 1 1 auto;
+//             text-align: center;
+//             color: #475569;
+//             font-size: 12px;
+//             line-height: 1.4;
+//             padding: 0 8px;
+//             white-space: pre-line;
+//           }
+//           .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
+//           .bank-stamp-row {
+//             display: grid;
+//             grid-template-columns: 1fr auto 1fr;
+//             align-items: center;
+//             gap: 16px;
+//             margin-top: 20px;
+//             padding: 15px 0;
+//             border-top: 1px solid #e2e8f0;
+//             font-size: 13px;
+//             color: #333;
+//             line-height: 1.6;
+//           }
+//           .bank-stamp-row .bank-text {
+//             flex: 1 1 auto;
+//             grid-column: 1;
+//             text-align: left;
+//             white-space: pre-line;
+//           }
+//           .bank-stamp-row .bank-stamp {
+//             flex: 0 0 auto;
+//             display: flex;
+//             align-items: center;
+//             justify-content: center;
+//             grid-column: 2;
+//           }
+//           .company-name {
+//             font-size: 22px; 
+//             font-weight: bold; 
+//             color: #475569;
+//             margin-bottom: 5px;
+//           }
+//           .invoice-info { text-align: right; }
+//           .invoice-number {
+//             font-size: 22px;
+//             font-weight: bold;
+//             color: #475569;
+//             margin-bottom: 10px;
+//           }
+//           .invoice-badge {
+//             background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+//             color: white;
+//             padding: 8px 16px;
+//             border-radius: 6px;
+//             display: inline-block;
+//             margin-top: 10px;
+//             font-weight: 600;
+//           }
+//           .customer-section {
+//             display: grid;
+//             grid-template-columns: 1fr 1fr;
+//             gap: 30px;
+//             margin: 20px 0;
+//             padding: 15px;
+//             background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+//             border-radius: 8px;
+//           }
+//           .section-title {
+//             font-weight: 600;
+//             color: #64748b;
+//             margin-bottom: 10px;
+//             font-size: 16px;
+//           }
+//           .info-row {
+//             margin: 5px 0;
+//             font-size: 13px;
+//           }
+//           .label { 
+//             font-weight: 600; 
+//             color: #94a3b8;
+//             display: inline-block;
+//             min-width: 100px;
+//           }
+//           .items-table {
+//             width: 100%;
+//             border-collapse: collapse;
+//             margin: 20px 0;
+//           }
+//           .items-table th {
+//             background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+//             color: white;
+//             padding: 12px 8px;
+//             text-align: left;
+//             font-size: 13px;
+//             font-weight: 600;
+//           }
+//           .items-table th:first-child { border-radius: 8px 0 0 0; }
+//           .items-table th:last-child { border-radius: 0 8px 0 0; }
+//           .items-table td {
+//             padding: 10px 8px;
+//             border-bottom: 1px solid #e2e8f0;
+//             font-size: 13px;
+//           }
+//           .items-table tr:hover {
+//             background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+//           }
+//           .item-image {
+//             width: 50px;
+//             height: 50px;
+//             object-fit: cover;
+//             border-radius: 6px;
+//             border: 1px solid #e2e8f0;
+//             display: block;
+//             max-width: 100%;
+//             height: auto;
+//           }
+//           @media print {
+//             .item-image {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//               max-width: 50px;
+//               max-height: 50px;
+//             }
+//           }
+//           .item-desc {
+//             font-weight: 500;
+//           }
+//           .totals-section {
+//             float: right;
+//             width: 350px;
+//             margin-top: 20px;
+//             margin-bottom: 20px;
+//           }
+//           .total-row {
+//             display: flex;
+//             justify-content: space-between;
+//             padding: 8px 15px;
+//             border-bottom: 1px solid #e2e8f0;
+//           }
+//           .total-row.grand {
+//             background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+//             color: white;
+//             font-size: 18px;
+//             font-weight: bold;
+//             border-radius: 8px;
+//             margin-top: 10px;
+//           }
+//           .totals-wrapper {
+//             overflow: hidden;
+//             margin-bottom: 30px;
+//             page-break-inside: avoid;
+//             break-inside: avoid;
+//           }
+//           .footer {
+//             clear: both;
+//             margin-top: 60px;
+//             padding-top: 20px;
+//             border-top: 2px solid #e2e8f0;
+//             display: grid;
+//             grid-template-columns: 1fr auto;
+//             gap: 20px;
+//             align-items: center;
+//           }
+//           .terms {
+//             clear: both;
+//             background: #374151;
+//             padding: 15px;
+//             border-radius: 8px;
+//             margin: 20px 0;
+//             border-left: 4px solid #1f2937;
+//             max-height: none;
+//             overflow: visible;
+//             page-break-inside: avoid;
+//             page-break-after: avoid;
+//           }
+//           .terms-title {
+//             font-weight: 600;
+//             color: #f3f4f6;
+//             margin-bottom: 8px;
+//           }
+//           .terms-content {
+//             color: #e5e7eb;
+//             font-size: 13px;
+//             white-space: pre-wrap;
+//             overflow: visible;
+//             max-height: none;
+//           }
+//           .qr-section {
+//             text-align: center;
+//           }
+//           .qr-code {
+//             width: 120px;
+//             height: 120px;
+//             border: 2px solid #e2e8f0;
+//             border-radius: 8px;
+//             padding: 5px;
+//           }
+//           @media print {
+//             @page {
+//               size: A4;
+//               margin: 15mm;
+//             }
+//             html, body {
+//               width: 100%;
+//               height: auto;
+//               margin: 0;
+//               padding: 0;
+//               background: white !important;
+//             }
+//             body { 
+//               print-color-adjust: exact; 
+//               -webkit-print-color-adjust: exact; 
+//               background: white !important;
+//               font-size: 12px;
+//             }
+//             .invoice-container {
+//               max-width: 100%;
+//               margin: 0;
+//               padding: 15mm;
+//               box-shadow: none;
+//               border-radius: 0;
+//             }
+//             .stamp, .paid-stamp {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .items-table th {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .total-row.grand {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .terms {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .invoice-badge {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             /* Prevent page breaks inside important sections */
+//             .header, .customer-section, .totals-wrapper, .totals-section {
+//               page-break-inside: avoid;
+//             }
+//             .items-table tbody tr {
+//               page-break-inside: avoid;
+//             }
+//             /* Ensure footer stays together */
+//             .footer {
+//               page-break-inside: avoid;
+//             }
+//             /* Ensure notes don't overlap with totals */
+//             .totals-wrapper {
+//               clear: both;
+//               margin-bottom: 30px;
+//             }
+//             .terms {
+//               clear: both;
+//               margin-top: 30px;
+//             }
+//             /* Keep totals/terms together when possible */
+//             .totals-wrapper {
+//               page-break-inside: avoid;
+//               break-inside: avoid;
+//             }
+//             .terms {
+//               page-break-inside: avoid;
+//               break-inside: avoid;
+//               page-break-after: auto;
+//               orphans: 3;
+//               widows: 3;
+//             }
+//           }
+//         </style>
+//       </head>
+//       <body>
+//         <div class="invoice-container">
+//           ${invoice.status === 'paid' ? `
+//           <div class="paid-stamp">
+//             <div class="paid-stamp-text">✓ PAID</div>
+//             <div class="paid-stamp-ar">مدفوعة ✓</div>
+//           </div>
+//           ` : ''}
+          
+//           <div class="content">
+//             <div class="header">
+//               <div class="company-info">
+//                 ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : 
+//                   '<div class="company-name">🌸 Mana Smart Trading</div>'}
+//                 <div style="color: #64748b; font-size: 13px;">
+//                   Khobar, Saudi Arabia<br>
+//                   VAT: 311234567800003 | C.R.: 2051245473<br>
+//                   Email: sales@mana.sa | Phone: +966 556 292 500
+//                 </div>
+//               </div>
+//               <div class="invoice-info">
+//                 <div class="invoice-number">INVOICE</div>
+//                 <div style="font-size: 16px; color: #64748b; margin-bottom: 5px;">${invoice.invoiceNumber}</div>
+//                 <div style="font-size: 13px; color: #94a3b8;">Date: ${new Date(dateToDisplay).toLocaleDateString('en-GB')}</div>
+//                 ${invoice.invoiceType === 'monthly_visit' && invoice.visitDate ? `
+//                 <div style="font-size: 13px; color: #3b82f6; font-weight: 600; margin-top: 5px;">
+//                   For Monthly Visit: ${new Date(invoice.visitDate).toLocaleDateString('en-GB')}
+//                 </div>
+//                 <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
+//                   Invoice for ${new Date(invoice.visitDate).toLocaleDateString('en-GB')} monthly visit
+//                 </div>
+//                 ` : ''}
+//                 <div class="invoice-badge">TAX INVOICE</div>
+//               </div>
+//             </div>
+
+//             <div class="customer-section">
+//               <div>
+//                 <div class="section-title">Bill To</div>
+//                 <div class="info-row"><span class="label">Name:</span> ${invoice.customerName}</div>
+//                 <div class="info-row"><span class="label">Mobile:</span> ${invoice.mobile}</div>
+//                 ${invoice.location ? `<div class="info-row"><span class="label">Location:</span> ${invoice.location}</div>` : ''}
+//               </div>
+//               <div>
+//                 <div class="section-title">Tax Information</div>
+//                 ${invoice.commercialRegister ? `<div class="info-row"><span class="label">C.R.:</span> ${invoice.commercialRegister}</div>` : ''}
+//                 ${invoice.taxNumber ? `<div class="info-row"><span class="label">VAT:</span> ${invoice.taxNumber}</div>` : ''}
+//               </div>
+//             </div>
+
+//             <table class="items-table">
+//               <thead>
+//                 <tr>
+//                   <th style="width: 60px;">Image</th>
+//                   <th>Description</th>
+//                   <th style="width: 60px; text-align: center;">Qty</th>
+//                   <th style="width: 100px; text-align: center;">Price</th>
+//                   <th style="width: 80px; text-align: center;">Disc. %</th>
+//                   <th style="width: 100px; text-align: center;">Before Disc.</th>
+//                   <th style="width: 100px; text-align: center;">After Disc.</th>
+//                   <th style="width: 80px; text-align: center;">VAT 15%</th>
+//                   <th style="width: 100px; text-align: center;">Total</th>
+//                 </tr>
+//               </thead>
+//               <tbody>
+//                 ${invoice.items.map(item => `
+//                   <tr>
+//                     <td>
+//                       ${item.image ? `<img src="${item.image}" class="item-image" alt="${item.description}">` : 
+//                         '<div style="width: 50px; height: 50px; background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📦</div>'}
+//                     </td>
+//                     <td>
+//                       <div class="item-desc">${item.description}</div>
+//                     </td>
+//                     <td style="text-align: center;">${item.quantity}</td>
+//                     <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
+//                     <td style="text-align: center;">${item.discountPercent}%</td>
+//                     <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
+//                     <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
+//                     <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
+//                     <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
+//                   </tr>
+//                 `).join('')}
+//               </tbody>
+//             </table>
+
+//             <div class="totals-wrapper">
+//               <div class="totals-section">
+//                 <div class="total-row">
+//                   <span>Subtotal:</span>
+//                   <span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span>
+//                 </div>
+//                 ${invoice.totalDiscount > 0 ? `
+//                 <div class="total-row">
+//                   <span>Discount:</span>
+//                   <span>- SAR ${invoice.totalDiscount.toFixed(2)}</span>
+//                 </div>
+//                 ` : ''}
+//                 <div class="total-row">
+//                   <span>After Discount:</span>
+//                   <span>SAR ${invoice.totalAfterDiscount.toFixed(2)}</span>
+//                 </div>
+//                 <div class="total-row">
+//                   <span>VAT (15%):</span>
+//                   <span>SAR ${invoice.totalVAT.toFixed(2)}</span>
+//                 </div>
+//                 <div class="total-row grand">
+//                   <span>GRAND TOTAL:</span>
+//                   <span>SAR ${invoice.grandTotal.toFixed(2)}</span>
+//                 </div>
+//                 ${invoice.paidAmount > 0 ? `
+//                 <div class="total-row" style="color: #16a34a;">
+//                   <span>PAID AMOUNT:</span>
+//                   <span>SAR ${invoice.paidAmount.toFixed(2)}</span>
+//                 </div>
+//                 ` : ''}
+//                 ${invoice.remainingAmount > 0 ? `
+//                 <div class="total-row" style="color: #ea580c;">
+//                   <span>REMAINING:</span>
+//                   <span>SAR ${invoice.remainingAmount.toFixed(2)}</span>
+//                 </div>
+//                 ` : ''}
+//               </div>
+//             </div>
+
+//             ${invoice.notes ? `
+//             <div class="terms">
+//               <div class="terms-title">Notes</div>
+//               <div class="terms-content">${invoice.notes}</div>
+//             </div>
+//             ` : ''}
+
+//             <div class="terms">
+//               <div class="terms-title">Terms & Conditions</div>
+//               <div class="terms-content">${invoice.termsAndConditions || `• Payment is due within 30 days from the invoice date
+// • All prices include 15% VAT
+// • Bank transfer details will be provided separately
+// • Late payments subject to additional charges
+// • Please reference invoice number in payment`}</div>
+//             </div>
+
+//             <div class="bank-stamp-row">
+//               <div class="bank-text">Mana Smart Trading Company
+// Al Rajhi Bank
+// A.N.: 301000010006080269328
+// IBAN No.: SA2680000301608010269328</div>
+//               <div class="bank-stamp">
+//                 ${invoice.stamp ? `<img src="${invoice.stamp}" class="company-stamp" alt="Stamp">` : ''}
+//               </div>
+//             </div>
+
+//             <div class="footer">
+//               <div style="color: #64748b; font-size: 12px;">
+//                 <div style="font-weight: 600; color: #475569; margin-bottom: 5px;">Thank You for Your Business!</div>
+//                 If you have any questions about this invoice, please contact us at:<br>
+//                 Email: sales@mana.sa | Phone: +966 556 292 500
+//               </div>
+//               ${qrCode ? `
+//               <div class="qr-section">
+//                 <img src="${qrCode}" class="qr-code" alt="QR Code">
+//                 <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
+//               </div>
+//               ` : ''}
+//             </div>
+//           </div>
+//         </div>
+//       </body>
+//       </html>
+//     `;
+//   };
+const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string, displayDate?: string) => {
     // Use provided logo or fall back to invoice logo
     const companyLogo = logoUrl || invoice.companyLogo;
     // Use provided display date or fall back to invoice date
     const dateToDisplay = displayDate || invoice.date;
+    
     // Escape HTML special characters in text content
     const escapeHtml = (text: string) => {
       if (!text) return '';
@@ -1466,547 +2033,426 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         <style>
           @page { 
             size: A4; 
-            margin: 15mm;
+            margin: 0;
           }
           * { 
             margin: 0; 
             padding: 0; 
             box-sizing: border-box; 
           }
-          html, body {
-            width: 100%;
-            height: 100%;
-          }
           body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif, Arial, Helvetica;
-            line-height: 1.6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.4;
             color: #333;
-            font-size: 14px;
-            background: #ffffff;
-            position: relative;
-            padding: 0;
-            margin: 0;
+            font-size: 12px;
+            background: #eef2f5;
+            -webkit-print-color-adjust: exact;
           }
           .invoice-container { 
-            max-width: 800px; 
+            width: 210mm;
+            min-height: 297mm;
             margin: 0 auto; 
-            padding: 20px; 
-            position: relative; 
             background: white; 
-            min-height: 100vh;
+            position: relative;
           }
-          .company-stamp {
-            width: 130px;
-            height: 130px;
-            object-fit: contain;
-            display: block;
-          }
-          ${invoice.status === 'paid' ? `
-          .paid-stamp {
-            position: absolute;
-            top: 120px;
-            right: 80px;
-            width: 220px;
-            height: 220px;
-            border: 10px solid #22c55e;
-            border-radius: 16px;
-            transform: rotate(-18deg);
+          
+          /* Header Strip */
+          .header-strip {
+            background-color: #5d6d7e; /* Matches the slate blue in image */
+            color: white;
+            padding: 30px 40px;
             display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            opacity: 0.3;
-            z-index: 5;
-            pointer-events: none;
-            box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.1);
-          }
-          .paid-stamp-text {
-            font-size: 48px;
-            font-weight: 900;
-            color: #22c55e;
-            letter-spacing: 6px;
-            text-align: center;
-            line-height: 1.1;
-            text-transform: uppercase;
-          }
-          .paid-stamp-ar {
-            font-size: 40px;
-            font-weight: 900;
-            color: #22c55e;
-            margin-top: 10px;
-            letter-spacing: 2px;
-          }
-          @media print {
-            .paid-stamp {
-              opacity: 0.35;
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-          }
-          ` : ''}
-          .content { position: relative; z-index: 1; }
-          .header { 
-            display: flex;
-            align-items: center;
             justify-content: space-between;
-            gap: 16px;
-            padding-bottom: 20px;
-            border-bottom: 3px solid #cbd5e1;
-            margin-bottom: 20px;
+            align-items: flex-start;
           }
-          .company-info { text-align: left; flex: 0 0 auto; }
-          .company-logo { 
-            max-width: 240px;
-            height: auto;
-            margin: 8px 0 12px 0;
-          }
-          .bank-details {
-            flex: 1 1 auto;
-            text-align: center;
-            color: #475569;
-            font-size: 12px;
-            line-height: 1.4;
-            padding: 0 8px;
-            white-space: pre-line;
-          }
-          .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
-          .bank-stamp-row {
-            display: grid;
-            grid-template-columns: 1fr auto 1fr;
-            align-items: center;
-            gap: 16px;
-            margin-top: 20px;
-            padding: 15px 0;
-            border-top: 1px solid #e2e8f0;
-            font-size: 13px;
-            color: #333;
+          .company-details-top {
+            font-size: 11px;
             line-height: 1.6;
           }
-          .bank-stamp-row .bank-text {
-            flex: 1 1 auto;
-            grid-column: 1;
-            text-align: left;
-            white-space: pre-line;
-          }
-          .bank-stamp-row .bank-stamp {
-            flex: 0 0 auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            grid-column: 2;
-          }
-          .company-name {
-            font-size: 22px; 
-            font-weight: bold; 
-            color: #475569;
+          .company-name-top {
+            font-weight: bold;
+            font-size: 14px;
             margin-bottom: 5px;
           }
-          .invoice-info { text-align: right; }
-          .invoice-number {
-            font-size: 22px;
-            font-weight: bold;
-            color: #475569;
-            margin-bottom: 10px;
+          .top-logo {
+            max-width: 150px;
+            height: auto;
+            filter: brightness(0) invert(1); /* Makes logo white if it's black */
           }
-          .invoice-badge {
-            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 6px;
-            display: inline-block;
+  
+          /* Title Section */
+          .title-section {
+            text-align: center;
+            padding: 20px 0;
             margin-top: 10px;
-            font-weight: 600;
           }
-          .customer-section {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin: 20px 0;
-            padding: 15px;
-            background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
-            border-radius: 8px;
+          .title-ar {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
           }
-          .section-title {
-            font-weight: 600;
-            color: #64748b;
-            margin-bottom: 10px;
+          .title-en {
             font-size: 16px;
+            font-weight: bold;
+            color: #333;
+            text-transform: uppercase;
           }
-          .info-row {
-            margin: 5px 0;
+  
+          /* Info Boxes */
+          .info-grid {
+            display: flex;
+            justify-content: space-between;
+            padding: 0 40px;
+            margin-bottom: 25px;
+            gap: 20px;
+          }
+          .info-box {
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            padding: 0;
+            flex: 1;
+          }
+          .info-box-header {
+            padding: 8px 15px;
+            border-bottom: 1px solid #e2e8f0;
+            font-weight: 600;
+            color: #555;
+            display: flex;
+            justify-content: space-between;
+            background: #f8fafc;
+            font-size: 11px;
+          }
+          .info-box-content {
+            padding: 15px;
+          }
+          .customer-row {
+            margin-bottom: 4px;
+            font-weight: bold;
             font-size: 13px;
           }
-          .label { 
-            font-weight: 600; 
-            color: #94a3b8;
-            display: inline-block;
-            min-width: 100px;
+          .detail-row {
+            font-size: 12px;
+            margin-bottom: 4px;
+            color: #444;
+          }
+          .detail-row span {
+             font-weight: 600;
+          }
+          .invoice-number-large {
+             font-weight: bold;
+             font-size: 14px;
+             text-align: right;
+          }
+          .invoice-date-large {
+             text-align: right;
+             font-size: 12px;
+          }
+  
+          /* Table */
+          .table-container {
+             padding: 0 40px;
           }
           .items-table {
             width: 100%;
             border-collapse: collapse;
-            margin: 20px 0;
+            margin-bottom: 20px;
           }
           .items-table th {
-            background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+            background-color: #5d6d7e; /* Matches header strip */
             color: white;
-            padding: 12px 8px;
+            padding: 10px 5px;
             text-align: left;
-            font-size: 13px;
-            font-weight: 600;
+            font-size: 11px;
+            font-weight: normal;
           }
-          .items-table th:first-child { border-radius: 8px 0 0 0; }
-          .items-table th:last-child { border-radius: 0 8px 0 0; }
+          .items-table th.center { text-align: center; }
+          .items-table th.right { text-align: right; }
+          
           .items-table td {
-            padding: 10px 8px;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 13px;
-          }
-          .items-table tr:hover {
-            background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+            padding: 10px 5px;
+            border-bottom: 1px solid #eee;
+            vertical-align: middle;
+            font-size: 11px;
+            color: #333;
           }
           .item-image {
-            width: 50px;
-            height: 50px;
-            object-fit: cover;
-            border-radius: 6px;
-            border: 1px solid #e2e8f0;
-            display: block;
-            max-width: 100%;
-            height: auto;
+            width: 30px; 
+            height: 30px; 
+            object-fit: contain;
           }
-          @media print {
-            .item-image {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-              max-width: 50px;
-              max-height: 50px;
-            }
+  
+          /* Bottom Section */
+          .bottom-section {
+            display: flex;
+            justify-content: space-between;
+            padding: 0 40px;
+            margin-top: 10px;
           }
-          .item-desc {
-            font-weight: 500;
+          .qr-container {
+            width: 150px;
           }
-          .totals-section {
-            float: right;
+          .qr-image {
+            width: 120px;
+            height: 120px;
+            border: 1px solid #eee;
+            padding: 5px;
+          }
+          
+          .totals-container {
             width: 350px;
-            margin-top: 20px;
-            margin-bottom: 20px;
           }
           .total-row {
             display: flex;
             justify-content: space-between;
-            padding: 8px 15px;
-            border-bottom: 1px solid #e2e8f0;
-          }
-          .total-row.grand {
-            background: linear-gradient(135deg, #64748b 0%, #475569 100%);
-            color: white;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 8px;
-            margin-top: 10px;
-          }
-          .totals-wrapper {
-            overflow: hidden;
-            margin-bottom: 30px;
-            page-break-inside: avoid;
-            break-inside: avoid;
-          }
-          .footer {
-            clear: both;
-            margin-top: 60px;
-            padding-top: 20px;
-            border-top: 2px solid #e2e8f0;
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 20px;
-            align-items: center;
-          }
-          .terms {
-            clear: both;
-            background: #374151;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 20px 0;
-            border-left: 4px solid #1f2937;
-            max-height: none;
-            overflow: visible;
-            page-break-inside: avoid;
-            page-break-after: avoid;
-          }
-          .terms-title {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+            font-size: 12px;
             font-weight: 600;
-            color: #f3f4f6;
-            margin-bottom: 8px;
+            color: #555;
           }
-          .terms-content {
-            color: #e5e7eb;
-            font-size: 13px;
-            white-space: pre-wrap;
-            overflow: visible;
-            max-height: none;
+          .total-row.discount {
+            color: #dc2626; /* Red for discount */
           }
-          .qr-section {
+          .grand-total {
+            background-color: #5d6d7e;
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            font-weight: bold;
+            font-size: 14px;
+            border-radius: 4px;
+          }
+  
+          /* Footer */
+          .footer {
+            margin-top: 40px;
+            padding: 0 40px 40px 40px;
             text-align: center;
           }
-          .qr-code {
-            width: 120px;
-            height: 120px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 5px;
+          .company-footer-info {
+            font-weight: bold;
+            font-size: 12px;
+            margin-bottom: 5px;
+            color: #333;
           }
+          .company-footer-details {
+            font-size: 10px;
+            color: #666;
+            margin-bottom: 15px;
+            line-height: 1.4;
+          }
+          .thank-you {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 20px;
+          }
+          
+          .bank-section {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f8fafc;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: left;
+          }
+          .bank-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 11px;
+          }
+          .bank-text {
+            font-size: 10px;
+            color: #555;
+            line-height: 1.5;
+          }
+          .stamp-container {
+            width: 100px;
+          }
+          .stamp-img {
+            width: 100px;
+            height: auto;
+            opacity: 0.9;
+          }
+  
+          /* Sub-text inside th/td for Arabic */
+          .sub-label {
+             display: block;
+             font-size: 9px;
+             opacity: 0.8;
+             margin-top: 2px;
+          }
+  
           @media print {
-            @page {
-              size: A4;
-              margin: 15mm;
+            body { 
+              background: white; 
+              -webkit-print-color-adjust: exact; 
             }
-            html, body {
+            .invoice-container {
               width: 100%;
               height: auto;
               margin: 0;
               padding: 0;
-              background: white !important;
             }
-            body { 
-              print-color-adjust: exact; 
-              -webkit-print-color-adjust: exact; 
-              background: white !important;
-              font-size: 12px;
-            }
-            .invoice-container {
-              max-width: 100%;
-              margin: 0;
-              padding: 15mm;
-              box-shadow: none;
-              border-radius: 0;
-            }
-            .stamp, .paid-stamp {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .items-table th {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .total-row.grand {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .terms {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .invoice-badge {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            /* Prevent page breaks inside important sections */
-            .header, .customer-section, .totals-wrapper, .totals-section {
-              page-break-inside: avoid;
-            }
-            .items-table tbody tr {
-              page-break-inside: avoid;
-            }
-            /* Ensure footer stays together */
-            .footer {
-              page-break-inside: avoid;
-            }
-            /* Ensure notes don't overlap with totals */
-            .totals-wrapper {
-              clear: both;
-              margin-bottom: 30px;
-            }
-            .terms {
-              clear: both;
-              margin-top: 30px;
-            }
-            /* Keep totals/terms together when possible */
-            .totals-wrapper {
-              page-break-inside: avoid;
-              break-inside: avoid;
-            }
-            .terms {
-              page-break-inside: avoid;
-              break-inside: avoid;
-              page-break-after: auto;
-              orphans: 3;
-              widows: 3;
+            .header-strip, .items-table th, .grand-total {
+               print-color-adjust: exact;
+               -webkit-print-color-adjust: exact;
             }
           }
         </style>
       </head>
       <body>
         <div class="invoice-container">
-          ${invoice.status === 'paid' ? `
-          <div class="paid-stamp">
-            <div class="paid-stamp-text">✓ PAID</div>
-            <div class="paid-stamp-ar">مدفوعة ✓</div>
-          </div>
-          ` : ''}
           
-          <div class="content">
-            <div class="header">
-              <div class="company-info">
-                ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : 
-                  '<div class="company-name">🌸 Mana Smart Trading</div>'}
-                <div style="color: #64748b; font-size: 13px;">
-                  Khobar, Saudi Arabia<br>
-                  VAT: 311234567800003 | C.R.: 2051245473<br>
-                  Email: sales@mana.sa | Phone: +966 556 292 500
-                </div>
+          <div class="header-strip">
+            <div class="company-details-top">
+              <div class="company-name-top">Mana Smart Trading Company | شركة مانا الذكية للتجارة</div>
+              <div>Tax Number / الرقم الضريبي: ${invoice.taxNumber || '311510923100003'}</div>
+              <div>Commercial Reg / السجل التجاري: ${invoice.commercialRegister || '2051245473'}</div>
+              <div>Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417</div>
+            </div>
+            <div class="logo-wrapper">
+               ${companyLogo ? `<img src="${companyLogo}" class="top-logo" alt="Logo">` : '<h1 style="color:white; font-weight:300; letter-spacing: 2px;">MĀNA</h1>'}
+            </div>
+          </div>
+  
+          <div class="title-section">
+            <div class="title-ar">فاتورة ضريبية</div>
+            <div class="title-en">TAX INVOICE</div>
+          </div>
+  
+          <div class="info-grid">
+            <div class="info-box">
+              <div class="info-box-header">
+                <span>BILL TO</span>
+                <span>الفاتورة إلى</span>
               </div>
-              <div class="invoice-info">
-                <div class="invoice-number">INVOICE</div>
-                <div style="font-size: 16px; color: #64748b; margin-bottom: 5px;">${invoice.invoiceNumber}</div>
-                <div style="font-size: 13px; color: #94a3b8;">Date: ${new Date(dateToDisplay).toLocaleDateString('en-GB')}</div>
-                ${invoice.invoiceType === 'monthly_visit' && invoice.visitDate ? `
-                <div style="font-size: 13px; color: #3b82f6; font-weight: 600; margin-top: 5px;">
-                  For Monthly Visit: ${new Date(invoice.visitDate).toLocaleDateString('en-GB')}
-                </div>
-                <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
-                  Invoice for ${new Date(invoice.visitDate).toLocaleDateString('en-GB')} monthly visit
-                </div>
-                ` : ''}
-                <div class="invoice-badge">TAX INVOICE</div>
+              <div class="info-box-content">
+                <div class="customer-row">${escapeHtml(invoice.customerName)}</div>
+                <div class="detail-row"><span>Mobile / الجوال:</span> ${escapeHtml(invoice.mobile)}</div>
+                ${invoice.location ? `<div class="detail-row"><span>Location / الموقع:</span> ${escapeHtml(invoice.location)}</div>` : ''}
+                ${invoice.commercialRegister ? `<div class="detail-row"><span>CR / السجل التجاري:</span> ${escapeHtml(invoice.commercialRegister)}</div>` : ''}
+                ${invoice.taxNumber ? `<div class="detail-row"><span>Tax Number / الرقم الضريبي:</span> ${escapeHtml(invoice.taxNumber)}</div>` : ''}
               </div>
             </div>
-
-            <div class="customer-section">
-              <div>
-                <div class="section-title">Bill To</div>
-                <div class="info-row"><span class="label">Name:</span> ${invoice.customerName}</div>
-                <div class="info-row"><span class="label">Mobile:</span> ${invoice.mobile}</div>
-                ${invoice.location ? `<div class="info-row"><span class="label">Location:</span> ${invoice.location}</div>` : ''}
+  
+            <div class="info-box">
+              <div class="info-box-header">
+                <span>INVOICE DETAILS</span>
+                <span>تفاصيل الفاتورة</span>
               </div>
-              <div>
-                <div class="section-title">Tax Information</div>
-                ${invoice.commercialRegister ? `<div class="info-row"><span class="label">C.R.:</span> ${invoice.commercialRegister}</div>` : ''}
-                ${invoice.taxNumber ? `<div class="info-row"><span class="label">VAT:</span> ${invoice.taxNumber}</div>` : ''}
+              <div class="info-box-content">
+                 <div class="invoice-number-large">#${escapeHtml(invoice.invoiceNumber)}</div>
+                 <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                    <span style="font-size:11px; color:#666;">Date / التاريخ</span>
+                    <span style="font-weight:bold;">${new Date(dateToDisplay).toISOString().split('T')[0]}</span>
+                 </div>
               </div>
             </div>
-
+          </div>
+  
+          <div style="padding: 0 40px; margin-bottom: 0;">
+             <div style="background: #e2e8f0; padding: 5px 10px; font-weight:bold; color: #5d6d7e; font-size: 11px;">
+                INVOICE ITEMS / عناصر الفاتورة
+             </div>
+          </div>
+  
+          <div class="table-container">
             <table class="items-table">
               <thead>
                 <tr>
-                  <th style="width: 60px;">Image</th>
-                  <th>Description</th>
-                  <th style="width: 60px; text-align: center;">Qty</th>
-                  <th style="width: 100px; text-align: center;">Price</th>
-                  <th style="width: 80px; text-align: center;">Disc. %</th>
-                  <th style="width: 100px; text-align: center;">Before Disc.</th>
-                  <th style="width: 100px; text-align: center;">After Disc.</th>
-                  <th style="width: 80px; text-align: center;">VAT 15%</th>
-                  <th style="width: 100px; text-align: center;">Total</th>
+                  <th style="width: 50px; text-align: center;">Image<br>صورة</th>
+                  <th>Description<br>الوصف</th>
+                  <th class="center" style="width: 50px;">Qty<br>الكمية</th>
+                  <th class="center">Unit Price<br>سعر الوحدة</th>
+                  <th class="center">Disc%<br>الخصم</th>
+                  <th class="center">After Disc<br>بعد الخصم</th>
+                  <th class="center">Subtotal<br>الفرعي</th>
+                  <th class="center">VAT<br>الضريبة</th>
+                  <th class="right">Total<br>المجموع</th>
                 </tr>
               </thead>
               <tbody>
                 ${invoice.items.map(item => `
                   <tr>
-                    <td>
-                      ${item.image ? `<img src="${item.image}" class="item-image" alt="${item.description}">` : 
-                        '<div style="width: 50px; height: 50px; background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📦</div>'}
+                    <td style="text-align: center;">
+                       ${item.image ? `<img src="${item.image}" class="item-image">` : ''}
                     </td>
-                    <td>
-                      <div class="item-desc">${item.description}</div>
-                    </td>
-                    <td style="text-align: center;">${item.quantity}</td>
-                    <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
-                    <td style="text-align: center;">${item.discountPercent}%</td>
-                    <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
-                    <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
-                    <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
-                    <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
+                    <td>${escapeHtml(item.description)}</td>
+                    <td class="center">${item.quantity}</td>
+                    <td class="center">${item.unitPrice.toFixed(2)}</td>
+                    <td class="center">${item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
+                    <td class="center">${(item.unitPrice * (1 - item.discountPercent/100)).toFixed(2)}</td>
+                    <td class="center">${item.subtotal.toFixed(2)}</td>
+                    <td class="center">${item.vat.toFixed(2)}</td>
+                    <td class="right" style="font-weight:bold;">${item.total.toFixed(2)}</td>
                   </tr>
                 `).join('')}
               </tbody>
             </table>
-
-            <div class="totals-wrapper">
-              <div class="totals-section">
-                <div class="total-row">
-                  <span>Subtotal:</span>
-                  <span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span>
-                </div>
-                ${invoice.totalDiscount > 0 ? `
-                <div class="total-row">
-                  <span>Discount:</span>
-                  <span>- SAR ${invoice.totalDiscount.toFixed(2)}</span>
-                </div>
-                ` : ''}
-                <div class="total-row">
-                  <span>After Discount:</span>
-                  <span>SAR ${invoice.totalAfterDiscount.toFixed(2)}</span>
-                </div>
-                <div class="total-row">
-                  <span>VAT (15%):</span>
-                  <span>SAR ${invoice.totalVAT.toFixed(2)}</span>
-                </div>
-                <div class="total-row grand">
-                  <span>GRAND TOTAL:</span>
-                  <span>SAR ${invoice.grandTotal.toFixed(2)}</span>
-                </div>
-                ${invoice.paidAmount > 0 ? `
-                <div class="total-row" style="color: #16a34a;">
-                  <span>PAID AMOUNT:</span>
-                  <span>SAR ${invoice.paidAmount.toFixed(2)}</span>
-                </div>
-                ` : ''}
-                ${invoice.remainingAmount > 0 ? `
-                <div class="total-row" style="color: #ea580c;">
-                  <span>REMAINING:</span>
-                  <span>SAR ${invoice.remainingAmount.toFixed(2)}</span>
-                </div>
-                ` : ''}
-              </div>
+          </div>
+  
+          <div class="bottom-section">
+            <div class="qr-container">
+              ${qrCode ? `<img src="${qrCode}" class="qr-image" alt="QR Code">` : ''}
             </div>
-
-            ${invoice.notes ? `
-            <div class="terms">
-              <div class="terms-title">Notes</div>
-              <div class="terms-content">${invoice.notes}</div>
-            </div>
-            ` : ''}
-
-            <div class="terms">
-              <div class="terms-title">Terms & Conditions</div>
-              <div class="terms-content">${invoice.termsAndConditions || `• Payment is due within 30 days from the invoice date
-• All prices include 15% VAT
-• Bank transfer details will be provided separately
-• Late payments subject to additional charges
-• Please reference invoice number in payment`}</div>
-            </div>
-
-            <div class="bank-stamp-row">
-              <div class="bank-text">Mana Smart Trading Company
-Al Rajhi Bank
-A.N.: 301000010006080269328
-IBAN No.: SA2680000301608010269328</div>
-              <div class="bank-stamp">
-                ${invoice.stamp ? `<img src="${invoice.stamp}" class="company-stamp" alt="Stamp">` : ''}
+  
+            <div class="totals-container">
+              <div class="total-row">
+                <span>Total Before Discount <span style="font-size:10px; color:#888;">/ قبل الخصم</span></span>
+                <span>${invoice.totalBeforeDiscount.toFixed(2)} SAR</span>
               </div>
-            </div>
-
-            <div class="footer">
-              <div style="color: #64748b; font-size: 12px;">
-                <div style="font-weight: 600; color: #475569; margin-bottom: 5px;">Thank You for Your Business!</div>
-                If you have any questions about this invoice, please contact us at:<br>
-                Email: sales@mana.sa | Phone: +966 556 292 500
+              <div class="total-row discount">
+                <span>Total Discount <span style="font-size:10px; color:#faa;">/ الخصم</span></span>
+                <span>-${invoice.totalDiscount.toFixed(2)} SAR</span>
               </div>
-              ${qrCode ? `
-              <div class="qr-section">
-                <img src="${qrCode}" class="qr-code" alt="QR Code">
-                <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
+              <div class="total-row">
+                <span>After Discount <span style="font-size:10px; color:#888;">/ بعد الخصم</span></span>
+                <span>${invoice.totalAfterDiscount.toFixed(2)} SAR</span>
               </div>
-              ` : ''}
+              <div class="total-row">
+                <span>VAT (15%) <span style="font-size:10px; color:#888;">/ الضريبة</span></span>
+                <span>${invoice.totalVAT.toFixed(2)} SAR</span>
+              </div>
+              <div class="grand-total">
+                <span>GRAND TOTAL / المجموع الإجمالي</span>
+                <span>${invoice.grandTotal.toFixed(2)} SAR</span>
+              </div>
             </div>
           </div>
+  
+          <div class="footer">
+            <div class="company-footer-info">Mana Smart Trading Company - شركة مانا الذكية للتجارة</div>
+            <div class="company-footer-details">
+              Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417<br>
+              Tax Number: ${invoice.taxNumber || '311510923100003'} | CR: ${invoice.commercialRegister || '2051245473'}
+            </div>
+            
+            <div class="thank-you">Thank you for your business! | !شكرا لتعاملكم معنا</div>
+  
+            <div class="bank-section">
+              <div>
+                <div class="bank-title">💳 Bank Details / معلومات البنك</div>
+                <div class="bank-title" style="color: #333;">Mana Smart Trading Company</div>
+                <div class="bank-text">شركة مانا الذكية للتجارة</div>
+                <div class="bank-text">مصرف الراجحي | Al Rajhi Bank</div>
+                <div class="bank-text">Account Number: 301000010006080269328</div>
+                <div class="bank-text">IBAN: SA2680000301608010269328</div>
+              </div>
+              <div class="stamp-container">
+                 ${invoice.stamp ? `<img src="${invoice.stamp}" class="stamp-img" alt="Stamp">` : 
+                   `<div style="width:100px; height:100px; border:2px dashed #ccc; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ccc; transform: rotate(-15deg);">Stamp</div>`}
+              </div>
+            </div>
+          </div>
+  
         </div>
       </body>
       </html>
     `;
   };
-
 
 
   // Save settings when they change

@@ -1184,11 +1184,903 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     printWindow.print();
   };
 
+//   const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null, stampUrl?: string | null, qrCode?: string, displayDate?: string) => {
+//     // Use provided logo or fall back to quotation logo
+//     const companyLogo = logoUrl || quotation.companyLogo;
+//     // Use provided stamp or fall back to quotation stamp
+//     const stampToRender = stampUrl || quotation.stamp;
+    
+//     return `
+//       <!DOCTYPE html>
+//       <html>
+//       <head>
+//         <meta charset="UTF-8">
+//         <title>Quotation ${quotation.quotationNumber}</title>
+//         <style>
+//           @page { size: A4; margin: 15mm; }
+//           * { margin: 0; padding: 0; box-sizing: border-box; }
+//           body { 
+//             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+//             line-height: 1.6;
+//             color: #333;
+//             font-size: 14px;
+//             background: linear-gradient(to bottom, #f3f4f6 0%, #ffffff 100%);
+//             position: relative;
+//           }
+//           .quotation-container { max-width: 800px; margin: 0 auto; padding: 20px; position: relative; background: white; border-radius: 8px; }
+//           .company-stamp {
+//             width: 130px;
+//             height: 130px;
+//             object-fit: contain;
+//             display: block;
+//           }
+//           .content { position: relative; z-index: 1; }
+//           .header { 
+//             display: flex;
+//             align-items: center;
+//             justify-content: space-between;
+//             gap: 16px;
+//             padding-bottom: 20px;
+//             border-bottom: 3px solid #cbd5e1;
+//             margin-bottom: 20px;
+//           }
+//           .company-info { text-align: left; flex: 0 0 auto; }
+//           .company-logo { 
+//             max-width: 240px;
+//             height: auto;
+//             margin: 8px 0 12px 0;
+//           }
+//           .bank-details {
+//             flex: 1 1 auto;
+//             text-align: center;
+//             color: #475569;
+//             font-size: 12px;
+//             line-height: 1.4;
+//             padding: 0 8px;
+//             white-space: pre-line;
+//           }
+//           .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
+//           .bank-stamp-row {
+//             display: grid;
+//             grid-template-columns: 1fr auto 1fr;
+//             align-items: center;
+//             gap: 16px;
+//             margin-top: 20px;
+//             padding: 15px 0;
+//             border-top: 1px solid #e2e8f0;
+//             font-size: 13px;
+//             color: #333;
+//             line-height: 1.6;
+//           }
+//           .bank-stamp-row .bank-text {
+//             flex: 1 1 auto;
+//             grid-column: 1;
+//             text-align: left;
+//             white-space: pre-line;
+//           }
+//           .bank-stamp-row .bank-stamp {
+//             flex: 0 0 auto;
+//             display: flex;
+//             align-items: center;
+//             justify-content: center;
+//             grid-column: 2;
+//           }
+//           .company-name {
+//             font-size: 22px; 
+//             font-weight: bold; 
+//             color: #475569;
+//             margin-bottom: 5px;
+//           }
+//           .quotation-info { text-align: right; }
+//           .quotation-number {
+//             font-size: 22px;
+//             font-weight: bold;
+//             color: #475569;
+//             margin-bottom: 10px;
+//           }
+//           .validity {
+//             background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+//             padding: 10px;
+//             border-radius: 6px;
+//             border-left: 4px solid #f59e0b;
+//             margin-top: 10px;
+//             font-size: 12px;
+//           }
+//           .customer-section {
+//             display: grid;
+//             grid-template-columns: 1fr 1fr;
+//             gap: 30px;
+//             margin: 20px 0;
+//             padding: 15px;
+//             background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+//             border-radius: 8px;
+//           }
+//           .section-title {
+//             font-weight: 600;
+//             color: #64748b;
+//             margin-bottom: 10px;
+//             font-size: 16px;
+//           }
+//           .info-row {
+//             margin: 5px 0;
+//             font-size: 13px;
+//           }
+//           .label { 
+//             font-weight: 600; 
+//             color: #94a3b8;
+//             display: inline-block;
+//             min-width: 100px;
+//           }
+//           .items-table {
+//             width: 100%;
+//             border-collapse: collapse;
+//             margin: 20px 0;
+//           }
+//           .items-table th {
+//             background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
+//             color: #1e293b;
+//             padding: 12px 8px;
+//             text-align: left;
+//             font-size: 13px;
+//             font-weight: 600;
+//           }
+//           .items-table td {
+//             padding: 10px 8px;
+//             border-bottom: 1px solid #e2e8f0;
+//             font-size: 13px;
+//           }
+//           .items-table tr:hover {
+//             background: #f8fafc;
+//           }
+//           .item-image {
+//             width: 50px;
+//             height: 50px;
+//             object-fit: cover;
+//             border-radius: 6px;
+//             border: 1px solid #e2e8f0;
+//             display: block;
+//             max-width: 50px;
+//             max-height: 50px;
+//           }
+//           @media print {
+//             .item-image {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//               width: 50px !important;
+//               height: 50px !important;
+//               max-width: 50px !important;
+//               max-height: 50px !important;
+//               object-fit: cover !important;
+//               display: block !important;
+//             }
+//           }
+//           .item-desc {
+//             font-weight: 500;
+//           }
+//           .totals-wrapper {
+//             overflow: hidden;
+//             margin-bottom: 30px;
+//           }
+//           .totals-section {
+//             float: right;
+//             width: 350px;
+//             margin-top: 20px;
+//             margin-bottom: 20px;
+//           }
+//           .total-row {
+//             display: flex;
+//             justify-content: space-between;
+//             padding: 8px 15px;
+//             border-bottom: 1px solid #e2e8f0;
+//           }
+//           .total-row.grand {
+//             background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+//             color: white;
+//             font-size: 18px;
+//             font-weight: bold;
+//             border-radius: 8px;
+//             margin-top: 10px;
+//           }
+//           .terms {
+//             clear: both;
+//             background: #374151;
+//             padding: 15px;
+//             border-radius: 8px;
+//             margin: 20px 0;
+//             border-left: 4px solid #1f2937;
+//             max-height: none;
+//             overflow: visible;
+//             page-break-inside: avoid;
+//             page-break-after: avoid;
+//           }
+//           .terms-title {
+//             font-weight: 600;
+//             color: #f3f4f6;
+//             margin-bottom: 8px;
+//           }
+//           .terms-content {
+//             color: #e5e7eb;
+//             font-size: 13px;
+//             white-space: pre-wrap;
+//             overflow: visible;
+//             max-height: none;
+//           }
+//           .footer {
+//             clear: both;
+//             margin-top: 40px;
+//             padding-top: 20px;
+//             border-top: 2px solid #e2e8f0;
+//             display: grid;
+//             grid-template-columns: 1fr auto;
+//             gap: 20px;
+//             align-items: center;
+//             font-size: 11px;
+//             color: #64748b;
+//           }
+//           .qr-section {
+//             text-align: center;
+//           }
+//           .qr-code {
+//             width: 120px;
+//             height: 120px;
+//             border: 2px solid #e2e8f0;
+//             border-radius: 8px;
+//             padding: 5px;
+//           }
+//           @media print {
+//             @page {
+//               size: A4;
+//               margin: 15mm;
+//             }
+//             html, body {
+//               width: 100%;
+//               height: auto;
+//               margin: 0;
+//               padding: 0;
+//               background: white !important;
+//             }
+//             body { 
+//               print-color-adjust: exact; 
+//               -webkit-print-color-adjust: exact; 
+//               background: white !important;
+//               font-size: 12px;
+//             }
+//             .quotation-container {
+//               max-width: 100%;
+//               margin: 0;
+//               padding: 15mm;
+//               box-shadow: none;
+//               border-radius: 0;
+//             }
+//             .stamp {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .items-table th {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .total-row.grand {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             .terms {
+//               print-color-adjust: exact;
+//               -webkit-print-color-adjust: exact;
+//             }
+//             /* Prevent page breaks inside important sections */
+//             .header, .customer-section, .totals-wrapper, .totals-section {
+//               page-break-inside: avoid;
+//             }
+//             .items-table tbody tr {
+//               page-break-inside: avoid;
+//             }
+//             /* Ensure footer stays together */
+//             .footer {
+//               page-break-inside: avoid;
+//             }
+//             /* Ensure notes don't overlap with totals */
+//             .totals-wrapper {
+//               clear: both;
+//               margin-bottom: 30px;
+//             }
+//             .terms {
+//               clear: both;
+//               margin-top: 30px;
+//             }
+//           }
+//         </style>
+//       </head>
+//       <body>
+//         <div class="quotation-container">
+//           <div class="content">
+//             <div class="header">
+//               <div class="company-info">
+//                 ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : ''}
+//                 <div class="company-name">Mana Smart Trading</div>
+//                 <div style="margin-top: 10px; color: #64748b; font-size: 12px;">
+//                   <div>VAT: 311234567800003</div>
+//                   <div>C.R.: 1010567890</div>
+//                   <div>Riyadh, Saudi Arabia</div>
+//                 </div>
+//               </div>
+//               <div class="quotation-info">
+//                 <div class="quotation-number">QUOTATION</div>
+//                 <div style="margin-top: 10px;">
+//                   <div style="font-weight: 600; color: #475569;">${quotation.quotationNumber}</div>
+//                   <div style="color: #64748b; font-size: 12px;">Date: ${new Date(displayDate || quotation.date).toLocaleDateString('en-GB')}</div>
+//                   <div class="validity">
+//                     <strong>Valid Until:</strong> ${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}
+//                   </div>
+//                 </div>
+//               </div>
+//             </div>
+
+//             <div class="customer-section">
+//               <div>
+//                 <div class="section-title">Prepared For</div>
+//                 <div class="info-row"><span class="label">Name:</span> ${quotation.customerName}</div>
+//                 <div class="info-row"><span class="label">Mobile:</span> ${quotation.mobile}</div>
+//                 ${quotation.location ? `<div class="info-row"><span class="label">Location:</span> ${quotation.location}</div>` : ''}
+//               </div>
+//               <div>
+//                 <div class="section-title">Tax Information</div>
+//                 <div class="info-row"><span class="label">C.R.:</span> ${quotation.commercialRegister || 'N/A'}</div>
+//                 <div class="info-row"><span class="label">VAT:</span> ${quotation.taxNumber || 'N/A'}</div>
+//               </div>
+//             </div>
+
+//             <table class="items-table">
+//               <thead>
+//                 <tr>
+//                   <th style="width: 60px;">Image</th>
+//                   <th>Description</th>
+//                   <th style="width: 80px; text-align: center;">Qty</th>
+//                   <th style="width: 100px; text-align: right;">Price</th>
+//                   <th style="width: 80px; text-align: center;">Disc. %</th>
+//                   <th style="width: 100px; text-align: center;">Before Disc.</th>
+//                   <th style="width: 100px; text-align: center;">After Disc.</th>
+//                   <th style="width: 80px; text-align: right;">VAT 15%</th>
+//                   <th style="width: 100px; text-align: right;">Total</th>
+//                 </tr>
+//               </thead>
+//               <tbody>
+//                 ${quotation.items.map(item => {
+//                   const imageSrc = item.image || '';
+//                   const hasImage = imageSrc && imageSrc.trim() !== '';
+//                   const escapedDescription = (item.description || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+//                   // Build image HTML - base64 data URLs are safe to embed directly
+//                   let imageHtml = '';
+//                   if (hasImage) {
+//                     // Base64 data URLs can be embedded directly in HTML
+//                     // The imageSrc is already a valid data URL string
+//                     imageHtml = '<img src="' + imageSrc + '" class="item-image" alt="' + escapedDescription + '" style="max-width: 50px; max-height: 50px; object-fit: cover; width: 50px; height: 50px;">';
+//                   } else {
+//                     imageHtml = '<div style="width: 50px; height: 50px; background: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📦</div>';
+//                   }
+//                   return `
+//                   <tr>
+//                     <td>
+//                       ${imageHtml}
+//                     </td>
+//                     <td>
+//                       <div class="item-desc">${escapedDescription}</div>
+//                     </td>
+//                     <td style="text-align: center;">${item.quantity}</td>
+//                     <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
+//                     <td style="text-align: center;">${item.discountPercent}%</td>
+//                     <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
+//                     <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
+//                     <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
+//                     <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
+//                   </tr>
+//                 `;
+//                 }).join('')}
+//               </tbody>
+//             </table>
+
+//             <div class="totals-wrapper">
+//               <div class="totals-section">
+//                 <div class="total-row">
+//                   <span>Subtotal:</span>
+//                   <span>SAR ${quotation.totalBeforeDiscount.toFixed(2)}</span>
+//                 </div>
+//                 ${quotation.totalDiscount > 0 ? `
+//                 <div class="total-row">
+//                   <span>Discount:</span>
+//                   <span>- SAR ${quotation.totalDiscount.toFixed(2)}</span>
+//                 </div>
+//                 ` : ''}
+//                 <div class="total-row">
+//                   <span>After Discount:</span>
+//                   <span>SAR ${quotation.totalAfterDiscount.toFixed(2)}</span>
+//                 </div>
+//                 <div class="total-row">
+//                   <span>VAT (15%):</span>
+//                   <span>SAR ${quotation.totalVAT.toFixed(2)}</span>
+//                 </div>
+//                 <div class="total-row grand">
+//                   <span>GRAND TOTAL:</span>
+//                   <span>SAR ${quotation.grandTotal.toFixed(2)}</span>
+//                 </div>
+//               </div>
+//             </div>
+
+//             ${quotation.notes ? `
+//             <div class="terms" style="margin-top: 30px;">
+//               <div class="terms-title">Notes</div>
+//               <div class="terms-content">${quotation.notes}</div>
+//             </div>
+//             ` : ''}
+
+//             <div class="terms">
+//               <div class="terms-title">Terms & Conditions</div>
+//               <div class="terms-content">${quotation.termsAndConditions || `• This quotation is valid for ${Math.ceil((new Date(quotation.expiryDate).getTime() - new Date(quotation.date).getTime()) / (1000 * 60 * 60 * 24))} days from the issue date
+// • All prices include 15% VAT
+// • Payment terms: 50% advance, 50% upon completion
+// • Delivery within 7-10 business days
+// • Prices subject to change after expiry
+// • Installation and setup included
+// • One year warranty on all devices`}</div>
+//             </div>
+
+//             <div class="bank-stamp-row">
+//               <div class="bank-text">Mana Smart Trading Company
+// Al Rajhi Bank
+// A.N.: 301000010006080269328
+// IBAN No.: SA2680000301608010269328</div>
+//               <div class="bank-stamp">
+//                 ${stampToRender ? `<img src="${stampToRender}" class="company-stamp" alt="Stamp">` : ''}
+//               </div>
+//             </div>
+
+//             <div class="footer">
+//               <div>
+//                 <div style="font-weight: 600; margin-bottom: 10px;">Thank you for considering our quotation!</div>
+//                 <div>
+//                   For any questions, please contact us:<br>
+//                   Phone: +966 50 123 4567 | Email: info@manatrading.sa
+//                 </div>
+//               </div>
+//               ${qrCode ? `
+//               <div class="qr-section">
+//                 <img src="${qrCode}" class="qr-code" alt="QR Code">
+//                 <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
+//               </div>
+//               ` : ''}
+//             </div>
+//           </div>
+//         </div>
+//       </body>
+//       </html>
+//     `;
+//   };
+
+// const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null, stampUrl?: string | null, qrCode?: string, displayDate?: string) => {
+//     // Use provided logo or fall back to quotation logo
+//     const companyLogo = logoUrl || quotation.companyLogo;
+//     // Use provided stamp or fall back to quotation stamp
+//     const stampToRender = stampUrl || quotation.stamp;
+    
+//     // Formatting helpers
+//     const formatDate = (dateString: string | Date) => new Date(dateString).toLocaleDateString('en-GB');
+//     const formatCurrency = (amount: number) => amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    
+//     return `
+//       <!DOCTYPE html>
+//       <html>
+//       <head>
+//         <meta charset="UTF-8">
+//         <title>Quotation ${quotation.quotationNumber}</title>
+//         <style>
+//           @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+          
+//           @page { size: A4; margin: 0; }
+          
+//           * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          
+//           body { 
+//             font-family: 'Inter', sans-serif;
+//             margin: 0;
+//             padding: 0;
+//             background: #f3f4f6;
+//             color: #1f2937;
+//             font-size: 12px;
+//             line-height: 1.5;
+//           }
+          
+//           .page-container {
+//             width: 210mm;
+//             min-height: 297mm;
+//             margin: 0 auto;
+//             background: white;
+//             position: relative;
+//             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+//           }
+
+//           /* --- Header Section --- */
+//           .header-wrapper {
+//             background-color: #2563eb; /* Corporate Blue */
+//             color: white;
+//             padding: 40px;
+//             display: flex;
+//             justify-content: space-between;
+//             align-items: flex-start;
+//           }
+
+//           .header-left { flex: 1; }
+          
+//           .company-logo {
+//             max-width: 180px;
+//             height: auto;
+//             max-height: 80px;
+//             object-fit: contain;
+//             background: white;
+//             padding: 5px;
+//             border-radius: 4px;
+//             margin-bottom: 15px;
+//           }
+
+//           .company-title { font-size: 24px; font-weight: 700; margin-bottom: 5px; }
+//           .company-details { font-size: 11px; opacity: 0.9; line-height: 1.4; }
+
+//           .header-right { 
+//             text-align: right; 
+//             flex: 1;
+//           }
+
+//           .doc-title {
+//             font-size: 32px;
+//             font-weight: 800;
+//             letter-spacing: 1px;
+//             margin-bottom: 20px;
+//             text-transform: uppercase;
+//           }
+
+//           .ref-grid {
+//             display: inline-grid;
+//             grid-template-columns: auto auto;
+//             gap: 8px 20px;
+//             text-align: right;
+//             font-size: 13px;
+//           }
+//           .ref-label { color: rgba(255,255,255,0.7); font-weight: 500; }
+//           .ref-value { font-weight: 600; }
+
+//           /* --- Info Section --- */
+//           .info-section {
+//             padding: 30px 40px;
+//             display: flex;
+//             gap: 40px;
+//             border-bottom: 1px solid #e5e7eb;
+//           }
+
+//           .info-box { flex: 1; }
+          
+//           .box-title {
+//             color: #2563eb;
+//             font-size: 11px;
+//             text-transform: uppercase;
+//             letter-spacing: 0.5px;
+//             font-weight: 700;
+//             margin-bottom: 10px;
+//             border-bottom: 2px solid #e5e7eb;
+//             padding-bottom: 5px;
+//           }
+
+//           .info-content div { margin-bottom: 4px; color: #374151; font-weight: 500; }
+//           .info-label { color: #6b7280; display: inline-block; width: 70px; font-weight: 400; }
+
+//           /* --- Table Section --- */
+//           .table-container { padding: 20px 40px; }
+          
+//           table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          
+//           th {
+//             background-color: #f8fafc;
+//             color: #475569;
+//             font-weight: 600;
+//             text-align: left;
+//             padding: 12px 8px;
+//             font-size: 11px;
+//             text-transform: uppercase;
+//             border-bottom: 2px solid #e2e8f0;
+//           }
+          
+//           td {
+//             padding: 12px 8px;
+//             border-bottom: 1px solid #f1f5f9;
+//             vertical-align: middle;
+//             color: #334155;
+//           }
+
+//           tr:last-child td { border-bottom: none; }
+          
+//           .item-image {
+//             width: 40px; 
+//             height: 40px; 
+//             object-fit: cover; 
+//             border-radius: 4px;
+//             border: 1px solid #e2e8f0;
+//           }
+          
+//           .col-right { text-align: right; }
+//           .col-center { text-align: center; }
+
+//           /* --- Bottom Section --- */
+//           .bottom-section {
+//             display: flex;
+//             padding: 0 40px 30px 40px;
+//             gap: 40px;
+//           }
+
+//           .bottom-left { flex: 6; }
+//           .bottom-right { flex: 4; }
+
+//           /* Bank Details */
+//           .bank-card {
+//             background: #f8fafc;
+//             border: 1px solid #e2e8f0;
+//             border-radius: 6px;
+//             padding: 15px;
+//             margin-bottom: 20px;
+//           }
+//           .bank-row { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 11px; }
+//           .bank-row strong { color: #334155; }
+
+//           /* Terms */
+//           .terms-box { font-size: 10px; color: #64748b; line-height: 1.4; white-space: pre-wrap; }
+
+//           /* Totals */
+//           .totals-box {
+//             background: #fff;
+//             border-radius: 6px;
+//           }
+          
+//           .total-row {
+//             display: flex;
+//             justify-content: space-between;
+//             padding: 8px 0;
+//             border-bottom: 1px solid #f1f5f9;
+//             font-size: 13px;
+//           }
+          
+//           .total-row.grand-total {
+//             background: #2563eb;
+//             color: white;
+//             padding: 12px;
+//             margin-top: 10px;
+//             border-radius: 6px;
+//             font-weight: 700;
+//             border: none;
+//             font-size: 16px;
+//           }
+
+//           /* --- Footer / Signatures --- */
+//           .footer-section {
+//             padding: 20px 40px 40px 40px;
+//             margin-top: auto;
+//             border-top: 1px solid #e2e8f0;
+//           }
+
+//           .signature-row {
+//             display: flex;
+//             justify-content: space-between;
+//             align-items: flex-end;
+//             margin-top: 20px;
+//           }
+
+//           .stamp-box {
+//             text-align: center;
+//           }
+          
+//           .stamp-img {
+//             width: 120px;
+//             height: 120px;
+//             object-fit: contain;
+//             display: block;
+//             margin: 0 auto 10px auto;
+//           }
+
+//           .qr-box { text-align: center; }
+//           .qr-img { width: 90px; height: 90px; }
+
+//           .contact-footer {
+//             text-align: center;
+//             font-size: 10px;
+//             color: #94a3b8;
+//             margin-top: 30px;
+//           }
+
+//           @media print {
+//             body { background: white; }
+//             .page-container { box-shadow: none; margin: 0; width: 100%; min-height: auto; }
+//             .header-wrapper, .grand-total { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+//             /* Avoid breaking inside rows or total blocks */
+//             tr, .bank-card, .totals-box { page-break-inside: avoid; }
+//           }
+//         </style>
+//       </head>
+//       <body>
+//         <div class="page-container">
+          
+//           <div class="header-wrapper">
+//             <div class="header-left">
+//               ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Logo">` : ''}
+//               <div class="company-title">Mana Smart Trading</div>
+//               <div class="company-details">
+//                 CR: 1010567890<br>
+//                 VAT: 311234567800003<br>
+//                 Riyadh, Saudi Arabia
+//               </div>
+//             </div>
+//             <div class="header-right">
+//               <div class="doc-title">QUOTATION</div>
+//               <div class="ref-grid">
+//                 <span class="ref-label">Number:</span>
+//                 <span class="ref-value">#${quotation.quotationNumber}</span>
+                
+//                 <span class="ref-label">Date:</span>
+//                 <span class="ref-value">${formatDate(displayDate || quotation.date)}</span>
+                
+//                 <span class="ref-label">Valid Until:</span>
+//                 <span class="ref-value">${formatDate(quotation.expiryDate)}</span>
+//               </div>
+//             </div>
+//           </div>
+
+//           <div class="info-section">
+//             <div class="info-box">
+//               <div class="box-title">Quotation For</div>
+//               <div class="info-content">
+//                 <div style="font-size: 14px; font-weight: 700; color: #111;">${quotation.customerName}</div>
+//                 <div><span class="info-label">Mobile:</span> ${quotation.mobile}</div>
+//                 ${quotation.location ? `<div><span class="info-label">Location:</span> ${quotation.location}</div>` : ''}
+//                 <div><span class="info-label">VAT No:</span> ${quotation.taxNumber || 'N/A'}</div>
+//                 <div><span class="info-label">CR No:</span> ${quotation.commercialRegister || 'N/A'}</div>
+//               </div>
+//             </div>
+            
+//             ${quotation.notes ? `
+//             <div class="info-box" style="flex: 0.8; background: #fffbe6; padding: 10px; border-radius: 4px; border: 1px solid #fde68a;">
+//               <div class="box-title" style="color: #d97706; border-color: #fde68a;">Notes</div>
+//               <div style="font-size: 11px; color: #92400e; white-space: pre-wrap;">${quotation.notes}</div>
+//             </div>
+//             ` : ''}
+//           </div>
+
+//           <div class="table-container">
+//             <table>
+//               <thead>
+//                 <tr>
+//                   <th style="width: 60px;">Image</th>
+//                   <th>Description</th>
+//                   <th class="col-center" style="width: 60px;">Qty</th>
+//                   <th class="col-right" style="width: 100px;">Unit Price</th>
+//                   <th class="col-center" style="width: 70px;">Disc %</th>
+//                   <th class="col-right" style="width: 100px;">Total (Excl)</th>
+//                   <th class="col-right" style="width: 90px;">VAT 15%</th>
+//                   <th class="col-right" style="width: 110px;">Total (Incl)</th>
+//                 </tr>
+//               </thead>
+//               <tbody>
+//                 ${quotation.items.map(item => {
+//                   const imageSrc = item.image || '';
+//                   const hasImage = imageSrc && imageSrc.trim() !== '';
+//                   const escapedDescription = (item.description || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                  
+//                   return `
+//                   <tr>
+//                     <td>
+//                       ${hasImage 
+//                         ? `<img src="${imageSrc}" class="item-image" alt="Item">`
+//                         : `<div class="item-image" style="background: #f1f5f9; display: flex; align-items: center; justify-content: center;">📦</div>`
+//                       }
+//                     </td>
+//                     <td>
+//                       <div style="font-weight: 600; font-size: 12px;">${escapedDescription}</div>
+//                     </td>
+//                     <td class="col-center">${item.quantity}</td>
+//                     <td class="col-right">${formatCurrency(item.unitPrice)}</td>
+//                     <td class="col-center">${item.discountPercent > 0 ? item.discountPercent + '%' : '-'}</td>
+//                     <td class="col-right">${formatCurrency(item.subtotal)}</td>
+//                     <td class="col-right" style="color: #64748b;">${formatCurrency(item.vat)}</td>
+//                     <td class="col-right" style="font-weight: 600;">${formatCurrency(item.total)}</td>
+//                   </tr>
+//                   `;
+//                 }).join('')}
+//               </tbody>
+//             </table>
+//           </div>
+
+//           <div class="bottom-section">
+//             <div class="bottom-left">
+//               <div class="box-title">Bank Details</div>
+//               <div class="bank-card">
+//                 <div class="bank-row"><span>Bank Name:</span> <strong>Al Rajhi Bank</strong></div>
+//                 <div class="bank-row"><span>Account Name:</span> <strong>Mana Smart Trading Company</strong></div>
+//                 <div class="bank-row"><span>IBAN:</span> <strong style="font-family: monospace; font-size: 12px;">SA2680000301608010269328</strong></div>
+//                 <div class="bank-row"><span>Account No:</span> <strong>301000010006080269328</strong></div>
+//               </div>
+
+//               <div class="box-title">Terms & Conditions</div>
+//               <div class="terms-box">
+// ${quotation.termsAndConditions || `• This quotation is valid for 15 days from the issue date.
+// • All prices include 15% VAT unless otherwise stated.
+// • Payment terms: 50% advance, 50% upon delivery/completion.
+// • Delivery within 7-10 business days.
+// • Goods once sold cannot be returned.`}
+//               </div>
+//             </div>
+
+//             <div class="bottom-right">
+//               <div class="totals-box">
+//                 <div class="total-row">
+//                   <span>Subtotal (Excl. VAT)</span>
+//                   <span>SAR ${formatCurrency(quotation.totalBeforeDiscount)}</span>
+//                 </div>
+//                 ${quotation.totalDiscount > 0 ? `
+//                 <div class="total-row" style="color: #dc2626;">
+//                   <span>Discount</span>
+//                   <span>- SAR ${formatCurrency(quotation.totalDiscount)}</span>
+//                 </div>
+//                 ` : ''}
+//                 <div class="total-row">
+//                   <span>Total After Discount</span>
+//                   <span>SAR ${formatCurrency(quotation.totalAfterDiscount)}</span>
+//                 </div>
+//                 <div class="total-row">
+//                   <span>Total VAT (15%)</span>
+//                   <span>SAR ${formatCurrency(quotation.totalVAT)}</span>
+//                 </div>
+//                 <div class="total-row grand-total">
+//                   <span>Grand Total</span>
+//                   <span>SAR ${formatCurrency(quotation.grandTotal)}</span>
+//                 </div>
+//               </div>
+//             </div>
+//           </div>
+
+//           <div class="footer-section">
+//             <div class="signature-row">
+//               <div style="text-align: left;">
+//                 <div style="font-size: 11px; font-weight: 600; margin-bottom: 50px;">Received By:</div>
+//                 <div style="border-top: 1px solid #cbd5e1; width: 200px; padding-top: 5px; font-size: 10px;">Name & Signature</div>
+//               </div>
+
+//               ${qrCode ? `
+//               <div class="qr-box">
+//                 <img src="${qrCode}" class="qr-img" alt="QR">
+//               </div>
+//               ` : ''}
+
+//               <div class="stamp-box">
+//                 ${stampToRender ? `<img src="${stampToRender}" class="stamp-img" alt="Stamp">` : '<div style="height: 100px;"></div>'}
+//                 <div style="font-size: 11px; font-weight: 600;">Mana Smart Trading</div>
+//                 <div style="font-size: 10px; color: #64748b;">Authorized Signature</div>
+//               </div>
+//             </div>
+
+//             <div class="contact-footer">
+//               Mana Smart Trading Company | Riyadh, Saudi Arabia | +966 50 123 4567 | info@manatrading.sa
+//             </div>
+//           </div>
+
+//         </div>
+//       </body>
+//       </html>
+//     `;
+//   };
+
   const generateQuotationHTML = (quotation: Quotation, logoUrl?: string | null, stampUrl?: string | null, qrCode?: string, displayDate?: string) => {
     // Use provided logo or fall back to quotation logo
     const companyLogo = logoUrl || quotation.companyLogo;
     // Use provided stamp or fall back to quotation stamp
     const stampToRender = stampUrl || quotation.stamp;
+    
+    // Formatting helpers
+    const formatDate = (dateString: string | Date) => new Date(dateString).toLocaleDateString('en-GB');
+    const formatCurrency = (amount: number) => amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     
     return `
       <!DOCTYPE html>
@@ -1197,465 +2089,295 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         <meta charset="UTF-8">
         <title>Quotation ${quotation.quotationNumber}</title>
         <style>
-          @page { size: A4; margin: 15mm; }
-          * { margin: 0; padding: 0; box-sizing: border-box; }
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+          
+          @page { size: A4; margin: 0; }
+          
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          
           body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            font-size: 14px;
-            background: linear-gradient(to bottom, #f3f4f6 0%, #ffffff 100%);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+            color: #334155;
+            font-size: 12px;
+            line-height: 1.5;
+          }
+          
+          .page-container {
+            width: 210mm;
+            min-height: 297mm;
+            margin: 0 auto;
+            background: white;
             position: relative;
           }
-          .quotation-container { max-width: 800px; margin: 0 auto; padding: 20px; position: relative; background: white; border-radius: 8px; }
-          .company-stamp {
-            width: 130px;
-            height: 130px;
-            object-fit: contain;
-            display: block;
-          }
-          .content { position: relative; z-index: 1; }
-          .header { 
+
+          /* --- Header Section --- */
+          .header-wrapper {
+            padding: 40px;
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            gap: 16px;
-            padding-bottom: 20px;
+            align-items: center;
             border-bottom: 3px solid #cbd5e1;
             margin-bottom: 20px;
           }
-          .company-info { text-align: left; flex: 0 0 auto; }
-          .company-logo { 
-            max-width: 240px;
+
+          .header-left { flex: 1; }
+          
+          .company-logo {
+            max-width: 200px;
             height: auto;
-            margin: 8px 0 12px 0;
-          }
-          .bank-details {
-            flex: 1 1 auto;
-            text-align: center;
-            color: #475569;
-            font-size: 12px;
-            line-height: 1.4;
-            padding: 0 8px;
-            white-space: pre-line;
-          }
-          .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
-          .bank-stamp-row {
-            display: grid;
-            grid-template-columns: 1fr auto 1fr;
-            align-items: center;
-            gap: 16px;
-            margin-top: 20px;
-            padding: 15px 0;
-            border-top: 1px solid #e2e8f0;
-            font-size: 13px;
-            color: #333;
-            line-height: 1.6;
-          }
-          .bank-stamp-row .bank-text {
-            flex: 1 1 auto;
-            grid-column: 1;
-            text-align: left;
-            white-space: pre-line;
-          }
-          .bank-stamp-row .bank-stamp {
-            flex: 0 0 auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            grid-column: 2;
-          }
-          .company-name {
-            font-size: 22px; 
-            font-weight: bold; 
-            color: #475569;
-            margin-bottom: 5px;
-          }
-          .quotation-info { text-align: right; }
-          .quotation-number {
-            font-size: 22px;
-            font-weight: bold;
-            color: #475569;
             margin-bottom: 10px;
           }
-          .validity {
-            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-            padding: 10px;
-            border-radius: 6px;
-            border-left: 4px solid #f59e0b;
-            margin-top: 10px;
-            font-size: 12px;
+
+          .company-details { 
+            font-size: 11px; 
+            color: #64748b; 
+            line-height: 1.4; 
           }
-          .customer-section {
+
+          .header-right { 
+            text-align: right; 
+          }
+
+          /* --- Title Section --- */
+          .doc-title-container {
+            text-align: center;
+            margin: 20px 0;
+          }
+          .doc-title-en { font-size: 24px; font-weight: 800; color: #1e293b; margin: 0; }
+          .doc-title-ar { font-size: 20px; font-weight: 700; color: #475569; margin: 0; }
+
+          /* --- Info Boxes --- */
+          .info-section {
+            padding: 0 40px;
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 30px;
-            margin: 20px 0;
-            padding: 15px;
-            background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
-            border-radius: 8px;
-          }
-          .section-title {
-            font-weight: 600;
-            color: #64748b;
-            margin-bottom: 10px;
-            font-size: 16px;
-          }
-          .info-row {
-            margin: 5px 0;
-            font-size: 13px;
-          }
-          .label { 
-            font-weight: 600; 
-            color: #94a3b8;
-            display: inline-block;
-            min-width: 100px;
-          }
-          .items-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 20px 0;
-          }
-          .items-table th {
-            background: linear-gradient(135deg, #e2e8f0 0%, #cbd5e1 100%);
-            color: #1e293b;
-            padding: 12px 8px;
-            text-align: left;
-            font-size: 13px;
-            font-weight: 600;
-          }
-          .items-table td {
-            padding: 10px 8px;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 13px;
-          }
-          .items-table tr:hover {
-            background: #f8fafc;
-          }
-          .item-image {
-            width: 50px;
-            height: 50px;
-            object-fit: cover;
-            border-radius: 6px;
-            border: 1px solid #e2e8f0;
-            display: block;
-            max-width: 50px;
-            max-height: 50px;
-          }
-          @media print {
-            .item-image {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-              width: 50px !important;
-              height: 50px !important;
-              max-width: 50px !important;
-              max-height: 50px !important;
-              object-fit: cover !important;
-              display: block !important;
-            }
-          }
-          .item-desc {
-            font-weight: 500;
-          }
-          .totals-wrapper {
-            overflow: hidden;
             margin-bottom: 30px;
           }
-          .totals-section {
-            float: right;
-            width: 350px;
-            margin-top: 20px;
-            margin-bottom: 20px;
+
+          .info-box { 
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
           }
+          
+          .box-header {
+            background-color: #f8fafc;
+            padding: 8px 15px;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            justify-content: space-between;
+            font-weight: 600;
+            color: #64748b;
+            font-size: 11px;
+          }
+
+          .box-content { padding: 15px; }
+          .info-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
+          .info-label { color: #94a3b8; }
+          .info-value { font-weight: 600; color: #334155; }
+
+          /* --- Table Section --- */
+          .table-container { padding: 0 40px; }
+          
+          table { width: 100%; border-collapse: collapse; }
+          
+          th {
+            background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+            color: white;
+            font-weight: 600;
+            text-align: center;
+            padding: 12px 8px;
+            font-size: 11px;
+          }
+          
+          td {
+            padding: 12px 8px;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: middle;
+            text-align: center;
+          }
+
+          .col-left { text-align: left; }
+          .col-right { text-align: right; }
+          
+          .item-image {
+            width: 45px; 
+            height: 45px; 
+            object-fit: contain; 
+            border: 1px solid #e2e8f0;
+          }
+
+          /* --- Bottom Section --- */
+          .bottom-split {
+            display: flex;
+            justify-content: space-between;
+            padding: 30px 40px;
+            align-items: flex-start;
+          }
+
+          .totals-box { width: 350px; }
+          
           .total-row {
             display: flex;
             justify-content: space-between;
-            padding: 8px 15px;
+            padding: 8px 12px;
             border-bottom: 1px solid #e2e8f0;
           }
-          .total-row.grand {
+          
+          .total-row.grand-total {
             background: linear-gradient(135deg, #64748b 0%, #475569 100%);
             color: white;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 8px;
+            font-weight: 700;
+            font-size: 15px;
             margin-top: 10px;
+            border-radius: 4px;
           }
-          .terms {
-            clear: both;
-            background: #374151;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 20px 0;
-            border-left: 4px solid #1f2937;
-            max-height: none;
-            overflow: visible;
-            page-break-inside: avoid;
-            page-break-after: avoid;
-          }
-          .terms-title {
-            font-weight: 600;
-            color: #f3f4f6;
-            margin-bottom: 8px;
-          }
-          .terms-content {
-            color: #e5e7eb;
-            font-size: 13px;
-            white-space: pre-wrap;
-            overflow: visible;
-            max-height: none;
-          }
+
+          /* --- Footer --- */
           .footer {
-            clear: both;
-            margin-top: 40px;
-            padding-top: 20px;
+            padding: 20px 40px;
             border-top: 2px solid #e2e8f0;
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 20px;
-            align-items: center;
-            font-size: 11px;
-            color: #64748b;
-          }
-          .qr-section {
             text-align: center;
           }
-          .qr-code {
-            width: 120px;
-            height: 120px;
-            border: 2px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 5px;
+
+          .signature-area {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-top: 20px;
           }
+
+          .stamp-img { width: 130px; height: 130px; object-fit: contain; }
+          .qr-img { width: 100px; height: 100px; border: 1px solid #e2e8f0; padding: 5px; }
+
           @media print {
-            @page {
-              size: A4;
-              margin: 15mm;
-            }
-            html, body {
-              width: 100%;
-              height: auto;
-              margin: 0;
-              padding: 0;
-              background: white !important;
-            }
-            body { 
-              print-color-adjust: exact; 
-              -webkit-print-color-adjust: exact; 
-              background: white !important;
-              font-size: 12px;
-            }
-            .quotation-container {
-              max-width: 100%;
-              margin: 0;
-              padding: 15mm;
-              box-shadow: none;
-              border-radius: 0;
-            }
-            .stamp {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .items-table th {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .total-row.grand {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            .terms {
-              print-color-adjust: exact;
-              -webkit-print-color-adjust: exact;
-            }
-            /* Prevent page breaks inside important sections */
-            .header, .customer-section, .totals-wrapper, .totals-section {
-              page-break-inside: avoid;
-            }
-            .items-table tbody tr {
-              page-break-inside: avoid;
-            }
-            /* Ensure footer stays together */
-            .footer {
-              page-break-inside: avoid;
-            }
-            /* Ensure notes don't overlap with totals */
-            .totals-wrapper {
-              clear: both;
-              margin-bottom: 30px;
-            }
-            .terms {
-              clear: both;
-              margin-top: 30px;
-            }
+            .page-container { width: 100%; box-shadow: none; }
           }
         </style>
       </head>
       <body>
-        <div class="quotation-container">
-          <div class="content">
-            <div class="header">
-              <div class="company-info">
-                ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : ''}
-                <div class="company-name">Mana Smart Trading</div>
-                <div style="margin-top: 10px; color: #64748b; font-size: 12px;">
-                  <div>VAT: 311234567800003</div>
-                  <div>C.R.: 1010567890</div>
-                  <div>Riyadh, Saudi Arabia</div>
-                </div>
-              </div>
-              <div class="quotation-info">
-                <div class="quotation-number">QUOTATION</div>
-                <div style="margin-top: 10px;">
-                  <div style="font-weight: 600; color: #475569;">${quotation.quotationNumber}</div>
-                  <div style="color: #64748b; font-size: 12px;">Date: ${new Date(displayDate || quotation.date).toLocaleDateString('en-GB')}</div>
-                  <div class="validity">
-                    <strong>Valid Until:</strong> ${new Date(quotation.expiryDate).toLocaleDateString('en-GB')}
-                  </div>
-                </div>
+        <div class="page-container">
+          
+          <div class="header-wrapper">
+            <div class="header-left">
+              ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Logo">` : '<strong>Mana Smart Trading</strong>'}
+              <div class="company-details">
+                Tax Number / الرقم الضريبي: 311510923100003<br>
+                CR / السجل التجاري: 2051245473<br>
+                Al-Khobar, Saudi Arabia
               </div>
             </div>
+            <div class="header-right">
+                <img src="https://mana.sa/wp-content/uploads/2023/11/mana-logo-dark.svg" alt="MANA" style="max-width: 160px;">
+            </div>
+          </div>
 
-            <div class="customer-section">
-              <div>
-                <div class="section-title">Prepared For</div>
-                <div class="info-row"><span class="label">Name:</span> ${quotation.customerName}</div>
-                <div class="info-row"><span class="label">Mobile:</span> ${quotation.mobile}</div>
-                ${quotation.location ? `<div class="info-row"><span class="label">Location:</span> ${quotation.location}</div>` : ''}
+          <div class="doc-title-container">
+            <h1 class="doc-title-ar">عرض سعر</h1>
+            <h2 class="doc-title-en">QUOTATION</h2>
+          </div>
+
+          <div class="info-section">
+            <div class="info-box">
+              <div class="box-header">
+                <span>QUOTATION FOR</span>
+                <span>عرض السعر إلى</span>
               </div>
-              <div>
-                <div class="section-title">Tax Information</div>
-                <div class="info-row"><span class="label">C.R.:</span> ${quotation.commercialRegister || 'N/A'}</div>
-                <div class="info-row"><span class="label">VAT:</span> ${quotation.taxNumber || 'N/A'}</div>
+              <div class="box-content">
+                <div style="font-weight: 700; font-size: 14px; margin-bottom: 8px;">${quotation.customerName}</div>
+                <div class="info-row"><span class="info-label">Mobile:</span> <span class="info-value">${quotation.mobile}</span></div>
+                ${quotation.taxNumber ? `<div class="info-row"><span class="info-label">VAT No:</span> <span class="info-value">${quotation.taxNumber}</span></div>` : ''}
               </div>
             </div>
+            
+            <div class="info-box">
+              <div class="box-header">
+                <span>DETAILS</span>
+                <span>التفاصيل</span>
+              </div>
+              <div class="box-content">
+                <div class="info-row"><span class="info-label">Quote #:</span> <span class="info-value">#${quotation.quotationNumber}</span></div>
+                <div class="info-row"><span class="info-label">Date:</span> <span class="info-value">${formatDate(displayDate || quotation.date)}</span></div>
+                <div class="info-row"><span class="info-label">Expiry:</span> <span class="info-value">${formatDate(quotation.expiryDate)}</span></div>
+              </div>
+            </div>
+          </div>
 
-            <table class="items-table">
+          <div class="table-container">
+            <table>
               <thead>
                 <tr>
                   <th style="width: 60px;">Image</th>
-                  <th>Description</th>
-                  <th style="width: 80px; text-align: center;">Qty</th>
-                  <th style="width: 100px; text-align: right;">Price</th>
-                  <th style="width: 80px; text-align: center;">Disc. %</th>
-                  <th style="width: 100px; text-align: center;">Before Disc.</th>
-                  <th style="width: 100px; text-align: center;">After Disc.</th>
-                  <th style="width: 80px; text-align: right;">VAT 15%</th>
-                  <th style="width: 100px; text-align: right;">Total</th>
+                  <th class="col-left">Description / الوصف</th>
+                  <th style="width: 50px;">Qty</th>
+                  <th style="width: 90px;">Price</th>
+                  <th style="width: 110px;">Total (Incl. VAT)</th>
                 </tr>
               </thead>
               <tbody>
-                ${quotation.items.map(item => {
-                  const imageSrc = item.image || '';
-                  const hasImage = imageSrc && imageSrc.trim() !== '';
-                  const escapedDescription = (item.description || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-                  // Build image HTML - base64 data URLs are safe to embed directly
-                  let imageHtml = '';
-                  if (hasImage) {
-                    // Base64 data URLs can be embedded directly in HTML
-                    // The imageSrc is already a valid data URL string
-                    imageHtml = '<img src="' + imageSrc + '" class="item-image" alt="' + escapedDescription + '" style="max-width: 50px; max-height: 50px; object-fit: cover; width: 50px; height: 50px;">';
-                  } else {
-                    imageHtml = '<div style="width: 50px; height: 50px; background: #f1f5f9; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📦</div>';
-                  }
-                  return `
+                ${quotation.items.map(item => `
                   <tr>
                     <td>
-                      ${imageHtml}
+                      ${item.image ? `<img src="${item.image}" class="item-image">` : '📦'}
                     </td>
-                    <td>
-                      <div class="item-desc">${escapedDescription}</div>
+                    <td class="col-left">
+                      <div style="font-weight: 600;">${item.description}</div>
                     </td>
-                    <td style="text-align: center;">${item.quantity}</td>
-                    <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
-                    <td style="text-align: center;">${item.discountPercent}%</td>
-                    <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
-                    <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
-                    <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
-                    <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
+                    <td>${item.quantity}</td>
+                    <td>${formatCurrency(item.unitPrice)}</td>
+                    <td class="col-right" style="font-weight: 700;">${formatCurrency(item.total)}</td>
                   </tr>
-                `;
-                }).join('')}
+                `).join('')}
               </tbody>
             </table>
+          </div>
 
-            <div class="totals-wrapper">
-              <div class="totals-section">
-                <div class="total-row">
-                  <span>Subtotal:</span>
-                  <span>SAR ${quotation.totalBeforeDiscount.toFixed(2)}</span>
-                </div>
-                ${quotation.totalDiscount > 0 ? `
-                <div class="total-row">
-                  <span>Discount:</span>
-                  <span>- SAR ${quotation.totalDiscount.toFixed(2)}</span>
-                </div>
-                ` : ''}
-                <div class="total-row">
-                  <span>After Discount:</span>
-                  <span>SAR ${quotation.totalAfterDiscount.toFixed(2)}</span>
-                </div>
-                <div class="total-row">
-                  <span>VAT (15%):</span>
-                  <span>SAR ${quotation.totalVAT.toFixed(2)}</span>
-                </div>
-                <div class="total-row grand">
-                  <span>GRAND TOTAL:</span>
-                  <span>SAR ${quotation.grandTotal.toFixed(2)}</span>
-                </div>
-              </div>
+          <div class="bottom-split">
+            <div class="qr-container">
+              ${qrCode ? `<img src="${qrCode}" class="qr-img">` : ''}
             </div>
 
-            ${quotation.notes ? `
-            <div class="terms" style="margin-top: 30px;">
-              <div class="terms-title">Notes</div>
-              <div class="terms-content">${quotation.notes}</div>
-            </div>
-            ` : ''}
-
-            <div class="terms">
-              <div class="terms-title">Terms & Conditions</div>
-              <div class="terms-content">${quotation.termsAndConditions || `• This quotation is valid for ${Math.ceil((new Date(quotation.expiryDate).getTime() - new Date(quotation.date).getTime()) / (1000 * 60 * 60 * 24))} days from the issue date
-• All prices include 15% VAT
-• Payment terms: 50% advance, 50% upon completion
-• Delivery within 7-10 business days
-• Prices subject to change after expiry
-• Installation and setup included
-• One year warranty on all devices`}</div>
-            </div>
-
-            <div class="bank-stamp-row">
-              <div class="bank-text">Mana Smart Trading Company
-Al Rajhi Bank
-A.N.: 301000010006080269328
-IBAN No.: SA2680000301608010269328</div>
-              <div class="bank-stamp">
-                ${stampToRender ? `<img src="${stampToRender}" class="company-stamp" alt="Stamp">` : ''}
+            <div class="totals-box">
+              <div class="total-row">
+                <span>Total (Excl. VAT) / قبل الضريبة</span>
+                <span>${formatCurrency(quotation.totalAfterDiscount - quotation.totalVAT)} SAR</span>
               </div>
-            </div>
-
-            <div class="footer">
-              <div>
-                <div style="font-weight: 600; margin-bottom: 10px;">Thank you for considering our quotation!</div>
-                <div>
-                  For any questions, please contact us:<br>
-                  Phone: +966 50 123 4567 | Email: info@manatrading.sa
-                </div>
+              <div class="total-row">
+                <span>VAT (15%) / الضريبة</span>
+                <span>${formatCurrency(quotation.totalVAT)} SAR</span>
               </div>
-              ${qrCode ? `
-              <div class="qr-section">
-                <img src="${qrCode}" class="qr-code" alt="QR Code">
-                <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
+              <div class="total-row grand-total">
+                <span>GRAND TOTAL / المجموع الإجمالي</span>
+                <span>${formatCurrency(quotation.grandTotal)} SAR</span>
               </div>
-              ` : ''}
             </div>
           </div>
+
+          <div class="footer">
+            <div class="signature-area">
+              <div style="text-align: left;">
+                <div style="font-weight: 700; margin-bottom: 60px;">Customer Acceptance:</div>
+                <div style="border-top: 1px solid #cbd5e1; width: 200px; padding-top: 5px; font-size: 10px;">Name & Signature / الإسم والتوقيع</div>
+              </div>
+              <div style="text-align: center;">
+                ${stampToRender ? `<img src="${stampToRender}" class="stamp-img">` : ''}
+                <div style="font-weight: 700;">Authorized Signature</div>
+              </div>
+            </div>
+            <div style="margin-top: 30px; font-size: 10px; color: #94a3b8;">
+              Mana Smart Trading Company | sales@mana.sa | +966 556 292 500
+            </div>
+          </div>
+
         </div>
       </body>
       </html>
     `;
-  };
-
+};
   const exportToExcel = () => {
     try {
       const exportData = filteredQuotations.map((quotation) => ({
