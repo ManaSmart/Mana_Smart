@@ -303,6 +303,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
   const [companyLogo, setCompanyLogo] = useState("");
   const [stamp, setStamp] = useState("");
+  const [isStampRemoved, setIsStampRemoved] = useState(false);
   const [logoFilename, setLogoFilename] = useState<string | null>(null);
   const [stampFilename, setStampFilename] = useState<string | null>(null);
   const [tempBrandingOwnerId, setTempBrandingOwnerId] = useState<string | null>(null);
@@ -382,7 +383,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
               );
               if (stampUrl) {
                 setDefaultStampUrl(stampUrl);
-                if (isUsingDefaultStamp && !stamp) {
+                if (!isStampRemoved && isUsingDefaultStamp && !stamp) {
                   setStamp(stampUrl);
                 }
               }
@@ -513,6 +514,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
 
       if (stampUrl) {
         setStamp(stampUrl);
+        setIsStampRemoved(false);
         toast.success("Stamp uploaded successfully");
       } else {
         toast.error("Stamp uploaded but URL retrieval failed");
@@ -844,6 +846,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     setStampFilename(null);
     setIsUsingDefaultLogo(true);
     setIsUsingDefaultStamp(true);
+    setIsStampRemoved(false);
     setTempBrandingOwnerId(null);
     setStampPosition({ x: 50, y: 50 });
     setNotes("");
@@ -935,20 +938,18 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       phone_number: mobile ? parseInt(mobile.replace(/\D/g, ''), 10) : null,
       location: location.trim() || null,
       customer_id: selectedCustomerDbId || null,
-      quotation_validity: parseInt(expiryDays) || 30,
       quotation_items: itemsPayload,
+      quotation_validity: parseInt(expiryDays) || 30,
       quotation_notes: notes.trim() || null,
-      quotation_summary: 'pending',
-      // Store only filenames, not full URLs
-      company_logo: logoFilename || null,
-      company_stamp: stampFilename || null,
       vat_enabled: vatEnabled,
-      // Store discount mode and global discount info if applicable
+      company_logo: logoFilename || null,
+      company_stamp: isStampRemoved ? '__NO_STAMP__' : (stampFilename || null),
       discount_mode: discountMode,
-      discount_type: discountMode === "global" ? globalDiscountType : null,
-      discount_amount: discountMode === "global" && parseFloat(globalDiscountAmount) > 0 ? parseFloat(globalDiscountAmount) : null,
+      global_discount_type: discountMode === "global" ? globalDiscountType : null,
+      global_discount_amount:
+        discountMode === "global" ? (parseFloat(globalDiscountAmount) || null) : null,
     };
-    
+
     try {
       const created = await dispatch(thunks.quotations.createOne(values)).unwrap();
       const createdId = (created as any)?.quotation_id as string | undefined;
@@ -959,6 +960,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           .eq('owner_type', 'quotation')
           .eq('owner_id', tempBrandingOwnerId);
       }
+
       resetForm();
       setIsCreateDialogOpen(false);
       await dispatch(thunks.quotations.fetchAll(undefined));
@@ -993,6 +995,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       notes: quotation.notes,
       companyLogo: quotation.companyLogo,
       stamp: quotation.stamp,
+      stampFilename: quotation.stampFilename,
       totalBeforeDiscount: quotation.totalBeforeDiscount,
       totalDiscount: quotation.totalDiscount,
       totalAfterDiscount: quotation.totalAfterDiscount,
@@ -1046,30 +1049,34 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     
     // Resolve stamp: filename > URL > system default
     let stampToUse = quotation.stamp;
-    if (!stampToUse) {
-      stampToUse = await resolveOwnerFileUrl(
-        quotation.dbQuotationId,
-        FILE_CATEGORIES.BRANDING_STAMP,
-        quotation.stampFilename
-      );
-    }
-    if (!stampToUse) {
-      const { data: brandingData } = await supabase
-        .from("company_branding")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (brandingData?.branding_id) {
-        const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
-        const stampFile = brandingFiles.find((f) => f.category === FILE_CATEGORIES.BRANDING_STAMP);
-        if (stampFile) {
-          const stampUrl = await getFileUrl(
-            stampFile.bucket as any,
-            stampFile.path,
-            stampFile.is_public
-          );
-          if (stampUrl) stampToUse = stampUrl;
+    if (quotation.stampFilename === '__NO_STAMP__') {
+      stampToUse = '';
+    } else {
+      if (!stampToUse) {
+        stampToUse = await resolveOwnerFileUrl(
+          quotation.dbQuotationId,
+          FILE_CATEGORIES.BRANDING_STAMP,
+          quotation.stampFilename
+        );
+      }
+      if (!stampToUse) {
+        const { data: brandingData } = await supabase
+          .from("company_branding")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (brandingData?.branding_id) {
+          const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
+          const stampFile = brandingFiles.find((f) => f.category === FILE_CATEGORIES.BRANDING_STAMP);
+          if (stampFile) {
+            const stampUrl = await getFileUrl(
+              stampFile.bucket as any,
+              stampFile.path,
+              stampFile.is_public
+            );
+            if (stampUrl) stampToUse = stampUrl;
+          }
         }
       }
     }
@@ -1202,8 +1209,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           }
           .quotation-container { max-width: 800px; margin: 0 auto; padding: 20px; position: relative; background: white; border-radius: 8px; }
           .company-stamp {
-            width: 90px;
-            height: 90px;
+            width: 130px;
+            height: 130px;
             object-fit: contain;
             display: block;
           }
@@ -1234,9 +1241,9 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           }
           .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
           .bank-stamp-row {
-            display: flex;
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
             align-items: center;
-            justify-content: space-between;
             gap: 16px;
             margin-top: 20px;
             padding: 15px 0;
@@ -1247,13 +1254,16 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
           }
           .bank-stamp-row .bank-text {
             flex: 1 1 auto;
+            grid-column: 1;
+            text-align: left;
             white-space: pre-line;
           }
           .bank-stamp-row .bank-stamp {
             flex: 0 0 auto;
             display: flex;
             align-items: center;
-            justify-content: flex-end;
+            justify-content: center;
+            grid-column: 2;
           }
           .company-name {
             font-size: 22px; 
@@ -1801,14 +1811,16 @@ IBAN No.: SA2680000301608010269328</div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs">Company Logo</Label>
-                          {isUsingDefaultLogo && defaultLogoUrl && (
-                            <Badge variant="outline" className="text-xs">System Default</Badge>
-                          )}
-                          {!isUsingDefaultLogo && (
-                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
-                          )}
+                        <div className="flex items-start gap-2">
+                          <Label className="text-xs shrink-0">Company Logo</Label>
+                          <div className="ml-auto flex flex-wrap items-center justify-end gap-1 min-w-0">
+                            {isUsingDefaultLogo && defaultLogoUrl && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">System Default</Badge>
+                            )}
+                            {!isUsingDefaultLogo && (
+                              <Badge variant="default" className="text-xs bg-green-600 whitespace-nowrap">Custom</Badge>
+                            )}
+                          </div>
                         </div>
                         <input
                           ref={logoInputRef}
@@ -1857,14 +1869,19 @@ IBAN No.: SA2680000301608010269328</div>
                       </div>
 
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs">Stamp (Optional)</Label>
-                          {isUsingDefaultStamp && defaultStampUrl && (
-                            <Badge variant="outline" className="text-xs">System Default</Badge>
-                          )}
-                          {!isUsingDefaultStamp && (
-                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
-                          )}
+                        <div className="flex items-start gap-2">
+                          <Label className="text-xs shrink-0">Stamp (Optional)</Label>
+                          <div className="ml-auto flex flex-wrap items-center justify-end gap-1 min-w-0">
+                            {isStampRemoved && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">Removed</Badge>
+                            )}
+                            {isUsingDefaultStamp && defaultStampUrl && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">System Default</Badge>
+                            )}
+                            {!isStampRemoved && !isUsingDefaultStamp && (
+                              <Badge variant="default" className="text-xs bg-green-600 whitespace-nowrap">Custom</Badge>
+                            )}
+                          </div>
                         </div>
                         <input
                           ref={stampInputRef}
@@ -1878,10 +1895,27 @@ IBAN No.: SA2680000301608010269328</div>
                           variant="outline"
                           onClick={() => stampInputRef.current?.click()}
                           className="w-full h-8 text-xs"
+                          disabled={isStampRemoved && !defaultStampUrl}
                         >
                           <Upload className="h-3 w-3 mr-1" />
-                          {isUsingDefaultStamp ? "Override Stamp" : "Change Stamp"}
+                          {isStampRemoved ? "Upload Stamp" : (isUsingDefaultStamp ? "Override Stamp" : "Change Stamp")}
                         </Button>
+                        {defaultStampUrl && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full h-8 text-xs"
+                            onClick={() => {
+                              setIsStampRemoved(false);
+                              setStamp(defaultStampUrl || "");
+                              setStampFilename(null);
+                              setIsUsingDefaultStamp(true);
+                            }}
+                            disabled={!isStampRemoved && isUsingDefaultStamp}
+                          >
+                            Use Default
+                          </Button>
+                        )}
                         {stamp && (
                           <div className="relative">
                             <ImageWithFallback 
@@ -1895,11 +1929,12 @@ IBAN No.: SA2680000301608010269328</div>
                               size="icon"
                               className="absolute top-0 right-0 h-6 w-6"
                               onClick={() => {
-                                setStamp(defaultStampUrl || "");
-                                setStampFilename(null);
-                                setIsUsingDefaultStamp(true);
+                                setIsStampRemoved(true);
+                                setStamp('');
+                                setStampFilename('__NO_STAMP__');
+                                setIsUsingDefaultStamp(false);
                               }}
-                              title={isUsingDefaultStamp ? "Using system default" : "Reset to default"}
+                              title="Remove stamp"
                             >
                               <X className="h-4 w-4" />
                             </Button>

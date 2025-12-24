@@ -495,12 +495,18 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
   const [companyLogo, setCompanyLogo] = useState("");
   const [stamp, setStamp] = useState("");
+  const [isStampRemoved, setIsStampRemoved] = useState(false);
+  const isStampRemovedRef = useRef(false);
   const [logoFilename, setLogoFilename] = useState<string | null>(null);
   const [stampFilename, setStampFilename] = useState<string | null>(null);
   const [defaultLogoUrl, setDefaultLogoUrl] = useState<string | null>(null);
   const [defaultStampUrl, setDefaultStampUrl] = useState<string | null>(null);
   const [isUsingDefaultLogo, setIsUsingDefaultLogo] = useState(true);
   const [isUsingDefaultStamp, setIsUsingDefaultStamp] = useState(true);
+
+  useEffect(() => {
+    isStampRemovedRef.current = isStampRemoved;
+  }, [isStampRemoved]);
   const [tempBrandingOwnerId, setTempBrandingOwnerId] = useState<string | null>(null);
   const [stampPosition, setStampPosition] = useState({ x: 50, y: 50 });
   const [paidAmount, setPaidAmount] = useState("");
@@ -570,7 +576,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             );
             if (stampUrl) {
               setDefaultStampUrl(stampUrl);
-              if (isUsingDefaultStamp && !stamp) {
+              if (!isStampRemovedRef.current && isUsingDefaultStamp && !stamp) {
                 setStamp(stampUrl);
               }
             }
@@ -595,7 +601,15 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       setTaxNumber(pendingQuotationData.taxNumber || "");
       setNotes(pendingQuotationData.notes || "");
       setCompanyLogo(pendingQuotationData.companyLogo || "");
-      setStamp(pendingQuotationData.stamp || "");
+      if (pendingQuotationData.stampFilename === '__NO_STAMP__') {
+        setIsStampRemoved(true);
+        setStamp('');
+        setStampFilename('__NO_STAMP__');
+        setIsUsingDefaultStamp(false);
+      } else {
+        setIsStampRemoved(false);
+        setStamp(pendingQuotationData.stamp || "");
+      }
       
       // Set items from quotation
       if (pendingQuotationData.items && pendingQuotationData.items.length > 0) {
@@ -724,6 +738,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
       if (stampUrl) {
         setStamp(stampUrl);
+        setIsStampRemoved(false);
         toast.success("Stamp uploaded successfully");
       } else {
         toast.error("Stamp uploaded but URL retrieval failed");
@@ -1039,6 +1054,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     setGlobalDiscountAmount("");
     setIsUsingDefaultLogo(true);
     setIsUsingDefaultStamp(true);
+    setIsStampRemoved(false);
     setStampPosition({ x: 50, y: 50 });
     setNotes("");
     setTermsAndConditions(
@@ -1247,7 +1263,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         tax_rate: vatEnabled ? VAT_RATE : 0,
         vat_enabled: vatEnabled,
         company_logo: logoFilename || null,
-        company_stamp: stampFilename || null,
+        company_stamp: isStampRemoved ? '__NO_STAMP__' : (stampFilename || null),
         subtotal: totals.totalBeforeDiscount,
         tax_amount: totals.totalVAT,
         total_amount: finalGrandTotal,
@@ -1325,7 +1341,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }
 
     // Resolve stamp: filename > URL > system default
-    if (!invoice.stamp) {
+    if (invoice.stampFilename === '__NO_STAMP__') {
+      invoice = { ...invoice, stamp: '' };
+    } else if (!invoice.stamp) {
       const stampUrl = await resolveOwnerFileUrl(
         invoice.dbInvoiceId,
         FILE_CATEGORIES.BRANDING_STAMP,
@@ -1342,7 +1360,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     };
     
-    const previewHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px}.container{max-width:800px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}.header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:30px;text-align:center}.header h1{font-size:32px;margin-bottom:10px}.invoice-num{font-size:24px;font-weight:600;opacity:.9}.content{padding:30px}.section{margin-bottom:25px;padding:20px;background:#f8f9fa;border-radius:8px;border-left:4px solid #667eea}.section-title{font-size:18px;font-weight:600;color:#333;margin-bottom:15px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.info-item{display:flex;flex-direction:column}.info-label{font-size:12px;color:#666;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}.info-value{font-size:16px;font-weight:600;color:#333}.items-table{width:100%;border-collapse:collapse;margin-top:15px}.items-table th{background:#667eea;color:#fff;padding:12px;text-align:left;font-size:14px}.items-table td{padding:12px;border-bottom:1px solid #e0e0e0;font-size:14px}.totals{margin-top:20px;text-align:right}.total-row{display:flex;justify-content:space-between;padding:10px 0;font-size:16px}.total-row.grand{font-size:24px;font-weight:bold;color:#667eea;border-top:2px solid #667eea;padding-top:15px;margin-top:10px}.badge{display:inline-block;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;margin-top:10px}.badge.paid{background:#10b981;color:#fff}.badge.partial{background:#f59e0b;color:#fff}.badge.draft{background:#6b7280;color:#fff}</style></head><body><div class="container"><div class="header"><h1>INVOICE</h1><div class="invoice-num">${escapeHtml(invoice.invoiceNumber)}</div><span class="badge ${invoice.status}">${invoice.status.toUpperCase()}</span></div><div class="content"><div class="section"><div class="section-title">Invoice Information</div><div class="info-grid"><div class="info-item"><span class="info-label">Date</span><span class="info-value">${new Date(invoice.date).toLocaleDateString('en-GB')}</span></div><div class="info-item"><span class="info-label">Type</span><span class="info-value">${invoice.invoiceType === 'monthly_visit' ? 'Monthly Visit' : 'Normal'}</span></div></div></div><div class="section"><div class="section-title">Customer</div><div class="info-grid"><div class="info-item"><span class="info-label">Name</span><span class="info-value">${escapeHtml(invoice.customerName)}</span></div><div class="info-item"><span class="info-label">Mobile</span><span class="info-value">${escapeHtml(invoice.mobile)}</span></div>${invoice.location ? `<div class="info-item"><span class="info-label">Location</span><span class="info-value">${escapeHtml(invoice.location)}</span></div>` : ''}</div></div><div class="section"><div class="section-title">Items</div><table class="items-table"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${invoice.items.map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${item.quantity}</td><td>SAR ${item.unitPrice.toFixed(2)}</td><td>SAR ${item.total.toFixed(2)}</td></tr>`).join('')}</tbody></table></div><div class="section"><div class="totals"><div class="total-row"><span>Subtotal:</span><span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span></div>${invoice.totalDiscount > 0 ? `<div class="total-row"><span>Discount:</span><span>- SAR ${invoice.totalDiscount.toFixed(2)}</span></div>` : ''}<div class="total-row"><span>VAT (15%):</span><span>SAR ${invoice.totalVAT.toFixed(2)}</span></div><div class="total-row grand"><span>GRAND TOTAL:</span><span>SAR ${invoice.grandTotal.toFixed(2)}</span></div>${invoice.paidAmount > 0 ? `<div class="total-row"><span>Paid:</span><span style="color:#10b981">SAR ${invoice.paidAmount.toFixed(2)}</span></div>` : ''}${invoice.remainingAmount > 0 ? `<div class="total-row"><span>Remaining:</span><span style="color:#ef4444">SAR ${invoice.remainingAmount.toFixed(2)}</span></div>` : ''}</div></div></div></div></body></html>`;
+    const previewHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px}.container{max-width:800px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}.header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:30px;text-align:center}.header h1{font-size:32px;margin-bottom:10px}.invoice-num{font-size:24px;font-weight:600;opacity:.9}.content{padding:30px}.section{margin-bottom:25px;padding:20px;background:#f8f9fa;border-radius:8px;border-left:4px solid #667eea}.section-title{font-size:18px;font-weight:600;color:#333;margin-bottom:15px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.info-item{display:flex;flex-direction:column}.info-label{font-size:12px;color:#666;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}.info-value{font-size:16px;font-weight:600;color:#333}.items-table{width:100%;border-collapse:collapse;margin-top:15px}.items-table th{background:#667eea;color:#fff;padding:12px;text-align:left;font-size:14px}.items-table td{padding:12px;border-bottom:1px solid #e0e0e0;font-size:14px}.totals{margin-top:20px;text-align:right}.total-row{display:flex;justify-content:space-between;padding:10px 0;font-size:16px}.total-row.grand{font-size:24px;font-weight:bold;color:#667eea;border-top:2px solid #667eea;padding-top:15px;margin-top:10px}.badge{display:inline-block;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;margin-top:10px}.badge.paid{background:#10b981;color:#fff}.badge.partial{background:#f59e0b;color:#fff}.badge.draft{background:#6b7280;color:#fff}</style></head><body><div class="container"><div class="header"><h1>INVOICE</h1><div class="invoice-num">${escapeHtml(invoice.invoiceNumber)}</div><span class="badge ${invoice.status}">${invoice.status.toUpperCase()}</span></div><div class="content"><div class="section"><div class="section-title">Invoice Information</div><div class="info-grid"><div class="info-item"><span class="info-label">Date</span><span class="info-value">${new Date(invoice.date).toLocaleDateString('en-GB')}</span></div><div class="info-item"><span class="info-label">Type</span><span class="info-value">${invoice.invoiceType === 'monthly_visit' ? 'Monthly Visit' : 'Normal'}</span></div></div></div><div class="section"><div class="section-title">Customer</div><div class="info-grid"><div class="info-item"><span class="info-label">Name</span><span class="info-value">${escapeHtml(invoice.customerName)}</span></div><div class="info-item"><span class="info-label">Mobile</span><span class="info-value">${escapeHtml(invoice.mobile)}</span></div>${invoice.location ? `<div class="info-item"><span class="info-label">Location</span><span class="info-value">${escapeHtml(invoice.location)}</span></div>` : ''}</div></div><div class="section"><div class="section-title">Items</div><table class="items-table"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${invoice.items.map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${item.quantity}</td><td>SAR ${item.unitPrice.toFixed(2)}</td><td>SAR ${item.total.toFixed(2)}</td></tr>`).join('')}</tbody></table></div><div class="section"><div class="totals"><div class="total-row"><span>Subtotal:</span><span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span></div>${invoice.totalDiscount > 0 ? `<div class="total-row"><span>Discount:</span><span>- SAR ${invoice.totalDiscount.toFixed(2)}</span></div>` : ''}<div class="total-row"><span>VAT (15%):</span><span>SAR ${invoice.totalVAT.toFixed(2)}</span></div><div class="total-row grand"><span>GRAND TOTAL:</span><span>SAR ${invoice.grandTotal.toFixed(2)}</span></div>${invoice.paidAmount > 0 ? `<div class="total-row"><span>Paid:</span><span style="color:#10b981">SAR ${invoice.paidAmount.toFixed(2)}</span></div>` : ''}${invoice.remainingAmount > 0 ? `<div class="total-row"><span>Remaining:</span><span style="color:#ef4444">SAR ${invoice.remainingAmount.toFixed(2)}</span></div>` : ''}</div></div></div></div></div></body></html>`;
     
     // Generate QR code with data URL
     let qrCode = "";
@@ -1478,8 +1496,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
             min-height: 100vh;
           }
           .company-stamp {
-            width: 90px;
-            height: 90px;
+            width: 130px;
+            height: 130px;
             object-fit: contain;
             display: block;
           }
@@ -1553,9 +1571,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           }
           .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
           .bank-stamp-row {
-            display: flex;
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
             align-items: center;
-            justify-content: space-between;
             gap: 16px;
             margin-top: 20px;
             padding: 15px 0;
@@ -1566,13 +1584,16 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           }
           .bank-stamp-row .bank-text {
             flex: 1 1 auto;
+            grid-column: 1;
+            text-align: left;
             white-space: pre-line;
           }
           .bank-stamp-row .bank-stamp {
             flex: 0 0 auto;
             display: flex;
             align-items: center;
-            justify-content: flex-end;
+            justify-content: center;
+            grid-column: 2;
           }
           .company-name {
             font-size: 22px; 
@@ -2344,14 +2365,16 @@ IBAN No.: SA2680000301608010269328</div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs">Company Logo</Label>
-                          {isUsingDefaultLogo && defaultLogoUrl && (
-                            <Badge variant="outline" className="text-xs">System Default</Badge>
-                          )}
-                          {!isUsingDefaultLogo && (
-                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
-                          )}
+                        <div className="flex items-start gap-2">
+                          <Label className="text-xs shrink-0">Company Logo</Label>
+                          <div className="ml-auto flex flex-wrap items-center justify-end gap-1 min-w-0">
+                            {isUsingDefaultLogo && defaultLogoUrl && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">System Default</Badge>
+                            )}
+                            {!isUsingDefaultLogo && (
+                              <Badge variant="default" className="text-xs bg-green-600 whitespace-nowrap">Custom</Badge>
+                            )}
+                          </div>
                         </div>
                         <input
                           ref={logoInputRef}
@@ -2400,14 +2423,19 @@ IBAN No.: SA2680000301608010269328</div>
                       </div>
 
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-xs">Stamp (Optional)</Label>
-                          {isUsingDefaultStamp && defaultStampUrl && (
-                            <Badge variant="outline" className="text-xs">System Default</Badge>
-                          )}
-                          {!isUsingDefaultStamp && (
-                            <Badge variant="default" className="text-xs bg-green-600">Custom</Badge>
-                          )}
+                        <div className="flex items-start gap-2">
+                          <Label className="text-xs shrink-0">Stamp (Optional)</Label>
+                          <div className="ml-auto flex flex-wrap items-center justify-end gap-1 min-w-0">
+                            {isStampRemoved && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">Removed</Badge>
+                            )}
+                            {isUsingDefaultStamp && defaultStampUrl && (
+                              <Badge variant="outline" className="text-xs whitespace-nowrap">System Default</Badge>
+                            )}
+                            {!isStampRemoved && !isUsingDefaultStamp && (
+                              <Badge variant="default" className="text-xs bg-green-600 whitespace-nowrap">Custom</Badge>
+                            )}
+                          </div>
                         </div>
                         <input
                           ref={stampInputRef}
@@ -2421,10 +2449,27 @@ IBAN No.: SA2680000301608010269328</div>
                           variant="outline"
                           onClick={() => stampInputRef.current?.click()}
                           className="w-full h-8 text-xs"
+                          disabled={isStampRemoved && !defaultStampUrl}
                         >
                           <Upload className="h-3 w-3 mr-1" />
-                          {isUsingDefaultStamp ? "Override Stamp" : "Change Stamp"}
+                          {isStampRemoved ? "Upload Stamp" : (isUsingDefaultStamp ? "Override Stamp" : "Change Stamp")}
                         </Button>
+                        {defaultStampUrl && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full h-8 text-xs"
+                            onClick={() => {
+                              setIsStampRemoved(false);
+                              setStamp(defaultStampUrl || "");
+                              setStampFilename(null);
+                              setIsUsingDefaultStamp(true);
+                            }}
+                            disabled={!isStampRemoved && isUsingDefaultStamp}
+                          >
+                            Use Default
+                          </Button>
+                        )}
                         {stamp && (
                           <div className="relative">
                             <ImageWithFallback 
@@ -2438,11 +2483,12 @@ IBAN No.: SA2680000301608010269328</div>
                               size="icon"
                               className="absolute top-0 right-0 h-6 w-6"
                               onClick={() => {
-                                setStamp(defaultStampUrl || "");
-                                setStampFilename(null);
-                                setIsUsingDefaultStamp(true);
+                                setIsStampRemoved(true);
+                                setStamp('');
+                                setStampFilename('__NO_STAMP__');
+                                setIsUsingDefaultStamp(false);
                               }}
-                              title={isUsingDefaultStamp ? "Using system default" : "Reset to default"}
+                              title="Remove stamp"
                             >
                               <X className="h-4 w-4" />
                             </Button>
