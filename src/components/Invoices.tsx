@@ -1304,7 +1304,23 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [printDateOption, setPrintDateOption] = useState<"invoice_date" | "today" | "custom">("invoice_date");
   const [customPrintDate, setCustomPrintDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
-  const printInvoice = async (invoice: Invoice) => {
+  const [printIncludeImages, setPrintIncludeImages] = useState(true);
+  const [openPrintOptionsInvoiceId, setOpenPrintOptionsInvoiceId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (openPrintOptionsInvoiceId === null) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('[data-invoice-print-options-root="true"]')) return;
+      setOpenPrintOptionsInvoiceId(null);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [openPrintOptionsInvoiceId]);
+
+  const printInvoice = async (invoice: Invoice, includeImagesOverride?: boolean) => {
+    const includeImages = includeImagesOverride ?? printIncludeImages;
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       toast.error("Please allow popups to print invoices");
@@ -1354,29 +1370,22 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       }
     }
 
-    // Generate a compact preview HTML for QR code (same style as print but optimized for QR code size limits)
-    const escapeHtml = (text: string) => {
-      if (!text) return '';
-      return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-    };
-    
-    const previewHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;padding:20px}.container{max-width:800px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}.header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:30px;text-align:center}.header h1{font-size:32px;margin-bottom:10px}.invoice-num{font-size:24px;font-weight:600;opacity:.9}.content{padding:30px}.section{margin-bottom:25px;padding:20px;background:#f8f9fa;border-radius:8px;border-left:4px solid #667eea}.section-title{font-size:18px;font-weight:600;color:#333;margin-bottom:15px}.info-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.info-item{display:flex;flex-direction:column}.info-label{font-size:12px;color:#666;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}.info-value{font-size:16px;font-weight:600;color:#333}.items-table{width:100%;border-collapse:collapse;margin-top:15px}.items-table th{background:#667eea;color:#fff;padding:12px;text-align:left;font-size:14px}.items-table td{padding:12px;border-bottom:1px solid #e0e0e0;font-size:14px}.totals{margin-top:20px;text-align:right}.total-row{display:flex;justify-content:space-between;padding:10px 0;font-size:16px}.total-row.grand{font-size:24px;font-weight:bold;color:#667eea;border-top:2px solid #667eea;padding-top:15px;margin-top:10px}.badge{display:inline-block;padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;margin-top:10px}.badge.paid{background:#10b981;color:#fff}.badge.partial{background:#f59e0b;color:#fff}.badge.draft{background:#6b7280;color:#fff}</style></head><body><div class="container"><div class="header"><h1>INVOICE</h1><div class="invoice-num">${escapeHtml(invoice.invoiceNumber)}</div><span class="badge ${invoice.status}">${invoice.status.toUpperCase()}</span></div><div class="content"><div class="section"><div class="section-title">Invoice Information</div><div class="info-grid"><div class="info-item"><span class="info-label">Date</span><span class="info-value">${new Date(invoice.date).toLocaleDateString('en-GB')}</span></div><div class="info-item"><span class="info-label">Type</span><span class="info-value">${invoice.invoiceType === 'monthly_visit' ? 'Monthly Visit' : 'Normal'}</span></div></div></div><div class="section"><div class="section-title">Customer</div><div class="info-grid"><div class="info-item"><span class="info-label">Name</span><span class="info-value">${escapeHtml(invoice.customerName)}</span></div><div class="info-item"><span class="info-label">Mobile</span><span class="info-value">${escapeHtml(invoice.mobile)}</span></div>${invoice.location ? `<div class="info-item"><span class="info-label">Location</span><span class="info-value">${escapeHtml(invoice.location)}</span></div>` : ''}</div></div><div class="section"><div class="section-title">Items</div><table class="items-table"><thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${invoice.items.map(item => `<tr><td>${escapeHtml(item.description)}</td><td>${item.quantity}</td><td>SAR ${item.unitPrice.toFixed(2)}</td><td>SAR ${item.total.toFixed(2)}</td></tr>`).join('')}</tbody></table></div><div class="section"><div class="totals"><div class="total-row"><span>Subtotal:</span><span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span></div>${invoice.totalDiscount > 0 ? `<div class="total-row"><span>Discount:</span><span>- SAR ${invoice.totalDiscount.toFixed(2)}</span></div>` : ''}<div class="total-row"><span>VAT (15%):</span><span>SAR ${invoice.totalVAT.toFixed(2)}</span></div><div class="total-row grand"><span>GRAND TOTAL:</span><span>SAR ${invoice.grandTotal.toFixed(2)}</span></div>${invoice.paidAmount > 0 ? `<div class="total-row"><span>Paid:</span><span style="color:#10b981">SAR ${invoice.paidAmount.toFixed(2)}</span></div>` : ''}${invoice.remainingAmount > 0 ? `<div class="total-row"><span>Remaining:</span><span style="color:#ef4444">SAR ${invoice.remainingAmount.toFixed(2)}</span></div>` : ''}</div></div></div></div></div></body></html>`;
-    
     // Generate QR code with data URL
     let qrCode = "";
     try {
-      const qrDataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(previewHTML)}`;
-      qrCode = await QRCode.toDataURL(qrDataUrl, {
+      // Use simple text data instead of HTML to avoid QR code size limits
+      const simpleData = `Invoice: ${invoice.invoiceNumber}\nDate: ${new Date(invoice.date).toLocaleDateString('en-GB')}\nCustomer: ${invoice.customerName}\nTotal: SAR ${invoice.grandTotal.toFixed(2)}`;
+      qrCode = await QRCode.toDataURL(simpleData, {
         errorCorrectionLevel: 'H',
         margin: 1,
         width: 300
       });
     } catch (err) {
       console.error("QR Code generation error:", err);
-      // Fallback: generate a simple text QR code
+      // Fallback: generate an even simpler QR code
       try {
-        const simpleData = `Invoice: ${invoice.invoiceNumber}\nDate: ${new Date(invoice.date).toLocaleDateString('en-GB')}\nCustomer: ${invoice.customerName}\nTotal: SAR ${invoice.grandTotal.toFixed(2)}`;
-        qrCode = await QRCode.toDataURL(simpleData);
+        const minimalData = `INV:${invoice.invoiceNumber}|${invoice.grandTotal.toFixed(2)}`;
+        qrCode = await QRCode.toDataURL(minimalData);
       } catch (fallbackErr) {
         console.error("QR Code fallback generation error:", fallbackErr);
       }
@@ -1386,7 +1395,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : 
                         printDateOption === "custom" ? customPrintDate : 
                         invoice.date;
-    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate);
+    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate, includeImages);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -1440,573 +1449,14 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     printWindow.print();
   };
 
-//   const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string, displayDate?: string) => {
-//     // Use provided logo or fall back to invoice logo
-//     const companyLogo = logoUrl || invoice.companyLogo;
-//     // Use provided display date or fall back to invoice date
-//     const dateToDisplay = displayDate || invoice.date;
-//     // Escape HTML special characters in text content
-//     const escapeHtml = (text: string) => {
-//       if (!text) return '';
-//       return String(text)
-//         .replace(/&/g, '&amp;')
-//         .replace(/</g, '&lt;')
-//         .replace(/>/g, '&gt;')
-//         .replace(/"/g, '&quot;')
-//         .replace(/'/g, '&#039;');
-//     };
-    
-//     return `
-//       <!DOCTYPE html>
-//       <html>
-//       <head>
-//         <meta charset="UTF-8">
-//         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-//         <title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
-//         <style>
-//           @page { 
-//             size: A4; 
-//             margin: 15mm;
-//           }
-//           * { 
-//             margin: 0; 
-//             padding: 0; 
-//             box-sizing: border-box; 
-//           }
-//           html, body {
-//             width: 100%;
-//             height: 100%;
-//           }
-//           body { 
-//             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif, Arial, Helvetica;
-//             line-height: 1.6;
-//             color: #333;
-//             font-size: 14px;
-//             background: #ffffff;
-//             position: relative;
-//             padding: 0;
-//             margin: 0;
-//           }
-//           .invoice-container { 
-//             max-width: 800px; 
-//             margin: 0 auto; 
-//             padding: 20px; 
-//             position: relative; 
-//             background: white; 
-//             min-height: 100vh;
-//           }
-//           .company-stamp {
-//             width: 130px;
-//             height: 130px;
-//             object-fit: contain;
-//             display: block;
-//           }
-//           ${invoice.status === 'paid' ? `
-//           .paid-stamp {
-//             position: absolute;
-//             top: 120px;
-//             right: 80px;
-//             width: 220px;
-//             height: 220px;
-//             border: 10px solid #22c55e;
-//             border-radius: 16px;
-//             transform: rotate(-18deg);
-//             display: flex;
-//             flex-direction: column;
-//             align-items: center;
-//             justify-content: center;
-//             opacity: 0.3;
-//             z-index: 5;
-//             pointer-events: none;
-//             box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.1);
-//           }
-//           .paid-stamp-text {
-//             font-size: 48px;
-//             font-weight: 900;
-//             color: #22c55e;
-//             letter-spacing: 6px;
-//             text-align: center;
-//             line-height: 1.1;
-//             text-transform: uppercase;
-//           }
-//           .paid-stamp-ar {
-//             font-size: 40px;
-//             font-weight: 900;
-//             color: #22c55e;
-//             margin-top: 10px;
-//             letter-spacing: 2px;
-//           }
-//           @media print {
-//             .paid-stamp {
-//               opacity: 0.35;
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//             }
-//           }
-//           ` : ''}
-//           .content { position: relative; z-index: 1; }
-//           .header { 
-//             display: flex;
-//             align-items: center;
-//             justify-content: space-between;
-//             gap: 16px;
-//             padding-bottom: 20px;
-//             border-bottom: 3px solid #cbd5e1;
-//             margin-bottom: 20px;
-//           }
-//           .company-info { text-align: left; flex: 0 0 auto; }
-//           .company-logo { 
-//             max-width: 240px;
-//             height: auto;
-//             margin: 8px 0 12px 0;
-//           }
-//           .bank-details {
-//             flex: 1 1 auto;
-//             text-align: center;
-//             color: #475569;
-//             font-size: 12px;
-//             line-height: 1.4;
-//             padding: 0 8px;
-//             white-space: pre-line;
-//           }
-//           .stamp-wrap { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; }
-//           .bank-stamp-row {
-//             display: grid;
-//             grid-template-columns: 1fr auto 1fr;
-//             align-items: center;
-//             gap: 16px;
-//             margin-top: 20px;
-//             padding: 15px 0;
-//             border-top: 1px solid #e2e8f0;
-//             font-size: 13px;
-//             color: #333;
-//             line-height: 1.6;
-//           }
-//           .bank-stamp-row .bank-text {
-//             flex: 1 1 auto;
-//             grid-column: 1;
-//             text-align: left;
-//             white-space: pre-line;
-//           }
-//           .bank-stamp-row .bank-stamp {
-//             flex: 0 0 auto;
-//             display: flex;
-//             align-items: center;
-//             justify-content: center;
-//             grid-column: 2;
-//           }
-//           .company-name {
-//             font-size: 22px; 
-//             font-weight: bold; 
-//             color: #475569;
-//             margin-bottom: 5px;
-//           }
-//           .invoice-info { text-align: right; }
-//           .invoice-number {
-//             font-size: 22px;
-//             font-weight: bold;
-//             color: #475569;
-//             margin-bottom: 10px;
-//           }
-//           .invoice-badge {
-//             background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-//             color: white;
-//             padding: 8px 16px;
-//             border-radius: 6px;
-//             display: inline-block;
-//             margin-top: 10px;
-//             font-weight: 600;
-//           }
-//           .customer-section {
-//             display: grid;
-//             grid-template-columns: 1fr 1fr;
-//             gap: 30px;
-//             margin: 20px 0;
-//             padding: 15px;
-//             background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
-//             border-radius: 8px;
-//           }
-//           .section-title {
-//             font-weight: 600;
-//             color: #64748b;
-//             margin-bottom: 10px;
-//             font-size: 16px;
-//           }
-//           .info-row {
-//             margin: 5px 0;
-//             font-size: 13px;
-//           }
-//           .label { 
-//             font-weight: 600; 
-//             color: #94a3b8;
-//             display: inline-block;
-//             min-width: 100px;
-//           }
-//           .items-table {
-//             width: 100%;
-//             border-collapse: collapse;
-//             margin: 20px 0;
-//           }
-//           .items-table th {
-//             background: linear-gradient(135deg, #64748b 0%, #475569 100%);
-//             color: white;
-//             padding: 12px 8px;
-//             text-align: left;
-//             font-size: 13px;
-//             font-weight: 600;
-//           }
-//           .items-table th:first-child { border-radius: 8px 0 0 0; }
-//           .items-table th:last-child { border-radius: 0 8px 0 0; }
-//           .items-table td {
-//             padding: 10px 8px;
-//             border-bottom: 1px solid #e2e8f0;
-//             font-size: 13px;
-//           }
-//           .items-table tr:hover {
-//             background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
-//           }
-//           .item-image {
-//             width: 50px;
-//             height: 50px;
-//             object-fit: cover;
-//             border-radius: 6px;
-//             border: 1px solid #e2e8f0;
-//             display: block;
-//             max-width: 100%;
-//             height: auto;
-//           }
-//           @media print {
-//             .item-image {
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//               max-width: 50px;
-//               max-height: 50px;
-//             }
-//           }
-//           .item-desc {
-//             font-weight: 500;
-//           }
-//           .totals-section {
-//             float: right;
-//             width: 350px;
-//             margin-top: 20px;
-//             margin-bottom: 20px;
-//           }
-//           .total-row {
-//             display: flex;
-//             justify-content: space-between;
-//             padding: 8px 15px;
-//             border-bottom: 1px solid #e2e8f0;
-//           }
-//           .total-row.grand {
-//             background: linear-gradient(135deg, #64748b 0%, #475569 100%);
-//             color: white;
-//             font-size: 18px;
-//             font-weight: bold;
-//             border-radius: 8px;
-//             margin-top: 10px;
-//           }
-//           .totals-wrapper {
-//             overflow: hidden;
-//             margin-bottom: 30px;
-//             page-break-inside: avoid;
-//             break-inside: avoid;
-//           }
-//           .footer {
-//             clear: both;
-//             margin-top: 60px;
-//             padding-top: 20px;
-//             border-top: 2px solid #e2e8f0;
-//             display: grid;
-//             grid-template-columns: 1fr auto;
-//             gap: 20px;
-//             align-items: center;
-//           }
-//           .terms {
-//             clear: both;
-//             background: #374151;
-//             padding: 15px;
-//             border-radius: 8px;
-//             margin: 20px 0;
-//             border-left: 4px solid #1f2937;
-//             max-height: none;
-//             overflow: visible;
-//             page-break-inside: avoid;
-//             page-break-after: avoid;
-//           }
-//           .terms-title {
-//             font-weight: 600;
-//             color: #f3f4f6;
-//             margin-bottom: 8px;
-//           }
-//           .terms-content {
-//             color: #e5e7eb;
-//             font-size: 13px;
-//             white-space: pre-wrap;
-//             overflow: visible;
-//             max-height: none;
-//           }
-//           .qr-section {
-//             text-align: center;
-//           }
-//           .qr-code {
-//             width: 120px;
-//             height: 120px;
-//             border: 2px solid #e2e8f0;
-//             border-radius: 8px;
-//             padding: 5px;
-//           }
-//           @media print {
-//             @page {
-//               size: A4;
-//               margin: 15mm;
-//             }
-//             html, body {
-//               width: 100%;
-//               height: auto;
-//               margin: 0;
-//               padding: 0;
-//               background: white !important;
-//             }
-//             body { 
-//               print-color-adjust: exact; 
-//               -webkit-print-color-adjust: exact; 
-//               background: white !important;
-//               font-size: 12px;
-//             }
-//             .invoice-container {
-//               max-width: 100%;
-//               margin: 0;
-//               padding: 15mm;
-//               box-shadow: none;
-//               border-radius: 0;
-//             }
-//             .stamp, .paid-stamp {
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//             }
-//             .items-table th {
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//             }
-//             .total-row.grand {
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//             }
-//             .terms {
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//             }
-//             .invoice-badge {
-//               print-color-adjust: exact;
-//               -webkit-print-color-adjust: exact;
-//             }
-//             /* Prevent page breaks inside important sections */
-//             .header, .customer-section, .totals-wrapper, .totals-section {
-//               page-break-inside: avoid;
-//             }
-//             .items-table tbody tr {
-//               page-break-inside: avoid;
-//             }
-//             /* Ensure footer stays together */
-//             .footer {
-//               page-break-inside: avoid;
-//             }
-//             /* Ensure notes don't overlap with totals */
-//             .totals-wrapper {
-//               clear: both;
-//               margin-bottom: 30px;
-//             }
-//             .terms {
-//               clear: both;
-//               margin-top: 30px;
-//             }
-//             /* Keep totals/terms together when possible */
-//             .totals-wrapper {
-//               page-break-inside: avoid;
-//               break-inside: avoid;
-//             }
-//             .terms {
-//               page-break-inside: avoid;
-//               break-inside: avoid;
-//               page-break-after: auto;
-//               orphans: 3;
-//               widows: 3;
-//             }
-//           }
-//         </style>
-//       </head>
-//       <body>
-//         <div class="invoice-container">
-//           ${invoice.status === 'paid' ? `
-//           <div class="paid-stamp">
-//             <div class="paid-stamp-text">✓ PAID</div>
-//             <div class="paid-stamp-ar">مدفوعة ✓</div>
-//           </div>
-//           ` : ''}
-          
-//           <div class="content">
-//             <div class="header">
-//               <div class="company-info">
-//                 ${companyLogo ? `<img src="${companyLogo}" class="company-logo" alt="Company Logo">` : 
-//                   '<div class="company-name">🌸 Mana Smart Trading</div>'}
-//                 <div style="color: #64748b; font-size: 13px;">
-//                   Khobar, Saudi Arabia<br>
-//                   VAT: 311234567800003 | C.R.: 2051245473<br>
-//                   Email: sales@mana.sa | Phone: +966 556 292 500
-//                 </div>
-//               </div>
-//               <div class="invoice-info">
-//                 <div class="invoice-number">INVOICE</div>
-//                 <div style="font-size: 16px; color: #64748b; margin-bottom: 5px;">${invoice.invoiceNumber}</div>
-//                 <div style="font-size: 13px; color: #94a3b8;">Date: ${new Date(dateToDisplay).toLocaleDateString('en-GB')}</div>
-//                 ${invoice.invoiceType === 'monthly_visit' && invoice.visitDate ? `
-//                 <div style="font-size: 13px; color: #3b82f6; font-weight: 600; margin-top: 5px;">
-//                   For Monthly Visit: ${new Date(invoice.visitDate).toLocaleDateString('en-GB')}
-//                 </div>
-//                 <div style="font-size: 12px; color: #64748b; margin-top: 2px;">
-//                   Invoice for ${new Date(invoice.visitDate).toLocaleDateString('en-GB')} monthly visit
-//                 </div>
-//                 ` : ''}
-//                 <div class="invoice-badge">TAX INVOICE</div>
-//               </div>
-//             </div>
 
-//             <div class="customer-section">
-//               <div>
-//                 <div class="section-title">Bill To</div>
-//                 <div class="info-row"><span class="label">Name:</span> ${invoice.customerName}</div>
-//                 <div class="info-row"><span class="label">Mobile:</span> ${invoice.mobile}</div>
-//                 ${invoice.location ? `<div class="info-row"><span class="label">Location:</span> ${invoice.location}</div>` : ''}
-//               </div>
-//               <div>
-//                 <div class="section-title">Tax Information</div>
-//                 ${invoice.commercialRegister ? `<div class="info-row"><span class="label">C.R.:</span> ${invoice.commercialRegister}</div>` : ''}
-//                 ${invoice.taxNumber ? `<div class="info-row"><span class="label">VAT:</span> ${invoice.taxNumber}</div>` : ''}
-//               </div>
-//             </div>
-
-//             <table class="items-table">
-//               <thead>
-//                 <tr>
-//                   <th style="width: 60px;">Image</th>
-//                   <th>Description</th>
-//                   <th style="width: 60px; text-align: center;">Qty</th>
-//                   <th style="width: 100px; text-align: center;">Price</th>
-//                   <th style="width: 80px; text-align: center;">Disc. %</th>
-//                   <th style="width: 100px; text-align: center;">Before Disc.</th>
-//                   <th style="width: 100px; text-align: center;">After Disc.</th>
-//                   <th style="width: 80px; text-align: center;">VAT 15%</th>
-//                   <th style="width: 100px; text-align: center;">Total</th>
-//                 </tr>
-//               </thead>
-//               <tbody>
-//                 ${invoice.items.map(item => `
-//                   <tr>
-//                     <td>
-//                       ${item.image ? `<img src="${item.image}" class="item-image" alt="${item.description}">` : 
-//                         '<div style="width: 50px; height: 50px; background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 20px;">📦</div>'}
-//                     </td>
-//                     <td>
-//                       <div class="item-desc">${item.description}</div>
-//                     </td>
-//                     <td style="text-align: center;">${item.quantity}</td>
-//                     <td style="text-align: right;">SAR ${item.unitPrice.toFixed(2)}</td>
-//                     <td style="text-align: center;">${item.discountPercent}%</td>
-//                     <td style="text-align: right;">SAR ${(item.unitPrice * item.quantity).toFixed(2)}</td>
-//                     <td style="text-align: right;">SAR ${item.subtotal.toFixed(2)}</td>
-//                     <td style="text-align: right;">SAR ${item.vat.toFixed(2)}</td>
-//                     <td style="text-align: right; font-weight: 600;">SAR ${item.total.toFixed(2)}</td>
-//                   </tr>
-//                 `).join('')}
-//               </tbody>
-//             </table>
-
-//             <div class="totals-wrapper">
-//               <div class="totals-section">
-//                 <div class="total-row">
-//                   <span>Subtotal:</span>
-//                   <span>SAR ${invoice.totalBeforeDiscount.toFixed(2)}</span>
-//                 </div>
-//                 ${invoice.totalDiscount > 0 ? `
-//                 <div class="total-row">
-//                   <span>Discount:</span>
-//                   <span>- SAR ${invoice.totalDiscount.toFixed(2)}</span>
-//                 </div>
-//                 ` : ''}
-//                 <div class="total-row">
-//                   <span>After Discount:</span>
-//                   <span>SAR ${invoice.totalAfterDiscount.toFixed(2)}</span>
-//                 </div>
-//                 <div class="total-row">
-//                   <span>VAT (15%):</span>
-//                   <span>SAR ${invoice.totalVAT.toFixed(2)}</span>
-//                 </div>
-//                 <div class="total-row grand">
-//                   <span>GRAND TOTAL:</span>
-//                   <span>SAR ${invoice.grandTotal.toFixed(2)}</span>
-//                 </div>
-//                 ${invoice.paidAmount > 0 ? `
-//                 <div class="total-row" style="color: #16a34a;">
-//                   <span>PAID AMOUNT:</span>
-//                   <span>SAR ${invoice.paidAmount.toFixed(2)}</span>
-//                 </div>
-//                 ` : ''}
-//                 ${invoice.remainingAmount > 0 ? `
-//                 <div class="total-row" style="color: #ea580c;">
-//                   <span>REMAINING:</span>
-//                   <span>SAR ${invoice.remainingAmount.toFixed(2)}</span>
-//                 </div>
-//                 ` : ''}
-//               </div>
-//             </div>
-
-//             ${invoice.notes ? `
-//             <div class="terms">
-//               <div class="terms-title">Notes</div>
-//               <div class="terms-content">${invoice.notes}</div>
-//             </div>
-//             ` : ''}
-
-//             <div class="terms">
-//               <div class="terms-title">Terms & Conditions</div>
-//               <div class="terms-content">${invoice.termsAndConditions || `• Payment is due within 30 days from the invoice date
-// • All prices include 15% VAT
-// • Bank transfer details will be provided separately
-// • Late payments subject to additional charges
-// • Please reference invoice number in payment`}</div>
-//             </div>
-
-//             <div class="bank-stamp-row">
-//               <div class="bank-text">Mana Smart Trading Company
-// Al Rajhi Bank
-// A.N.: 301000010006080269328
-// IBAN No.: SA2680000301608010269328</div>
-//               <div class="bank-stamp">
-//                 ${invoice.stamp ? `<img src="${invoice.stamp}" class="company-stamp" alt="Stamp">` : ''}
-//               </div>
-//             </div>
-
-//             <div class="footer">
-//               <div style="color: #64748b; font-size: 12px;">
-//                 <div style="font-weight: 600; color: #475569; margin-bottom: 5px;">Thank You for Your Business!</div>
-//                 If you have any questions about this invoice, please contact us at:<br>
-//                 Email: sales@mana.sa | Phone: +966 556 292 500
-//               </div>
-//               ${qrCode ? `
-//               <div class="qr-section">
-//                 <img src="${qrCode}" class="qr-code" alt="QR Code">
-//                 <div style="font-size: 11px; color: #94a3b8; margin-top: 5px;">Scan for details</div>
-//               </div>
-//               ` : ''}
-//             </div>
-//           </div>
-//         </div>
-//       </body>
-//       </html>
-//     `;
-//   };
-const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?: string, displayDate?: string) => {
+const generateInvoiceHTML = (
+  invoice: Invoice,
+  logoUrl?: string | null,
+  qrCode?: string,
+  displayDate?: string,
+  includeImages: boolean = true
+) => {
     // Use provided logo or fall back to invoice logo
     const companyLogo = logoUrl || invoice.companyLogo;
     // Use provided display date or fall back to invoice date
@@ -2031,6 +1481,9 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
         <style>
+          :root {
+            --print-footer-height: 75mm;
+          }
           @page { 
             size: A4; 
             margin: 0;
@@ -2077,7 +1530,6 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
           .top-logo {
             max-width: 150px;
             height: auto;
-            filter: brightness(0) invert(1); /* Makes logo white if it's black */
           }
   
           /* Title Section */
@@ -2156,6 +1608,9 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 20px;
+          }
+          .hide-item-images .item-image-col {
+            display: none !important;
           }
           .items-table th {
             background-color: #5d6d7e; /* Matches header strip */
@@ -2288,13 +1743,41 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
           @media print {
             body { 
               background: white; 
-              -webkit-print-color-adjust: exact; 
+              padding: 0; 
             }
             .invoice-container {
+              box-shadow: none;
               width: 100%;
-              height: auto;
-              margin: 0;
-              padding: 0;
+              min-height: 100vh;
+              display: flex;
+              flex-direction: column;
+            }
+            .table-container { 
+              margin-bottom: 10px; 
+            }
+            .bottom-section {
+              padding: 0 40px;
+              margin-top: 8px;
+            }
+            .footer {
+              position: static;
+              margin-top: auto;
+              page-break-inside: avoid;
+              break-inside: avoid;
+            }
+            .items-table thead { 
+              display: table-header-group; 
+            }
+            .items-table tbody { 
+              display: table-row-group; 
+            }
+            .items-table tr { 
+              break-inside: avoid; 
+              page-break-inside: avoid; 
+            }
+            .bottom-section, .footer {
+              page-break-inside: avoid;
+              break-inside: avoid;
             }
             .header-strip, .items-table th, .grand-total {
                print-color-adjust: exact;
@@ -2304,7 +1787,7 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
         </style>
       </head>
       <body>
-        <div class="invoice-container">
+        <div class="invoice-container${includeImages ? '' : ' hide-item-images'}">
           
           <div class="header-strip">
             <div class="company-details-top">
@@ -2363,7 +1846,7 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
             <table class="items-table">
               <thead>
                 <tr>
-                  <th style="width: 50px; text-align: center;">Image<br>صورة</th>
+                  <th class="item-image-col" style="width: 50px; text-align: center;">Image<br>صورة</th>
                   <th>Description<br>الوصف</th>
                   <th class="center" style="width: 50px;">Qty<br>الكمية</th>
                   <th class="center">Unit Price<br>سعر الوحدة</th>
@@ -2377,7 +1860,7 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
               <tbody>
                 ${invoice.items.map(item => `
                   <tr>
-                    <td style="text-align: center;">
+                    <td class="item-image-col" style="text-align: center;">
                        ${item.image ? `<img src="${item.image}" class="item-image">` : ''}
                     </td>
                     <td>${escapeHtml(item.description)}</td>
@@ -3800,20 +3283,52 @@ const generateInvoiceHTML = (invoice: Invoice, logoUrl?: string | null, qrCode?:
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => void printInvoice(invoice)}
-                        >
-                          <Printer className="h-4 w-4" />
-                        </Button>
+                        <div className="relative" data-invoice-print-options-root="true">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setOpenPrintOptionsInvoiceId((prev) =>
+                                prev === invoice.id ? null : invoice.id
+                              )
+                            }
+                          >
+                            <Printer className="h-4 w-4" />
+                          </Button>
+                          {openPrintOptionsInvoiceId === invoice.id && (
+                            <div className="absolute right-0 top-full mt-2 z-50 w-52 rounded-md border bg-white shadow-md flex flex-col">
+                              <button
+                                type="button"
+                                className="w-full px-3 py-2 text-left text-sm"
+                                onClick={() => {
+                                  setPrintIncludeImages(true);
+                                  setOpenPrintOptionsInvoiceId(null);
+                                  void printInvoice(invoice, true);
+                                }}
+                              >
+                                Print with images
+                              </button>
+                              <button
+                                type="button"
+                                className="w-full px-3 py-2 text-left text-sm border-t"
+                                onClick={() => {
+                                  setPrintIncludeImages(false);
+                                  setOpenPrintOptionsInvoiceId(null);
+                                  void printInvoice(invoice, false);
+                                }}
+                              >
+                                Print without images
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={async () => {
                             // Load logo for download
                             const logoForDownload = invoice.companyLogo || (await getPrintLogo()) || undefined;
-                            const blob = new Blob([generateInvoiceHTML(invoice, logoForDownload)], { type: 'text/html' });
+                            const blob = new Blob([generateInvoiceHTML(invoice, logoForDownload, undefined, undefined, true)], { type: 'text/html' });
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
