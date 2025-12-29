@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar, Copy } from "lucide-react";
+import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar, Copy, Edit } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
 import QRCode from "qrcode";
@@ -438,12 +438,17 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isEditingInvoice, setIsEditingInvoice] = useState(false);
+  const [editingInvoiceDate, setEditingInvoiceDate] = useState("");
   const isDataLoading = invoicesLoading || customersLoading || paymentsLoading;
 
   // Customer management
@@ -1147,111 +1152,164 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     toast.success(`Invoice ${invoice.invoiceNumber} copied. Review and create as new invoice.`);
   };
 
-  const createInvoice = async () => {
-    if (!customerName.trim()) {
-      toast.error("Please enter customer name");
-      return;
-    }
-    if (!mobile.trim()) {
-      toast.error("Please enter mobile number");
-      return;
-    }
-    // Validate items - for monthly visit invoices, items are auto-created from contract
-    if (invoiceType === "normal" && items.every(item => !item.description.trim())) {
-      toast.error("Please add at least one item with description");
-      return;
-    }
-    
-    // For monthly visit invoices, ensure we have items (should be auto-created from contract)
-    if (invoiceType === "monthly_visit" && items.every(item => !item.description.trim())) {
-      toast.error("Please select a contract to generate invoice items");
+  const editInvoice = (invoice: Invoice) => {
+    setSelectedInvoice(invoice);
+    setEditingInvoiceDate(invoice.date);
+    setIsEditDialogOpen(true);
+  };
+
+  const updateInvoiceDate = async () => {
+    if (!selectedInvoice || !editingInvoiceDate) {
+      toast.error("Please select a valid date");
       return;
     }
 
-    const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(3, '0')}`;
-    const today = new Date();
-    
-    const paid = parseFloat(paidAmount) || 0;
-    
-    // For monthly visit invoices, ensure grand total matches contract plan amount
-    let finalGrandTotal = totals.grandTotal;
-    if (invoiceType === "monthly_visit" && contractPlanAmount !== null) {
-      const subtotal = contractPlanAmount;
-      const totalVAT = vatEnabled ? subtotal * VAT_RATE : 0;
-      finalGrandTotal = subtotal + totalVAT;
-    }
-    
-    // Generate QR code
-    const qrData = `Invoice: ${invoiceNumber}\nCustomer: ${customerName.trim()}\nTotal: SAR ${finalGrandTotal.toFixed(2)}\nVAT: ${taxNumber}`;
-    let qrCode = "";
-    
+    setIsEditingInvoice(true);
+
     try {
-      qrCode = await QRCode.toDataURL(qrData);
-    } catch (err) {
-      console.error("QR Code generation error:", err);
-    }
-    
-    // Validate paid amount doesn't exceed grand total
-    if (paid > finalGrandTotal) {
-      toast.error(`Paid amount cannot exceed grand total of ${finalGrandTotal.toFixed(2)} ر.س`);
-      return;
-    }
-    
-    // Remaining amount = grandTotal (after discount and VAT) - paid amount
-    const remaining = Math.max(0, finalGrandTotal - paid);
-    
-    // Auto-determine status based on payment
-    let status: "paid" | "partial" | "draft" = "draft";
-    if (paid >= finalGrandTotal) {
-      status = "paid";
-    } else if (paid > 0) {
-      status = "partial";
-    }
+      const dbInvoice = dbInvoices.find(
+        (inv) => inv.invoice_id === selectedInvoice.dbInvoiceId
+      );
 
-    // Validate discounts
-    if (discountMode === "global") {
-      const globalDiscountAmountNum = parseFloat(globalDiscountAmount) || 0;
-      if (globalDiscountAmountNum < 0) {
-        toast.error("Discount amount cannot be negative");
+      if (!dbInvoice) {
+        toast.error("Invoice not found");
         return;
       }
-      if (globalDiscountType === "percentage" && (globalDiscountAmountNum > 100 || globalDiscountAmountNum < 0)) {
-        toast.error("Discount percentage must be between 0 and 100");
+
+      // Update the invoice date in the database
+      await dispatch(
+        thunks.invoices.updateOne({
+          id: dbInvoice.invoice_id,
+          values: {
+            invoice_date: editingInvoiceDate,
+            due_date: editingInvoiceDate, // Also update due date to match
+          } as any,
+        })
+      ).unwrap();
+
+      toast.success("Invoice date updated successfully!");
+      setIsEditDialogOpen(false);
+      setSelectedInvoice(null);
+      setEditingInvoiceDate("");
+    } catch (error: any) {
+      const message =
+        error?.message || error?.error?.message || "Failed to update invoice date";
+      toast.error(message);
+    } finally {
+      setIsEditingInvoice(false);
+    }
+  };
+
+  const createInvoice = async () => {
+    setIsCreatingInvoice(true);
+
+    try {
+      // Validation checks first
+      if (!customerName.trim()) {
+        toast.error("Please enter customer name");
         return;
       }
-      const totals = calculateInvoiceTotals();
-      if (globalDiscountType === "fixed" && globalDiscountAmountNum > totals.totalBeforeDiscount) {
-        toast.error("Fixed discount cannot exceed total subtotal");
+      if (!mobile.trim()) {
+        toast.error("Please enter mobile number");
         return;
       }
-    } else {
-      // Validate individual item discounts
-      for (const item of items) {
-        if (item.discountType === "percentage" && (item.discountPercent < 0 || item.discountPercent > 100)) {
-          toast.error(`Item "${item.description || 'Untitled'}" has invalid discount percentage`);
+      // Validate items - for monthly visit invoices, items are auto-created from contract
+      if (invoiceType === "normal" && items.every(item => !item.description.trim())) {
+        toast.error("Please add at least one item with description");
+        return;
+      }
+      
+      // For monthly visit invoices, ensure we have items (should be auto-created from contract)
+      if (invoiceType === "monthly_visit" && items.every(item => !item.description.trim())) {
+        toast.error("Please select a contract to generate invoice items");
+        return;
+      }
+
+      // Additional validation before database operations
+      const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(3, '0')}`;
+      const today = new Date();
+      
+      const paid = parseFloat(paidAmount) || 0;
+      
+      // For monthly visit invoices, ensure grand total matches contract plan amount
+      let finalGrandTotal = totals.grandTotal;
+      if (invoiceType === "monthly_visit" && contractPlanAmount !== null) {
+        const subtotal = contractPlanAmount;
+        const totalVAT = vatEnabled ? subtotal * VAT_RATE : 0;
+        finalGrandTotal = subtotal + totalVAT;
+      }
+      
+      // Validate paid amount doesn't exceed grand total
+      if (paid > finalGrandTotal) {
+        toast.error(`Paid amount cannot exceed grand total of ${finalGrandTotal.toFixed(2)} ر.س`);
+        return;
+      }
+      
+      // Remaining amount = grandTotal (after discount and VAT) - paid amount
+      const remaining = Math.max(0, finalGrandTotal - paid);
+      
+      // Auto-determine status based on payment
+      let status: "paid" | "partial" | "draft" = "draft";
+      if (paid >= finalGrandTotal) {
+        status = "paid";
+      } else if (paid > 0) {
+        status = "partial";
+      }
+
+      // Validate discounts
+      if (discountMode === "global") {
+        const globalDiscountAmountNum = parseFloat(globalDiscountAmount) || 0;
+        if (globalDiscountAmountNum < 0) {
+          toast.error("Discount amount cannot be negative");
           return;
         }
-        if (item.discountType === "fixed") {
-          const itemSubtotal = item.quantity * item.unitPrice;
-          if (item.discountAmount < 0 || item.discountAmount > itemSubtotal) {
-            toast.error(`Item "${item.description || 'Untitled'}" discount cannot exceed subtotal`);
+        if (globalDiscountType === "percentage" && (globalDiscountAmountNum > 100 || globalDiscountAmountNum < 0)) {
+          toast.error("Discount percentage must be between 0 and 100");
+          return;
+        }
+        const totals = calculateInvoiceTotals();
+        if (globalDiscountType === "fixed" && globalDiscountAmountNum > totals.totalBeforeDiscount) {
+          toast.error("Fixed discount cannot exceed total subtotal");
+          return;
+        }
+      } else {
+        // Validate individual item discounts
+        for (const item of items) {
+          if (item.discountType === "percentage" && (item.discountPercent < 0 || item.discountPercent > 100)) {
+            toast.error(`Item "${item.description || 'Untitled'}" has invalid discount percentage`);
             return;
+          }
+          if (item.discountType === "fixed") {
+            const itemSubtotal = item.quantity * item.unitPrice;
+            if (item.discountAmount < 0 || item.discountAmount > itemSubtotal) {
+              toast.error(`Item "${item.description || 'Untitled'}" discount cannot exceed subtotal`);
+              return;
+            }
           }
         }
       }
-    }
 
-    // Validate contract selection and visit date for monthly visit invoices
-    if (invoiceType === "monthly_visit") {
-      if (!selectedContractId) {
-        toast.error("Please select a contract for monthly visit invoice");
-        return;
+      // Validate contract selection and visit date for monthly visit invoices
+      if (invoiceType === "monthly_visit") {
+        if (!selectedContractId) {
+          toast.error("Please select a contract for monthly visit invoice");
+          return;
+        }
+        if (!visitDate) {
+          toast.error("Please select the visit date for monthly visit invoice");
+          return;
+        }
       }
-      if (!visitDate) {
-        toast.error("Please select the visit date for monthly visit invoice");
-        return;
+
+      // Generate QR code
+      const qrData = `Invoice: ${invoiceNumber}\nCustomer: ${customerName.trim()}\nTotal: SAR ${finalGrandTotal.toFixed(2)}\nVAT: ${taxNumber}`;
+      let qrCode = "";
+      
+      try {
+        qrCode = await QRCode.toDataURL(qrData);
+      } catch (err) {
+        console.error("QR Code generation error:", err);
       }
-    }
 
     const newInvoice: Invoice = {
       id: invoices.length + 1,
@@ -1283,10 +1341,10 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       visitDate: invoiceType === "monthly_visit" ? visitDate || null : null,
     };
 
-    // Note: invoices are now managed via Redux, so we don't need to update local state
-    // The list will refresh automatically when dbInvoices changes
-    // Persist to Supabase
-    try {
+      // Note: invoices are now managed via Redux, so we don't need to update local state
+      // The list will refresh automatically when dbInvoices changes
+      // Persist to Supabase
+      
       // Validate customer_id is present
       if (!selectedCustomerDbId && (!dbCustomers || dbCustomers.length === 0)) {
         toast.error("Please select a customer before creating an invoice");
@@ -1349,17 +1407,19 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           .eq('owner_type', 'invoice')
           .eq('owner_id', tempBrandingOwnerId);
       }
-      dispatch(thunks.invoices.fetchAll(undefined));
+      // No need to fetchAll since createOne should optimistically update the Redux store
+
+      resetForm();
+      setIsCreateDialogOpen(false);
+
+      toast.success(`Invoice ${invoiceNumber} created successfully!`);
     } catch (err: any) {
       console.error('Failed to persist invoice', err);
       const errorMessage = err?.message || err?.error?.message || 'Unknown error occurred';
       toast.error(`Failed to save invoice: ${errorMessage}`);
-      return; // Don't close dialog or reset form on error
+    } finally {
+      setIsCreatingInvoice(false);
     }
-    resetForm();
-    setIsCreateDialogOpen(false);
-    
-    toast.success(`Invoice ${invoiceNumber} created successfully!`);
   };
 
   // Print date selection state
@@ -1453,10 +1513,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       }
     }
 
-    // Generate HTML with logo and QR code
-    const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : 
-                        printDateOption === "custom" ? customPrintDate : 
-                        invoice.date;
+    // Generate HTML with logo and QR code - always use invoice date for printing
+    const displayDate = invoice.date;
     const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate, includeImages);
     
     // Write HTML to print window
@@ -2934,13 +2992,22 @@ const generateInvoiceHTML = (
                       <div className="flex justify-between text-xs border-t pt-1.5">
                         <span className="text-muted-foreground">Status:</span>
                         <span>
-                          {(parseFloat(paidAmount) || 0) >= totals.grandTotal ? (
-                            <Badge className="bg-green-100 text-green-700 border-green-200 text-xs py-0">Paid - مدفوعة</Badge>
-                          ) : (parseFloat(paidAmount) || 0) > 0 ? (
-                            <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200 text-xs py-0">Partial - جزئي</Badge>
-                          ) : (
-                            <Badge className="bg-gray-100 text-gray-700 border-gray-200 text-xs py-0">Draft - مسودة</Badge>
-                          )}
+                          {(() => {
+                            const paid = parseFloat(paidAmount) || 0;
+                            const total = totals.grandTotal;
+                            // Round both values to 2 decimal places for comparison to avoid floating-point precision issues
+                            const roundedPaid = Math.round(paid * 100) / 100;
+                            const roundedTotal = Math.round(total * 100) / 100;
+                            const remaining = Math.max(0, roundedTotal - roundedPaid);
+                            
+                            if (remaining <= 0.01) {
+                              return <Badge className="bg-green-100 text-green-700 border-green-200 text-xs py-0">Paid - مدفوعة</Badge>;
+                            } else if (roundedPaid > 0) {
+                              return <Badge className="bg-yellow-100 text-yellow-700 border-yellow-200 text-xs py-0">Partial - جزئي</Badge>;
+                            } else {
+                              return <Badge className="bg-gray-100 text-gray-700 border-gray-200 text-xs py-0">Draft - مسودة</Badge>;
+                            }
+                          })()}
                         </span>
                       </div>
                     </div>
@@ -2999,8 +3066,8 @@ const generateInvoiceHTML = (
               <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)} className="h-9">
                 Cancel
               </Button>
-              <Button onClick={createInvoice} className="h-9 bg-purple-600 hover:bg-purple-700 text-white">
-                Create Invoice
+              <Button onClick={createInvoice} disabled={isCreatingInvoice} className="h-9 bg-purple-600 hover:bg-purple-700 text-white">
+                {isCreatingInvoice ? "Creating..." : "Create Invoice"}
               </Button>
             </div>
           </DialogContent>
@@ -3340,6 +3407,14 @@ const generateInvoiceHTML = (
                         <Button
                           variant="outline"
                           size="sm"
+                          className="gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
+                          onClick={() => editInvoice(invoice)}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
                           onClick={() => {
                             setSelectedInvoice(invoice);
                             setIsViewDialogOpen(true);
@@ -3420,6 +3495,90 @@ const generateInvoiceHTML = (
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Invoice Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Invoice</DialogTitle>
+            <DialogDescription>Update invoice date and other details</DialogDescription>
+          </DialogHeader>
+          {selectedInvoice && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-invoice-number">Invoice Number</Label>
+                <Input
+                  id="edit-invoice-number"
+                  value={selectedInvoice.invoiceNumber}
+                  disabled
+                  className="bg-muted"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-customer">Customer</Label>
+                <Input
+                  id="edit-customer"
+                  value={selectedInvoice.customerName}
+                  disabled
+                  className="bg-muted"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-date">Invoice Date</Label>
+                <Input
+                  id="edit-date"
+                  type="date"
+                  value={editingInvoiceDate}
+                  onChange={(e) => setEditingInvoiceDate(e.target.value)}
+                  className="cursor-pointer"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Current Total</Label>
+                <Input
+                  value={`${selectedInvoice.grandTotal.toFixed(2)} ر.س`}
+                  disabled
+                  className="bg-muted"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Current Status</Label>
+                <Badge className={
+                  selectedInvoice.status === "paid" ? "bg-green-100 text-green-700 border-green-200" :
+                  selectedInvoice.status === "partial" ? "bg-yellow-100 text-yellow-700 border-yellow-200" :
+                  "bg-gray-100 text-gray-700 border-gray-200"
+                }>
+                  {selectedInvoice.status === "paid" ? "Paid" : selectedInvoice.status === "partial" ? "Partial" : "Draft"}
+                </Badge>
+              </div>
+            </div>
+          )}
+          
+          <div className="flex justify-end gap-3 pt-4 border-t">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsEditDialogOpen(false);
+                setSelectedInvoice(null);
+                setEditingInvoiceDate("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={updateInvoiceDate}
+              disabled={isEditingInvoice}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {isEditingInvoice ? "Updating..." : "Update Invoice"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* View Dialog */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
@@ -3809,28 +3968,32 @@ const generateInvoiceHTML = (
                 </Button>
                 <Button
                   className="gap-2 bg-green-600 hover:bg-green-700"
+                  disabled={isProcessingPayment}
                   onClick={async () => {
-                    if (!selectedInvoice) {
-                      toast.error("No invoice selected");
-                      return;
-                    }
+                    setIsProcessingPayment(true);
+                    
+                    try {
+                      if (!selectedInvoice) {
+                        toast.error("No invoice selected");
+                        return;
+                      }
 
-                    const amount = parseFloat(paymentAmount);
+                      const amount = parseFloat(paymentAmount);
 
-                    if (!paymentAmount || Number.isNaN(amount) || amount <= 0) {
-                      toast.error("Please enter a valid payment amount");
-                      return;
-                    }
+                      if (!paymentAmount || Number.isNaN(amount) || amount <= 0) {
+                        toast.error("Please enter a valid payment amount");
+                        return;
+                      }
 
-                    if (!paymentMethod) {
-                      toast.error("Please select a payment method");
-                      return;
-                    }
+                      if (!paymentMethod) {
+                        toast.error("Please select a payment method");
+                        return;
+                      }
 
-                    if (!PAYMENT_METHOD_VALUES.has(paymentMethod)) {
-                      toast.error("Selected payment method is not supported. Please choose another method.");
-                      return;
-                    }
+                      if (!PAYMENT_METHOD_VALUES.has(paymentMethod)) {
+                        toast.error("Selected payment method is not supported. Please choose another method.");
+                        return;
+                      }
 
                     const dbInvoice = dbInvoices.find(
                       (inv) => inv.invoice_id === selectedInvoice.dbInvoiceId
@@ -3978,20 +4141,24 @@ const generateInvoiceHTML = (
                       return;
                     }
 
-                    await Promise.all([
-                      dispatch(thunks.invoices.fetchAll(undefined)),
-                      dispatch(thunks.payments.fetchAll(undefined)),
-                    ]);
+                    // No need to fetchAll since createOne and updateOne should optimistically update the Redux store
 
                     toast.success(`Payment of ${amount.toFixed(2)} ر.س collected successfully!`);
                     setIsPaymentDialogOpen(false);
                     setPaymentAmount("");
                     setPaymentMethod("");
                     setPaymentDate(new Date().toISOString().split("T")[0]);
+                    } catch (error: any) {
+                      const message =
+                        error?.message || error?.error?.message || "Failed to process payment";
+                      toast.error(message);
+                    } finally {
+                      setIsProcessingPayment(false);
+                    }
                   }}
                 >
                   <Wallet className="h-4 w-4" />
-                  Confirm Payment
+                  {isProcessingPayment ? "Processing..." : "Confirm Payment"}
                 </Button>
               </div>
             </div>

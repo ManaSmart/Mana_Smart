@@ -959,10 +959,8 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       vat_enabled: vatEnabled,
       company_logo: logoFilename || null,
       company_stamp: isStampRemoved ? '__NO_STAMP__' : (stampFilename || null),
-      discount_mode: discountMode,
-      global_discount_type: discountMode === "global" ? globalDiscountType : null,
-      global_discount_amount:
-        discountMode === "global" ? (parseFloat(globalDiscountAmount) || null) : null,
+      discount_type: discountMode === "global" ? globalDiscountType : null,
+      discount_amount: discountMode === "global" ? (parseFloat(globalDiscountAmount) || null) : null,
     };
 
     try {
