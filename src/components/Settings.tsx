@@ -485,16 +485,20 @@ export function Settings({
       const stored = localStorage.getItem('auth_user');
       let currentUserId: string | null = null;
       
+      console.log('Auth check for logo upload:', { stored });
+      
       if (stored) {
         try {
           const parsed = JSON.parse(stored);
           currentUserId = parsed.user_id || null;
+          console.log('Parsed auth user:', { parsed, currentUserId });
         } catch (e) {
           console.error('Failed to parse auth_user', e);
         }
       }
 
       if (!currentUserId) {
+        console.error('No authenticated user found for logo upload');
         throw new Error('User not authenticated');
       }
 
@@ -513,7 +517,22 @@ export function Settings({
           .maybeSingle<CompanyBranding>();
 
         if (createError || !newBranding) {
-          throw new Error('Failed to create branding record');
+          console.error('Branding creation error details:', {
+            error: createError,
+            errorDetails: createError ? {
+              code: createError.code,
+              message: createError.message,
+              details: createError.details,
+              hint: createError.hint
+            } : null,
+            newBranding,
+            brandingId: brandingId,
+            localSystemName,
+            localSystemNameAr,
+            localSystemNameEn,
+            currentUserId
+          });
+          throw new Error(`Failed to create branding record: ${createError?.message || 'Unknown error'}`);
         }
         currentBrandingId = newBranding.branding_id;
         setBrandingId(currentBrandingId);

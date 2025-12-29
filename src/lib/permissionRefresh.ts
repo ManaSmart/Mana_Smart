@@ -106,14 +106,22 @@ export async function refreshPermissionsForRole(roleId: string): Promise<void> {
       (users || []).map((user) => refreshUserPermissions(user.user_id))
     );
 
-    // Emit role updated event
+    // Emit role updated event with reload request
     permissionEvents.emit(PERMISSION_EVENTS.ROLE_UPDATED, {
       roleId,
       userCount: users?.length || 0,
       results: results.map(r => r.status === 'fulfilled' ? r.value : null),
+      shouldReload: true, // Flag to indicate reload should be triggered
     });
 
-    console.log(`Refreshed permissions for ${users?.length || 0} users with role ${roleId}`);
+    // Also emit broadcast reload event specifically for this role
+    permissionEvents.emit(PERMISSION_EVENTS.BROADCAST_RELOAD, {
+      roleId,
+      userCount: users?.length || 0,
+      reason: 'role-permissions-updated'
+    });
+
+    console.log(`Refreshed permissions for ${users?.length || 0} users with role ${roleId} and triggered reload`);
   } catch (error) {
     console.error("Error refreshing permissions for role:", error);
   }

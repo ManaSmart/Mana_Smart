@@ -89,6 +89,7 @@ import type { PageId } from "./config/page-map";
 import { normalizePermissions, hasPermission, type ResolvedPermissions } from "./lib/permissions";
 import { refreshUserPermissions, verifyUserStatus } from "./lib/permissionRefresh";
 import { permissionEvents, PERMISSION_EVENTS } from "./lib/permissionEvents";
+import "./lib/permissionReloadTest"; // Load test utility
 import { getFilesByOwner, getFileUrl } from "./lib/storage";
 import { FILE_CATEGORIES } from "../supabase/models/file_metadata";
 import { supabase } from "./lib/supabaseClient";
@@ -624,23 +625,66 @@ export default function App() {
       // This handles cases where the current user's role was updated
       if (userRole && data.roleId) {
         console.log('Role updated:', data);
-        // The refreshPermissionsForRole function already updated localStorage
-        // and emitted the PERMISSIONS_UPDATED event, so we just need to
-        // ensure the UI reflects the changes
+        
+        // Check if current user's role was the one that was updated
+        // We need to compare the current user's role_id with the updated roleId
         const stored = localStorage.getItem('auth_user');
         if (stored) {
           try {
             const parsed = JSON.parse(stored);
-            if (parsed.user_id === currentUserId) {
+            if (parsed.user_id === currentUserId && parsed.role_id === data.roleId) {
+              // This is the current user's role that was updated
               const refreshedPermissions = normalizePermissions(parsed.role_permissions);
               setPermissions(refreshedPermissions);
               setUserRole(parsed.role_name || "");
-              toast.success('Your role permissions have been updated');
+              
+              // Show notification and trigger reload if requested
+              if (data.shouldReload) {
+                toast.success('Your role permissions have been updated. Reloading page...');
+                // Delay reload to allow toast to show
+                setTimeout(() => {
+                  window.location.reload();
+                }, 1500);
+              } else {
+                toast.success('Your role permissions have been updated');
+              }
             }
           } catch (e) {
             console.error('Error parsing auth_user after role update:', e);
           }
         }
+      }
+    };
+
+    const handleBroadcastReload = (data: any) => {
+      // Handle broadcast reload events for specific roles
+      const stored = localStorage.getItem('auth_user');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed.user_id === currentUserId && parsed.role_id === data.roleId) {
+            console.log('Broadcast reload received for current user role:', data);
+            toast.info(`System permissions updated. Reloading page... (${data.reason})`);
+            // Delay reload to allow toast to show
+            setTimeout(() => {
+              window.location.reload();
+            }, 1500);
+          }
+        } catch (e) {
+          console.error('Error parsing auth_user for broadcast reload:', e);
+        }
+      }
+    };
+
+    const handleForceReload = (data: any) => {
+      // Handle force reload events for specific users
+      if (data.userId === currentUserId) {
+        console.log('Force reload received for current user:', data);
+        toast.info(`System update requires page reload. Reloading... (${data.reason || 'permissions updated'})`);
+        // Delay reload to allow toast to show
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
       }
     };
 
@@ -655,10 +699,22 @@ export default function App() {
       handleRoleUpdated
     );
 
+    const unsubscribeBroadcast = permissionEvents.subscribe(
+      PERMISSION_EVENTS.BROADCAST_RELOAD,
+      handleBroadcastReload
+    );
+
+    const unsubscribeForce = permissionEvents.subscribe(
+      PERMISSION_EVENTS.FORCE_RELOAD,
+      handleForceReload
+    );
+
     // Cleanup
     return () => {
       unsubscribePermissions();
       unsubscribeRole();
+      unsubscribeBroadcast();
+      unsubscribeForce();
     };
   }, [isLoggedIn, currentUserId, userRole]);
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar } from "lucide-react";
+import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar, Copy } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
 import QRCode from "qrcode";
@@ -1083,6 +1083,68 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       vat: 0,
       total: 0
     }]);
+  };
+
+  const copyInvoice = (invoice: Invoice) => {
+    // Find the customer in dbCustomers to get the correct IDs
+    const customer = dbCustomers.find(c => c.customer_name === invoice.customerName);
+    
+    if (customer) {
+      const customerIdx = dbCustomers.findIndex(c => c.customer_id === customer.customer_id);
+      setSelectedCustomerId(customerIdx + 1);
+      setSelectedCustomerDbId(customer.customer_id);
+    } else {
+      setSelectedCustomerId(undefined);
+      setSelectedCustomerDbId(undefined);
+    }
+    
+    // Set invoice type and contract info
+    setInvoiceType(invoice.invoiceType);
+    setSelectedContractId(invoice.contractId || null);
+    setContractPlanAmount(null); // Will be recalculated if needed
+    setVisitDate(invoice.visitDate || "");
+    
+    // Copy customer information
+    setCustomerName(invoice.customerName);
+    setMobile(invoice.mobile);
+    setLocation(invoice.location);
+    setCommercialRegister(invoice.commercialRegister);
+    setTaxNumber(invoice.taxNumber);
+    
+    // Copy notes and terms
+    setNotes(invoice.notes || "");
+    setTermsAndConditions(invoice.termsAndConditions || "");
+    
+    // Copy branding
+    setCompanyLogo(invoice.companyLogo || "");
+    setStamp(invoice.stamp || "");
+    setStampPosition(invoice.stampPosition || { x: 50, y: 50 });
+    setIsStampRemoved(false);
+    setIsUsingDefaultLogo(!invoice.companyLogo);
+    setIsUsingDefaultStamp(!invoice.stamp);
+    setLogoFilename(invoice.logoFilename || null);
+    setStampFilename(invoice.stampFilename || null);
+    
+    // Copy items with new IDs
+    setItems(invoice.items.map(item => ({
+      ...item,
+      id: Date.now() + Math.random(), // Generate new unique ID
+      inventoryItem: undefined // Reset inventory item reference
+    })));
+    
+    // Reset payment and status fields for new invoice
+    setPaidAmount("");
+    setVatEnabled(true);
+    
+    // Reset discount mode
+    setDiscountMode("individual");
+    setGlobalDiscountType("percentage");
+    setGlobalDiscountAmount("");
+    
+    // Open the create dialog
+    setIsCreateDialogOpen(true);
+    
+    toast.success(`Invoice ${invoice.invoiceNumber} copied. Review and create as new invoice.`);
   };
 
   const createInvoice = async () => {
@@ -2885,49 +2947,51 @@ const generateInvoiceHTML = (
                   </CardContent>
                 </Card>
 
-                {/* Settings Section */}
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <Settings className="h-4 w-4" />
-                      Automatic Invoicing Settings
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5 flex-1">
-                        <Label htmlFor="autoInvoiceEnabled" className="text-xs">Enable Automatic Invoicing</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Automatically create invoices when monthly visits are generated
-                        </p>
+                {/* Settings Section - Only for monthly visit invoices */}
+                {invoiceType === "monthly_visit" && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <Settings className="h-4 w-4" />
+                        Automatic Invoicing Settings
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5 flex-1">
+                          <Label htmlFor="autoInvoiceEnabled" className="text-xs">Enable Automatic Invoicing</Label>
+                          <p className="text-xs text-muted-foreground">
+                            Automatically create invoices when monthly visits are generated
+                          </p>
+                        </div>
+                        <Switch
+                          id="autoInvoiceEnabled"
+                          checked={autoInvoiceEnabled}
+                          onCheckedChange={setAutoInvoiceEnabled}
+                        />
                       </div>
-                      <Switch
-                        id="autoInvoiceEnabled"
-                        checked={autoInvoiceEnabled}
-                        onCheckedChange={setAutoInvoiceEnabled}
-                      />
-                    </div>
-                    {autoInvoiceEnabled && (
-                      <div className="space-y-2 pt-2 border-t">
-                        <Label htmlFor="autoInvoiceTiming" className="text-xs">Invoice Generation Timing</Label>
-                        <Select value={autoInvoiceTiming} onValueChange={(value: 'visit_date' | '7_days_before') => setAutoInvoiceTiming(value)}>
-                          <SelectTrigger id="autoInvoiceTiming" className="h-8 text-sm">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="visit_date">On Visit Date</SelectItem>
-                            <SelectItem value="7_days_before">7 Days Before Visit Date</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          {autoInvoiceTiming === 'visit_date' 
-                            ? 'Invoice will be generated on the same day as the monthly visit'
-                            : 'Invoice will be generated 7 days before the monthly visit date'}
-                        </p>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                      {autoInvoiceEnabled && (
+                        <div className="space-y-2 pt-2 border-t">
+                          <Label htmlFor="autoInvoiceTiming" className="text-xs">Invoice Generation Timing</Label>
+                          <Select value={autoInvoiceTiming} onValueChange={(value: 'visit_date' | '7_days_before') => setAutoInvoiceTiming(value)}>
+                            <SelectTrigger id="autoInvoiceTiming" className="h-8 text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="visit_date">On Visit Date</SelectItem>
+                              <SelectItem value="7_days_before">7 Days Before Visit Date</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            {autoInvoiceTiming === 'visit_date' 
+                              ? 'Invoice will be generated on the same day as the monthly visit'
+                              : 'Invoice will be generated 7 days before the monthly visit date'}
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </div>
             </div>
 
@@ -3282,6 +3346,14 @@ const generateInvoiceHTML = (
                           }}
                         >
                           <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200"
+                          onClick={() => copyInvoice(invoice)}
+                        >
+                          <Copy className="h-4 w-4" />
                         </Button>
                         <div className="relative" data-invoice-print-options-root="true">
                           <Button

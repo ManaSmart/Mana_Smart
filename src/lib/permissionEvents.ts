@@ -76,4 +76,6 @@ export const PERMISSION_EVENTS = {
   ROLE_UPDATED: 'role-updated',
   USER_ROLE_CHANGED: 'user-role-changed',
   USER_STATUS_CHANGED: 'user-status-changed',
+  FORCE_RELOAD: 'force-reload', // Force page reload for specific users
+  BROADCAST_RELOAD: 'broadcast-reload', // Broadcast reload to all users with specific role
 } as const;
