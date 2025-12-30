@@ -1448,9 +1448,9 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     }
   };
 
-  // Print date selection state
-  const [printDateOption, setPrintDateOption] = useState<"invoice_date" | "today" | "custom">("invoice_date");
-  const [customPrintDate, setCustomPrintDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  // // Print date selection state
+  // const [printDateOption, setPrintDateOption] = useState<"invoice_date" | "today" | "custom">("invoice_date");
+  // const [customPrintDate, setCustomPrintDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   const [printIncludeImages, setPrintIncludeImages] = useState(true);
   const [openPrintOptionsInvoiceId, setOpenPrintOptionsInvoiceId] = useState<number | null>(null);
@@ -3754,7 +3754,7 @@ const generateInvoiceHTML = (
               </Card>
 
               {/* Print Date Selection */}
-              <Card>
+              {/* <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm">Print Date Options</CardTitle>
                 </CardHeader>
@@ -3787,7 +3787,7 @@ const generateInvoiceHTML = (
                     )}
                   </div>
                 </CardContent>
-              </Card>
+              </Card> */}
 
               {/* Actions */}
               <div className="flex justify-end gap-2 pt-4 border-t">
