@@ -504,6 +504,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
   const [contractPlanAmount, setContractPlanAmount] = useState<number | null>(null); // Store contract plan amount for grand total
   const [visitDate, setVisitDate] = useState<string>(""); // Visit date for monthly visit invoices
+  const [invoiceDate, setInvoiceDate] = useState<string>(new Date().toISOString().split('T')[0]); // Invoice date selector
   const [customerName, setCustomerName] = useState("");
   const [mobile, setMobile] = useState("");
   const [location, setLocation] = useState("");
@@ -1074,6 +1075,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     setSelectedContractId(null);
     setContractPlanAmount(null);
     setVisitDate("");
+    setInvoiceDate(new Date().toISOString().split('T')[0]);
     setCustomerName("");
     setMobile("");
     setLocation("");
@@ -1252,7 +1254,6 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
       // Additional validation before database operations
       const invoiceNumber = `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(3, '0')}`;
-      const today = new Date();
       
       const paid = parseFloat(paidAmount) || 0;
       
@@ -1339,7 +1340,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     const newInvoice: Invoice = {
       id: invoices.length + 1,
       invoiceNumber,
-      date: today.toISOString().split('T')[0],
+      date: invoiceDate,
       customerName: customerName.trim(),
       mobile: mobile.trim(),
       location: location.trim(),
@@ -1403,8 +1404,8 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         customer_id: customerId,
         contract_id: invoiceType === "monthly_visit" ? selectedContractId : null,
         invoice_items: cleanedItems,
-        invoice_date: today.toISOString().split('T')[0],
-        due_date: today.toISOString().split('T')[0],
+        invoice_date: invoiceDate,
+        due_date: invoiceDate,
         tax_rate: vatEnabled ? VAT_RATE : 0,
         vat_enabled: vatEnabled,
         company_logo: logoFilename || null,
@@ -2229,6 +2230,28 @@ const generateInvoiceHTML = (
                         </div>
                       </div>
                     )}
+                  </CardContent>
+                </Card>
+
+                {/* Invoice Date */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Invoice Date</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="invoiceDate" className="text-xs">Select Invoice Date *</Label>
+                      <Input 
+                        id="invoiceDate" 
+                        type="date"
+                        value={invoiceDate} 
+                        onChange={(e) => setInvoiceDate(e.target.value)}
+                        className="h-8 text-sm cursor-pointer"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        The date that will appear on the invoice
+                      </p>
+                    </div>
                   </CardContent>
                 </Card>
 
