@@ -174,11 +174,39 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     return map;
   }, [dbInvoices]);
 
+  // Optimized initial data fetching - load all data in parallel for maximum performance
   useEffect(() => {
-    dispatch(thunks.customers.fetchAll(undefined));
-    dispatch(thunks.invoices.fetchAll(undefined));
-    dispatch(thunks.inventory.fetchAll(undefined));
-    dispatch(thunks.payments.fetchAll(undefined));
+    let isMounted = true;
+    
+    const fetchAllData = async () => {
+      try {
+        // Fetch all data simultaneously to reduce total load time
+        const fetchPromises = [
+          dispatch(thunks.customers.fetchAll(undefined)).unwrap(),
+          dispatch(thunks.invoices.fetchAll(undefined)).unwrap(),
+          dispatch(thunks.inventory.fetchAll(undefined)).unwrap(),
+          dispatch(thunks.payments.fetchAll(undefined)).unwrap(),
+          dispatch(thunks.contracts.fetchAll(undefined)).unwrap()
+        ];
+        
+        await Promise.all(fetchPromises);
+        
+        if (isMounted) {
+          console.log('All data loaded successfully');
+        }
+      } catch (error) {
+        if (isMounted) {
+          console.error('Failed to load initial data:', error);
+          toast.error('Some data failed to load. Please refresh the page.');
+        }
+      }
+    };
+
+    fetchAllData();
+    
+    return () => {
+      isMounted = false;
+    };
   }, [dispatch]);
 
   // Convert inventory from database to InventoryItem format
@@ -470,9 +498,6 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
   // Fetch contracts for monthly visit invoices
   const dbContracts = useAppSelector(selectors.contracts.selectAll) as any[];
-  useEffect(() => {
-    dispatch(thunks.contracts.fetchAll(undefined));
-  }, [dispatch]);
 
   // Form states
   const [invoiceType, setInvoiceType] = useState<InvoiceType>("normal");
