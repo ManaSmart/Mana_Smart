@@ -76,6 +76,7 @@ export function MonthlyVisits() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | VisitStatus>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc"); // Default to descending (newest first)
   const [editingVisit, setEditingVisit] = useState<MonthlyVisitRecord | null>(null);
   const [editFormData, setEditFormData] = useState({
     visitDate: "",
@@ -104,7 +105,7 @@ export function MonthlyVisits() {
           delegate:delegates(delegate_id, delegate_name)
         `
       )
-      .order("visit_date", { ascending: true });
+      .order("created_at", { ascending: sortOrder === "asc" }); // Sort by creation date based on sortOrder
 
     if (fetchError) {
       console.error(fetchError);
@@ -141,7 +142,7 @@ export function MonthlyVisits() {
 
     setVisits(mapped);
     setLoading(false);
-  }, []);
+  }, [sortOrder]);
 
   useEffect(() => {
     void fetchMonthlyVisits();
@@ -465,6 +466,18 @@ export function MonthlyVisits() {
                 <SelectItem value="scheduled">Scheduled</SelectItem>
                 <SelectItem value="completed">Completed</SelectItem>
                 <SelectItem value="cancelled">Cancelled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>Sort Order</Label>
+            <Select value={sortOrder} onValueChange={(value: "asc" | "desc") => setSortOrder(value)}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Sort order" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">Newest First</SelectItem>
+                <SelectItem value="asc">Oldest First</SelectItem>
               </SelectContent>
             </Select>
           </div>

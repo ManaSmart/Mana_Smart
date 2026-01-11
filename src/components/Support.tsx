@@ -18,6 +18,7 @@ import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
+import { CustomerSelector, type Customer } from "./CustomerSelector";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { selectors, thunks } from "../redux-toolkit/slices";
 import type { CustomerSupportTickets } from "../../supabase/models/customer_support_tickets";
@@ -74,6 +75,7 @@ export function Support() {
 
   // Form states
   const [formCustomer, setFormCustomer] = useState<string>("");
+  const [selectedCustomerObj, setSelectedCustomerObj] = useState<Customer | null>(null);
   const [formSubject, setFormSubject] = useState("");
   const [formDescription, setFormDescription] = useState("");
   const [formPriority, setFormPriority] = useState<"High" | "Medium" | "Low">("Medium");
@@ -154,6 +156,7 @@ export function Support() {
 
   const resetForm = () => {
     setFormCustomer("");
+    setSelectedCustomerObj(null);
     setFormSubject("");
     setFormDescription("");
     setFormPriority("Medium");
@@ -179,6 +182,20 @@ export function Support() {
   const openEditDialog = (ticket: TicketViewModel) => {
     setSelectedTicket(ticket);
     setFormCustomer(ticket.customerId ?? "");
+    // Find and set the customer object
+    const customer = customers.find(c => c.customer_id === ticket.customerId);
+    if (customer) {
+      setSelectedCustomerObj({
+        id: parseInt(customer.customer_id.slice(0, 8), 16) % 1000000, // Generate a temporary ID
+        name: customer.customer_name ?? customer.company ?? "",
+        company: customer.company ?? "",
+        mobile: customer.contact_num ?? "",
+        email: customer.customer_email ?? "",
+        location: customer.customer_address ?? customer.customer_city_of_residence ?? "",
+        commercialRegister: customer.commercial_register ?? "",
+        taxNumber: customer.vat_number ?? ""
+      });
+    }
     setFormSubject(ticket.subject);
     setFormDescription(ticket.description);
     setFormPriority(ticket.priority);
@@ -191,7 +208,7 @@ export function Support() {
   };
 
   const handleSave = async () => {
-    if (!formCustomer) {
+    if (!formCustomer || !selectedCustomerObj) {
       toast.error("Please select a customer");
       return;
     }
@@ -671,25 +688,33 @@ export function Support() {
             <div className="space-y-4 py-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
-                  <Label htmlFor="customer">Customer *</Label>
-                  <Select value={formCustomer} onValueChange={setFormCustomer}>
-                    <SelectTrigger id="customer">
-                      <SelectValue placeholder={customers.length ? "Select customer" : "No customers available"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {customers.length === 0 ? (
-                        <SelectItem value="" disabled>
-                          No customers available
-                        </SelectItem>
-                      ) : (
-                        customers.map((customer) => (
-                          <SelectItem key={customer.customer_id} value={customer.customer_id}>
-                            {customer.customer_name ?? customer.company ?? "Unnamed customer"}
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <CustomerSelector
+                    customers={customers.map(c => ({
+                      id: parseInt(c.customer_id.slice(0, 8), 16) % 1000000, // Generate a temporary ID
+                      name: c.customer_name ?? c.company ?? "Unnamed customer",
+                      company: c.company ?? "",
+                      mobile: c.contact_num ?? "",
+                      email: c.customer_email ?? "",
+                      location: c.customer_address ?? c.customer_city_of_residence ?? "",
+                      commercialRegister: c.commercial_register ?? "",
+                      taxNumber: c.vat_number ?? ""
+                    }))}
+                    selectedCustomerId={selectedCustomerObj?.id}
+                    onCustomerSelect={(customer) => {
+                      setSelectedCustomerObj(customer);
+                      // Find the actual customer ID from the database
+                      const dbCustomer = customers.find(c => 
+                        (c.customer_name ?? c.company) === customer.name
+                      );
+                      if (dbCustomer) {
+                        setFormCustomer(dbCustomer.customer_id);
+                      }
+                    }}
+                    label="Customer"
+                    placeholder="Search customer by name, company, or mobile..."
+                    required={true}
+                    hideQuickAdd={true}
+                  />
                 </div>
 
                 <div>

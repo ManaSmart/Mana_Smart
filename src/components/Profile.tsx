@@ -416,9 +416,12 @@ export function Profile({
         file,
         category: FILE_CATEGORIES.PROFILE_PICTURE,
         ownerId: currentUserId,
-        ownerType: 'user',
+        ownerType: 'system_user', // Use system_user to match Settings component
         description: 'User profile picture',
         userId: currentUserId, // Use the same user ID for created_by
+        metadata: {
+          user_id: currentUserId, // Store user ID in metadata for precise deletion
+        },
       });
 
       if (!result.success || !result.fileMetadata) {

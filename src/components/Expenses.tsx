@@ -17,7 +17,7 @@ import { selectors, thunks } from "../redux-toolkit/slices";
 import type { Expenses as ExpenseRow } from "../../supabase/models/expenses";
 import type { ExpensePayments as ExpensePaymentRow } from "../../supabase/models/expense_payments";
 
-type ExpenseStatus = "Pending" | "Approved" | "Rejected" | "Paid" | "Partial";
+type ExpenseStatus = "Paid" | "Partial" | "Unpaid";
 
 interface ExpenseRecord {
   id: number;
@@ -72,11 +72,9 @@ const categoryColors: Record<string, string> = {
 };
 
 const statusColors: Record<ExpenseStatus, string> = {
-  Pending: "bg-yellow-100 text-yellow-700 border-yellow-200",
-  Approved: "bg-blue-100 text-blue-700 border-blue-200",
-  Rejected: "bg-red-100 text-red-700 border-red-200",
   Paid: "bg-green-100 text-green-700 border-green-200",
-  Partial: "bg-orange-100 text-orange-700 border-orange-200"
+  Partial: "bg-orange-100 text-orange-700 border-orange-200",
+  Unpaid: "bg-yellow-100 text-yellow-700 border-yellow-200"
 };
 
 const paymentMethods = ["Cash", "Credit Card", "Bank Transfer", "Check"];
@@ -88,22 +86,27 @@ function formatCurrency(value: number) {
 function computeStatus(total: number, paid: number): ExpenseStatus {
   if (paid >= total && total > 0) return "Paid";
   if (paid > 0 && paid < total) return "Partial";
-  return "Pending";
+  return "Unpaid";
+}
+
+function computeStatusForDb(total: number, paid: number): string {
+  if (paid >= total && total > 0) return "Paid";
+  if (paid > 0 && paid < total) return "Partial";
+  return "Unpaid";
 }
 
 function normalizeStatusFromDb(status: string | null | undefined): ExpenseStatus {
-  switch ((status ?? "").toLowerCase()) {
-    case "approved":
-      return "Approved";
-    case "rejected":
-      return "Rejected";
-    case "paid":
+  if (!status) return "Unpaid";
+  
+  switch (status) {
+    case "Paid":
       return "Paid";
-    case "partial":
+    case "Partial":
       return "Partial";
-    case "pending":
+    case "Unpaid":
+      return "Unpaid";
     default:
-      return "Pending";
+      return "Unpaid";
   }
 }
 
@@ -276,6 +279,31 @@ export function Expenses() {
     setTaxAmount(tax);
   };
 
+  const handlePaidAmountChange = (value: string) => {
+    const baseAmt = parseFloat(amount) || 0;
+    const taxAmt = parseFloat(taxAmount || calculateTax(amount, taxRate)) || 0;
+    const total = Number((baseAmt + taxAmt).toFixed(2));
+    const paidValue = parseFloat(value) || 0;
+    
+    if (paidValue > total) {
+      toast.error(`Paid amount cannot exceed total amount of ر.س${formatCurrency(total)}`);
+      return;
+    }
+    
+    setPaidAmount(value);
+  };
+
+  const handlePaymentAmountChange = (value: string) => {
+    const amountValue = Number(value) || 0;
+    
+    if (selectedExpenseForPayment && amountValue > remainingBalance) {
+      toast.error(`Payment amount cannot exceed remaining balance of ر.س${formatCurrency(remainingBalance)}`);
+      return;
+    }
+    
+    setPaymentForm((prev) => ({ ...prev, amount: amountValue }));
+  };
+
   const handleTaxRateChange = (value: string) => {
     setTaxRate(value);
     const tax = calculateTax(amount, value);
@@ -369,47 +397,28 @@ export function Expenses() {
     const taxAmt = parseFloat(taxAmount || calculateTax(amount, taxRate)) || 0;
     const total = Number((baseAmount + taxAmt).toFixed(2));
     const paid = parseFloat(paidAmount) || 0;
-    // const remaining = Number(Math.max(0, total - paid).toFixed(2));
-    const normalizedStatus = computeStatus(total, paid);
 
-    const normalizedReceiptInput = receiptNumber.trim();
-    const existingReceipt = editingExpense?.receiptNumber
-      ? editingExpense.receiptNumber.toUpperCase()
-      : "";
-    const fallbackDisplayedReceipt = editingExpense?.expenseNumber
-      ? editingExpense.expenseNumber.toUpperCase()
-      : "";
-    const generatedIdentifier = getNextExpenseIdentifier(date).toUpperCase();
-
-    let resolvedReceiptNumber: string | null;
-    if (editingExpense) {
-      if (normalizedReceiptInput) {
-        resolvedReceiptNumber = normalizedReceiptInput.toUpperCase();
-      } else if (existingReceipt) {
-        resolvedReceiptNumber = existingReceipt;
-      } else if (EXPENSE_IDENTIFIER_PATTERN.test(fallbackDisplayedReceipt)) {
-        resolvedReceiptNumber = fallbackDisplayedReceipt;
-      } else {
-        resolvedReceiptNumber = generatedIdentifier;
-      }
-    } else {
-      resolvedReceiptNumber = (normalizedReceiptInput || generatedIdentifier).toUpperCase();
+    // Validate that paid amount doesn't exceed total amount
+    if (paid > total) {
+      toast.error(`Paid amount (ر.س${formatCurrency(paid)}) cannot exceed total amount (ر.س${formatCurrency(total)})`);
+      return;
     }
+
+    const normalizedStatus = computeStatusForDb(total, paid);
 
     const payload: Partial<ExpenseRow> = {
       expense_date: date,
       category,
       description,
       base_amount: baseAmount,
-      tax_rate: parseFloat(taxRate) || null,
       paid_amount: paid,
-      // remaining_amount: remaining,
-      payment_method: paymentMethod,
-      paid_to: paidTo,
-      receipt_number: resolvedReceiptNumber || null,
-      notes: notes || null,
       status: normalizedStatus
     };
+
+    // Generate receipt number for new expenses
+    if (!editingExpense) {
+      payload.receipt_number = getNextExpenseIdentifier(date);
+    }
 
     // If the tax_amount column is generated in the database, we must not send a value.
     // Only include it when the database schema allows manual inserts/updates.
@@ -519,7 +528,7 @@ export function Expenses() {
     };
 
     const newPaidAmount = Number((expense.paidAmount + paymentForm.amount).toFixed(2));
-    const newStatus = computeStatus(expense.totalAmount, newPaidAmount);
+    const newStatus = computeStatusForDb(expense.totalAmount, newPaidAmount);
 
     setIsSavingPayment(true);
     try {
@@ -550,9 +559,8 @@ export function Expenses() {
   const pendingExpensesTotal = expenses
     .filter(
       (expense) =>
-        expense.status === "Pending" ||
         expense.status === "Partial" ||
-        expense.status === "Approved"
+        expense.status === "Unpaid"
     )
     .reduce((sum, expense) => sum + expense.remainingAmount, 0);
 
@@ -755,11 +763,9 @@ export function Expenses() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="Pending">Pending</SelectItem>
-                  <SelectItem value="Approved">Approved</SelectItem>
-                  <SelectItem value="Partial">Partial</SelectItem>
                   <SelectItem value="Paid">Paid</SelectItem>
-                  <SelectItem value="Rejected">Rejected</SelectItem>
+                  <SelectItem value="Partial">Partial</SelectItem>
+                  <SelectItem value="Unpaid">Unpaid</SelectItem>
                 </SelectContent>
               </Select>
               </div>
@@ -1065,7 +1071,7 @@ export function Expenses() {
                   id="expensePaidAmount"
                       type="number" 
                       value={paidAmount} 
-                      onChange={(e) => setPaidAmount(e.target.value)}
+                      onChange={(e) => handlePaidAmountChange(e.target.value)}
                       placeholder="0.00"
                     />
                   </div>
@@ -1185,9 +1191,7 @@ export function Expenses() {
                   id="paymentAmount"
                   type="number"
                   value={paymentForm.amount || ""}
-                  onChange={(e) =>
-                    setPaymentForm((prev) => ({ ...prev, amount: Number(e.target.value) }))
-                  }
+                  onChange={(e) => handlePaymentAmountChange(e.target.value)}
                   placeholder="0.00"
                 />
                 {selectedExpenseForPayment && (

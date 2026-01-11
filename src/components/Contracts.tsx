@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Plus, Search, Printer, Trash2, Download, Mail, MessageSquare, CheckCircle, XCircle, PauseCircle, Send, Upload, PlayCircle, MoreVertical, Edit, StickyNote, History, Clock, User, FileText } from "lucide-react";
+import { Plus, Printer, Trash2, Download, Mail, MessageSquare, CheckCircle, XCircle, PauseCircle, Send, Upload, PlayCircle, MoreVertical, Edit, StickyNote, History, Clock, User, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -173,6 +173,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
   const [contracts, setContracts] = useState<Contract[]>(mockContracts);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc"); // Default to descending (newest first)
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
@@ -192,14 +193,24 @@ export function Contracts({ systemLogo }: ContractsProps) {
   // Load customers and contracts from Redux
   useEffect(() => {
     dispatch(thunks.customers.fetchAll(undefined));
-    dispatch(thunks.contracts.fetchAll(undefined));
+    dispatch(thunks.contracts.fetchAll({
+      orderBy: 'created_at.desc' // Fetch contracts in descending order (newest first)
+    }));
     dispatch(thunks.delegates.fetchAll(undefined));
   }, [dispatch]);
 
   // Map database contracts to UI Contract format
   useEffect(() => {
     if (dbContracts.length > 0) {
-      const mappedContracts: Contract[] = dbContracts.map((dbContract, idx) => {
+      // Sort contracts by created_at (based on sortOrder) for consistent UI ordering
+      const sortedContracts = [...dbContracts].sort((a, b) => {
+        const timeA = new Date(a.created_at || '').getTime();
+        const timeB = new Date(b.created_at || '').getTime();
+        const sortMultiplier = sortOrder === "desc" ? -1 : 1; // -1 for desc, 1 for asc
+        return (timeA - timeB) * sortMultiplier;
+      });
+      
+      const mappedContracts: Contract[] = sortedContracts.map((dbContract, idx) => {
         // Try to parse additional data from notes field (stored as JSON)
         let additionalData: any = {};
         try {
@@ -259,7 +270,7 @@ export function Contracts({ systemLogo }: ContractsProps) {
     } else {
       setContracts([]);
     }
-  }, [dbContracts]);
+  }, [dbContracts, sortOrder]);
 
   // Map DB customers to Customer interface
   const customers: Customer[] = useMemo(() => {
@@ -1867,30 +1878,43 @@ export function Contracts({ systemLogo }: ContractsProps) {
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder="Search contracts..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
-            </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-full sm:w-[200px]">
-                <SelectValue />
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="All statuses" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="all">All Statuses</SelectItem>
                 <SelectItem value="draft">Draft</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="signed">Signed</SelectItem>
                 <SelectItem value="attached">Attached</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="suspended">Suspended</SelectItem>
                 <SelectItem value="expired">Expired</SelectItem>
                 <SelectItem value="cancelled">Cancelled</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label>Sort Order</Label>
+            <Select value={sortOrder} onValueChange={(value: "asc" | "desc") => setSortOrder(value)}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Sort order" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">Newest First</SelectItem>
+                <SelectItem value="asc">Oldest First</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="search">Search</Label>
+            <Input
+              id="search"
+              placeholder="Search by contract number or client..."
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              className="md:w-[320px]"
+            />
           </div>
         </CardContent>
       </Card>

@@ -1,6 +1,7 @@
-import { createAsyncThunk, createSlice, PayloadAction } from '@reduxjs/toolkit';
+import { createAsyncThunk, createSlice, PayloadAction, current } from '@reduxjs/toolkit';
 import type { RootState } from '../store';
 import { createRow, deleteRow, getRows, updateRow } from '../../supabase/operations/crud';
+import type { PaginationOptions } from '../../supabase/operations/crud';
 
 export interface CrudState<T> {
 	items: T[];
@@ -38,7 +39,15 @@ export function createCrudSlice<T extends { [k: string]: unknown }>(
 		idColumn: keyof T;
 		initialState?: Partial<CrudState<T>>;
 	}
-) {
+): {
+	slice: any;
+	thunks: ReturnType<typeof createCrudThunks<T>>;
+	selectors: {
+		selectAll: (state: RootState) => T[];
+		selectLoading: (state: RootState) => boolean;
+		selectError: (state: RootState) => string | null;
+	};
+} {
 	const { table, idColumn } = options;
 	const thunks = createCrudThunks<T>(table, idColumn);
 
@@ -61,7 +70,7 @@ export function createCrudSlice<T extends { [k: string]: unknown }>(
 				})
 				.addCase(thunks.fetchAll.fulfilled, (state, action: PayloadAction<T[]>) => {
 					state.loading = false;
-					state.items = action.payload;
+					state.items = current(action.payload) as any;
 				})
 				.addCase(thunks.fetchAll.rejected, (state, action) => {
 					state.loading = false;
@@ -73,7 +82,7 @@ export function createCrudSlice<T extends { [k: string]: unknown }>(
 				})
 				.addCase(thunks.createOne.fulfilled, (state, action: PayloadAction<T>) => {
 					state.loading = false;
-					state.items.unshift(action.payload);
+					state.items.unshift(current(action.payload) as any);
 				})
 				.addCase(thunks.createOne.rejected, (state, action) => {
 					state.loading = false;
@@ -87,7 +96,9 @@ export function createCrudSlice<T extends { [k: string]: unknown }>(
 					state.loading = false;
 					const id = action.payload[idColumn as string];
 					const idx = state.items.findIndex((i) => i[idColumn as string] === id);
-					if (idx >= 0) state.items[idx] = action.payload;
+					if (idx >= 0) {
+						state.items[idx] = current(action.payload) as any;
+					}
 				})
 				.addCase(thunks.updateOne.rejected, (state, action) => {
 					state.loading = false;

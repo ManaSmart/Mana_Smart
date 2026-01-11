@@ -570,6 +570,102 @@ function getImageDimensions(file: File): Promise<{ width: number; height: number
 }
 
 /**
+ * Delete files associated with a specific record (more targeted than owner-based deletion)
+ * This prevents deleting files that might be associated with other active records
+ * Uses metadata field to store record-specific identifiers
+ */
+export async function deleteFilesByRecord(
+	recordId: string,
+	ownerType: string,
+	category?: FileCategory
+): Promise<{ deleted: number; errors: string[] }> {
+	const errors: string[] = [];
+	let deleted = 0;
+
+	try {
+		// Get all files by owner type first, then filter by record ID in metadata
+		const files = await getFilesByOwner(recordId, ownerType, category);
+		
+		// Filter files that are specifically associated with this record
+		// Check multiple possible metadata fields where record ID might be stored
+		const recordSpecificFiles = files.filter(file => {
+			if (!file.metadata) return false;
+			
+			// Check various possible metadata fields for the record ID
+			const metadata = file.metadata;
+			return (
+				metadata.recordId === recordId ||
+				metadata.product_code === recordId ||
+				metadata.employee_id === recordId ||
+				metadata.contract_id === recordId ||
+				metadata.asset_id === recordId ||
+				metadata.user_id === recordId ||
+				// Also check if owner_id matches the record ID (for direct associations)
+				file.owner_id === recordId
+			);
+		});
+		
+		// Delete files in parallel for better performance
+		const deletePromises = recordSpecificFiles.map(async (file) => {
+			try {
+				const success = await deleteFile(file.id);
+				if (success) {
+					deleted++;
+				} else {
+					errors.push(`Failed to delete file: ${file.file_name}`);
+				}
+			} catch (error: any) {
+				errors.push(`Error deleting file ${file.file_name}: ${error.message}`);
+			}
+		});
+
+		await Promise.all(deletePromises);
+	} catch (error: any) {
+		errors.push(`Error fetching files: ${error.message}`);
+	}
+
+	return { deleted, errors };
+}
+
+/**
+ * Delete all files associated with a specific owner
+ * Useful for cleanup when deleting records that have associated files
+ * NOTE: Use deleteFilesByRecord for more targeted deletion to avoid affecting other records
+ */
+export async function deleteFilesByOwner(
+	ownerId: string,
+	ownerType: string,
+	category?: FileCategory
+): Promise<{ deleted: number; errors: string[] }> {
+	const errors: string[] = [];
+	let deleted = 0;
+
+	try {
+		const files = await getFilesByOwner(ownerId, ownerType, category);
+		
+		// Delete files in parallel for better performance
+		const deletePromises = files.map(async (file) => {
+			try {
+				const success = await deleteFile(file.id);
+				if (success) {
+					deleted++;
+				} else {
+					errors.push(`Failed to delete file: ${file.file_name}`);
+				}
+			} catch (error: any) {
+				errors.push(`Error deleting file ${file.file_name}: ${error.message}`);
+			}
+		});
+
+		await Promise.all(deletePromises);
+	} catch (error: any) {
+		errors.push(`Error fetching files: ${error.message}`);
+	}
+
+	return { deleted, errors };
+}
+
+/**
  * Validate file before upload
  */
 export function validateFile(

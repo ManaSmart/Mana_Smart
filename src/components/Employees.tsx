@@ -17,7 +17,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { selectors, thunks } from "../redux-toolkit/slices";
 import type { Employees as DbEmployee } from "../../supabase/models/employees";
-import { uploadFile, getFileUrl, deleteFile, getFilesByOwner } from "../lib/storage";
+import { uploadFile, getFileUrl, deleteFile, getFilesByOwner, deleteFilesByOwner } from "../lib/storage";
 import type { FileMetadata } from "../../supabase/models/file_metadata";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { supabase } from "../lib/supabaseClient";
@@ -667,9 +667,14 @@ export function Employees() {
       }
 
       // Delete employee files (documents and photos)
-      const employeeFiles = await getFilesByOwner(id, 'employee');
-      for (const file of employeeFiles) {
-        await deleteFile(file.id);
+      const { deleted: filesDeleted, errors: fileErrors } = await deleteFilesByOwner(id, 'employee');
+      
+      if (fileErrors.length > 0) {
+        console.warn('Some employee files could not be deleted:', fileErrors);
+      }
+      
+      if (filesDeleted > 0) {
+        console.log(`Deleted ${filesDeleted} employee files`);
       }
 
       // Delete expenses linked to this employee (if any)

@@ -84,6 +84,13 @@ export async function uploadFileToS3(options: UploadFileOptions): Promise<Upload
 		// so we convert to Uint8Array which is universally supported
 		const fileBuffer = await file.arrayBuffer();
 
+		// Sanitize filename for HTTP headers (must be ISO-8859-1 compatible)
+		// This fixes "Failed to construct 'Headers': String contains non ISO-8859-1 code point" error
+		const sanitizedFileName = file.name
+			.replace(/[^\x00-\xFF]/g, '_') // Replace non-ASCII characters with underscore
+			.replace(/_{2,}/g, '_') // Clean up multiple underscores
+			.substring(0, 255); // Limit length
+
 		// Upload file to S3
 		// Note: ACLs are disabled on this bucket, so public access must be handled via bucket policy
 		// For public files, ensure your bucket policy allows public read access
@@ -93,7 +100,7 @@ export async function uploadFileToS3(options: UploadFileOptions): Promise<Upload
 			Body: new Uint8Array(fileBuffer), // Convert ArrayBuffer to Uint8Array for S3
 			ContentType: file.type,
 			Metadata: {
-				originalName: file.name,
+				originalName: sanitizedFileName, // Use sanitized filename
 				category,
 				ownerId,
 				ownerType,
@@ -135,7 +142,7 @@ export async function uploadFileToS3(options: UploadFileOptions): Promise<Upload
 			category,
 			bucket: STORAGE_BUCKETS.S3, // Mark as S3 storage
 			path: filePath,
-			file_name: file.name,
+			file_name: sanitizedFileName, // Use sanitized filename
 			mime_type: file.type,
 			size: file.size,
 			width,
@@ -289,6 +296,13 @@ export async function uploadLogoToS3WithFixedPath(
 		// Convert File to ArrayBuffer
 		const fileBuffer = await file.arrayBuffer();
 
+		// Sanitize filename for HTTP headers (must be ISO-8859-1 compatible)
+		// This fixes "Failed to construct 'Headers': String contains non ISO-8859-1 code point" error
+		const sanitizedFileName = file.name
+			.replace(/[^\x00-\xFF]/g, '_') // Replace non-ASCII characters with underscore
+			.replace(/_{2,}/g, '_') // Clean up multiple underscores
+			.substring(0, 255); // Limit length
+
 		// Upload file to S3 (this will overwrite if exists)
 		const uploadCommand = new PutObjectCommand({
 			Bucket: AWS_S3_BUCKET,
@@ -296,7 +310,7 @@ export async function uploadLogoToS3WithFixedPath(
 			Body: new Uint8Array(fileBuffer),
 			ContentType: file.type,
 			Metadata: {
-				originalName: file.name,
+				originalName: sanitizedFileName, // Use sanitized filename
 				category: 'branding_logo',
 				ownerId,
 				ownerType: 'branding',
@@ -326,7 +340,7 @@ export async function uploadLogoToS3WithFixedPath(
 			category: 'branding_logo',
 			bucket: STORAGE_BUCKETS.S3,
 			path: filePath,
-			file_name: file.name,
+			file_name: sanitizedFileName, // Use sanitized filename
 			mime_type: file.type,
 			size: file.size,
 			width,

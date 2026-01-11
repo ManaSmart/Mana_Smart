@@ -45,11 +45,19 @@ export async function refreshUserPermissions(userId: string): Promise<ResolvedPe
 
       if (roleError) {
         console.error("Error fetching role:", roleError);
-        return null;
+        // Handle case where role is not found (PGRST116)
+        if (roleError.code === 'PGRST116') {
+          console.warn(`Role with ID ${user.role_id} not found for user ${userId}`);
+          // Set default permissions for users with missing roles
+          roleName = "user";
+          rolePermissions = null;
+        } else {
+          return null;
+        }
+      } else {
+        roleName = role?.role_name;
+        rolePermissions = role?.permissions ?? null;
       }
-
-      roleName = role?.role_name;
-      rolePermissions = role?.permissions ?? null;
     }
 
     // Normalize permissions

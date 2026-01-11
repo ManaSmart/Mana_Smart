@@ -67,6 +67,40 @@ const manufacturing_orders = createCrudSlice<ManufacturingOrders>({ table: 'manu
 const fixed_assets_management = createCrudSlice<FixedAssetsManagement>({ table: 'fixed_assets_management', idColumn: 'asset_id' });
 const employee_custody_items = createCrudSlice<EmployeeCustodyItems>({ table: 'employee_custody_items', idColumn: 'custody_id' });
 
+export const slices = {
+	customers: customers.slice,
+	suppliers: suppliers.slice,
+	invoices: invoices.slice,
+	employees: employees.slice,
+	expenses: expenses.slice,
+	inventory: inventory.slice,
+	payrolls: payrolls.slice,
+	leaves: leaves.slice,
+	contracts: contracts.slice,
+	payments: payments.slice,
+	platform_orders: platform_orders.slice,
+	platform_customers: platform_customers.slice,
+	monthly_visits: monthly_visits.slice,
+	leads: leads.slice,
+	quotations: quotations.slice,
+	price_quotations: price_quotations.slice,
+	system_users: system_users.slice,
+	roles: roles.slice,
+	delegates: delegates.slice,
+	employee_attendance: employee_attendance.slice,
+	employee_requests: employee_requests.slice,
+	customer_support_tickets: customer_support_tickets.slice,
+	purchase_orders: purchase_orders.slice,
+	purchase_payments: purchase_payments.slice,
+	returns_management: returns_management.slice,
+	expense_payments: expense_payments.slice,
+	manufacturing_raw_materials: manufacturing_raw_materials.slice,
+	manufacturing_recipes: manufacturing_recipes.slice,
+	manufacturing_orders: manufacturing_orders.slice,
+	fixed_assets_management: fixed_assets_management.slice,
+	employee_custody_items: employee_custody_items.slice,
+};
+
 export const thunks = {
 	customers: customers.thunks,
 	suppliers: suppliers.thunks,

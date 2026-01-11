@@ -5,16 +5,18 @@ import QRCode from "qrcode";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Badge } from "./ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
-import { Label } from "./ui/label";
-import { Badge } from "./ui/badge";
-import { Switch } from "./ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Textarea } from "./ui/textarea";
+import { uploadFile, getFileUrl, getFilesByOwner } from "../lib/storage";
+import { getCompanyInfo, getCompanyFullName } from "../lib/companyInfo";
 import { Separator } from "./ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Textarea } from "./ui/textarea";
+import { Switch } from "./ui/switch";
 import type { InventoryItem } from "./Inventory";
 import { ImageWithFallback } from "./figma/ImageWithFallback";
 import { CustomerSelector } from "./CustomerSelector";
@@ -22,10 +24,8 @@ import type { Customer } from "./CustomerSelector";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { thunks, selectors } from "../redux-toolkit/slices";
 import { getPrintLogo } from "../lib/getPrintLogo";
-import { uploadFile } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { supabase } from "../lib/supabaseClient";
-import { getFilesByOwner, getFileUrl } from "../lib/storage";
 
 interface QuotationItem {
   id: number;
@@ -93,8 +93,12 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   const dbCustomers = useAppSelector(selectors.customers.selectAll) as any[];
   const loading = useAppSelector(selectors.quotations.selectLoading);
   const loadError = useAppSelector(selectors.quotations.selectError);
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc"); // Default to descending (newest first)
+  
   useEffect(() => {
-    dispatch(thunks.quotations.fetchAll(undefined));
+    dispatch(thunks.quotations.fetchAll({
+      orderBy: 'created_at.desc' // Fetch quotations in descending order (newest first)
+    }));
     dispatch(thunks.inventory.fetchAll(undefined));
     dispatch(thunks.customers.fetchAll(undefined));
   }, [dispatch]);
@@ -106,8 +110,13 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       return Number.isNaN(time) ? 0 : time;
     };
 
+    // Sort by created_at ascending for consistent quotation numbering (independent of user sort order)
     const sorted = [...dbQuotations].sort(
-      (a, b) => parse(a.created_at) - parse(b.created_at)
+      (a, b) => {
+        const timeA = parse(a.created_at);
+        const timeB = parse(b.created_at);
+        return timeA - timeB; // Always ascending for numbering
+      }
     );
 
     const map = new Map<
@@ -119,7 +128,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     >();
 
     sorted.forEach((quotation, index) => {
-      const quotationDate = quotation.created_at ?? new Date().toISOString();
+      const quotationDate = quotation.quotation_date ?? quotation.created_at ?? new Date().toISOString();
       const quotationYear = new Date(quotationDate).getFullYear();
       map.set(quotation.quotation_id, {
         quotationNumber: `QT-${quotationYear}-${String(index + 1).padStart(3, "0")}`,
@@ -131,7 +140,23 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
   }, [dbQuotations]);
 
   const quotations: Quotation[] = useMemo(() => {
-    return dbQuotations.map((q, idx) => {
+    const parse = (value?: string | null) => {
+      if (!value) return 0;
+      const time = new Date(value).getTime();
+      return Number.isNaN(time) ? 0 : time;
+    };
+
+    // Sort by created_at based on sortOrder for display
+    const sortedQuotations = [...dbQuotations].sort((a, b) => {
+      const timeA = parse(a.created_at);
+      const timeB = parse(b.created_at);
+      const sortMultiplier = sortOrder === "desc" ? -1 : 1; // -1 for desc, 1 for asc
+      if (timeA !== timeB) return (timeA - timeB) * sortMultiplier;
+      // If created_at is the same, sort by quotation_id for stable ordering
+      return a.quotation_id.localeCompare(b.quotation_id);
+    });
+
+    return sortedQuotations.map((q, idx) => {
       const items = Array.isArray(q.quotation_items) ? q.quotation_items : [];
 
       const vatRateFromDb = q.vat_enabled === false ? 0 : VAT_RATE;
@@ -256,7 +281,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
         status: ((q.quotation_summary ?? 'pending') as 'pending' | 'sent' | 'cancelled'),
       } as Quotation;
     });
-  }, [dbQuotations, dbCustomers, quotationNumberMap]);
+  }, [dbQuotations, dbCustomers, quotationNumberMap, sortOrder]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -1032,6 +1057,10 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
       return;
     }
 
+    // Get company info for dynamic company name
+    const companyInfo = await getCompanyInfo();
+    const companyName = getCompanyFullName(companyInfo);
+
     const resolveOwnerFileUrl = async (
       ownerId: string | undefined,
       category: string,
@@ -1133,7 +1162,7 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : 
                         printDateOption === "custom" ? customPrintDate : 
                         quotation.date;
-    const quotationHTML = generateQuotationHTML(quotation, logoToUse, stampToUse, qrCode, displayDate, includeImages);
+    const quotationHTML = generateQuotationHTML(quotation, logoToUse, stampToUse, qrCode, displayDate, includeImages, companyName);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -1197,7 +1226,8 @@ const generateQuotationHTML = (
   stampUrl?: string | null,
   qrCode?: string,
   displayDate?: string,
-  includeImages: boolean = true
+  includeImages: boolean = true,
+  companyName?: string
 ) => {
     const companyLogo = logoUrl || quotation.companyLogo;
     const stampToRender = stampUrl || quotation.stamp;
@@ -1339,7 +1369,7 @@ const generateQuotationHTML = (
         <div class="document-container${includeImages ? '' : ' hide-item-images'}">
           <header class="main-header">
             <div class="company-brand-info">
-              <h1>Mana Smart Trading Company</h1>
+              <h1>${companyName || 'Mana Smart Trading Company'}</h1>
               <p>VAT: 311234567800003 | C.R.: 1010567890</p>
               <p>Riyadh, Saudi Arabia</p>
             </div>
@@ -1445,7 +1475,7 @@ const generateQuotationHTML = (
           <footer class="footer-area">
             <div class="bank-details">
               <div class="bank-title">Bank Account Details / معلومات البنك</div>
-              <div>Mana Smart Trading Company</div>
+              <div>${companyName || 'Mana Smart Trading Company'}</div>
               <div>Al Rajhi Bank | A.N.: 301000010006080269328</div>
               <div>IBAN: SA2680000301608010269328</div>
             </div>
@@ -1458,6 +1488,98 @@ const generateQuotationHTML = (
       </html>
     `;
 };
+  const exportToPDF = () => {
+    try {
+      if (filteredQuotations.length === 0) {
+        toast.error("No data to export.");
+        return;
+      }
+
+      // Create HTML content for PDF
+      let htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Quotations Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; text-align: center; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            .total-row { font-weight: bold; background-color: #f9f9f9; }
+            .header-info { margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>Quotations Report</h1>
+          <div class="header-info">
+            <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+            <p><strong>Total Quotations:</strong> ${filteredQuotations.length}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Quotation Number</th>
+                <th>Date</th>
+                <th>Valid Until</th>
+                <th>Customer Name</th>
+                <th>Mobile</th>
+                <th>Location</th>
+                <th>Grand Total (SAR)</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      let grandTotal = 0;
+      filteredQuotations.forEach((quotation) => {
+        grandTotal += quotation.grandTotal;
+        htmlContent += `
+          <tr>
+            <td>${quotation.quotationNumber}</td>
+            <td>${quotation.date}</td>
+            <td>${quotation.expiryDate}</td>
+            <td>${quotation.customerName}</td>
+            <td>${quotation.mobile}</td>
+            <td>${quotation.location || "N/A"}</td>
+            <td>${quotation.grandTotal.toFixed(2)}</td>
+            <td>${quotation.status}</td>
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="7"><strong>Grand Total</strong></td>
+                <td><strong>${grandTotal.toFixed(2)}</strong></td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </body>
+        </html>
+      `;
+
+      // Create a new window and print
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.print();
+        toast.success("PDF export ready for printing");
+      } else {
+        toast.error("Failed to open print window");
+      }
+    } catch (error) {
+      console.error('PDF export error:', error);
+      toast.error("Failed to export PDF");
+    }
+  };
+
   const exportToExcel = () => {
     try {
       const exportData = filteredQuotations.map((quotation) => ({
@@ -1491,10 +1613,24 @@ const generateQuotationHTML = (
           <p className="text-muted-foreground mt-1">Create and manage price quotations</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={exportToExcel} variant="outline" className="gap-2">
-            <Download className="h-4 w-4" />
-            Export Excel
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="gap-2">
+                <Download className="h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={exportToExcel}>
+                <Download className="h-4 w-4 mr-2" />
+                Export as Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={exportToPDF}>
+                <FileText className="h-4 w-4 mr-2" />
+                Export as PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
             <Button className="gap-2 bg-purple-600 hover:bg-purple-700 text-white">
@@ -2265,6 +2401,15 @@ const generateQuotationHTML = (
                   <SelectItem value="sent">📤 Sent</SelectItem>
                   <SelectItem value="pending">⏳ Pending</SelectItem>
                   <SelectItem value="cancelled">❌ Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={sortOrder} onValueChange={(value: "asc" | "desc") => setSortOrder(value)}>
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="Sort order" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Newest First</SelectItem>
+                  <SelectItem value="asc">Oldest First</SelectItem>
                 </SelectContent>
               </Select>
             </div>

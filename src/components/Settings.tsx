@@ -41,7 +41,7 @@ import type { Roles } from "../../supabase/models/roles";
 import type { SystemUsers } from "../../supabase/models/system_users";
 import type { CompanyBranding } from "../../supabase/models/company_branding";
 import type { SystemSettings } from "../../supabase/models/system_settings";
-import { uploadFile, getFileUrl, deleteFile, getFilesByOwner } from "../lib/storage";
+import { uploadFile, getFileUrl, deleteFile, getFilesByOwner, deleteFilesByRecord } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { validateFile } from "../lib/storage";
 import { uploadLogoToS3WithFixedPath } from "../lib/s3Storage";
@@ -1140,6 +1140,22 @@ export function Settings({
     }
 
     try {
+      // Delete user's profile picture if exists - only for this specific user
+      const { deleted: filesDeleted, errors: fileErrors } = await deleteFilesByRecord(
+        userToDelete.user.user_id, 
+        'system_user', 
+        FILE_CATEGORIES.PROFILE_PICTURE
+      );
+      
+      if (fileErrors.length > 0) {
+        console.warn('Some profile picture files could not be deleted:', fileErrors);
+      }
+      
+      if (filesDeleted > 0) {
+        console.log(`Deleted ${filesDeleted} profile picture files for user ${userToDelete.user.user_id}`);
+      }
+      
+      // Delete the user
       await dispatch(thunks.system_users.deleteOne(userToDelete.user.user_id)).unwrap();
       toast.success("User deleted successfully");
       setIsDeleteDialogOpen(false);

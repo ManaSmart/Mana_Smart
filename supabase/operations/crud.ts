@@ -16,22 +16,60 @@ export async function createRow<T>(table: string, values: Partial<T>): Promise<T
 
 export async function getRows<T>(
 	table: string,
-	filters?: Record<string, unknown>,
+	filters?: Record<string, unknown> | { limit?: number; orderBy?: string },
 	options?: PaginationOptions
 ): Promise<T[]> {
 	let query = sbClient.from(table).select('*');
+	
+	// Handle both old format (filters + options) and new format (combined filters)
+	let actualFilters: Record<string, unknown> = {};
+	let actualOptions: PaginationOptions | undefined = undefined;
+	
 	if (filters) {
-		Object.entries(filters).forEach(([key, value]) => {
+		if ('limit' in filters || 'orderBy' in filters) {
+			// New format: filters contains pagination info
+			actualOptions = {};
+			if ('limit' in filters && typeof filters.limit === 'number') {
+				actualOptions.limit = filters.limit;
+			}
+			if ('orderBy' in filters && typeof filters.orderBy === 'string') {
+				// Parse orderBy string like "created_at.desc"
+				const [column, direction] = filters.orderBy.split('.');
+				if (column) {
+					actualOptions.orderBy = {
+						column,
+						ascending: direction !== 'desc'
+					};
+				}
+			}
+		} else {
+			// Old format: filters is just filters
+			actualFilters = filters;
+		}
+	}
+	
+	// Apply filters
+	if (actualFilters) {
+		Object.entries(actualFilters).forEach(([key, value]) => {
 			if (value === undefined || value === null) return;
-			query = query.eq(key, value as never);
+			if (key === 'or') {
+				// Handle OR filters
+				query = query.or(value as string);
+			} else {
+				// Handle regular equality filters
+				query = query.eq(key, value as never);
+			}
 		});
 	}
-	if (options?.orderBy) {
-		query = query.order(options.orderBy.column, { ascending: options.orderBy.ascending !== false });
+	
+	// Apply options (either from options parameter or from filters)
+	const finalOptions = actualOptions || options;
+	if (finalOptions?.orderBy) {
+		query = query.order(finalOptions.orderBy.column, { ascending: finalOptions.orderBy.ascending !== false });
 	}
-	if (options?.limit !== undefined || options?.offset !== undefined) {
-		const from = options?.offset ?? 0;
-		const to = options?.limit ? from + options.limit - 1 : undefined;
+	if (finalOptions?.limit !== undefined || finalOptions?.offset !== undefined) {
+		const from = finalOptions?.offset ?? 0;
+		const to = finalOptions?.limit ? from + finalOptions.limit - 1 : undefined;
 		// @ts-expect-error supabase types accept undefined to
 		query = query.range(from, to);
 	}

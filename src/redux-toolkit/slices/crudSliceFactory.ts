@@ -53,7 +53,13 @@ export function createCrudSlice<T>(
 	const slice = createSlice({
 		name: table,
 		initialState,
-		reducers: {},
+		reducers: {
+			setAll: (state, action: PayloadAction<T[]>) => {
+				state.items.length = 0;
+				const items = action.payload as unknown as Draft<T>[];
+				state.items.push(...items);
+			},
+		},
 		extraReducers: (builder) => {
 			builder
 				.addCase(thunks.fetchAll.pending, (state) => {

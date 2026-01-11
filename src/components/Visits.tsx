@@ -141,6 +141,7 @@ export function Visits({
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [selectedRepId, setSelectedRepId] = useState<string | "all">("all");
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc"); // Default to descending (newest first)
   const [formData, setFormData] = useState<VisitForm>(defaultForm);
   const [saving, setSaving] = useState(false);
   const [editingVisit, setEditingVisit] = useState<VisitRecord | null>(null);
@@ -161,7 +162,7 @@ export function Visits({
         supabase
           .from("manual_visits")
           .select("visit_id, customer_id, delegate_id, visit_date, visit_time, status, address, notes, created_at")
-          .order("created_at", { ascending: true }),
+          .order("created_at", { ascending: sortOrder === "asc" }), // Sort by creation date based on sortOrder
       ]);
 
       const errors = [delegatesRes.error, customersRes.error, visitsRes.error].filter(Boolean);
@@ -208,7 +209,7 @@ export function Visits({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sortOrder]);
 
   useEffect(() => {
     void fetchData();
@@ -222,8 +223,13 @@ export function Visits({
       return Number.isNaN(time) ? 0 : time;
     };
 
+    // Sort by created_at ascending for consistent visit numbering (independent of user sort order)
     const sorted = [...visits].sort(
-      (a, b) => parse(a.created_at) - parse(b.created_at)
+      (a, b) => {
+        const timeA = parse(a.created_at);
+        const timeB = parse(b.created_at);
+        return timeA - timeB; // Always ascending for numbering
+      }
     );
 
     const map = new Map<
@@ -383,7 +389,7 @@ export function Visits({
         created_at: data.created_at,
       };
 
-      setVisits((prev) => [newVisit, ...prev]);
+      setVisits((prev) => [newVisit, ...prev]); // Add new visit at the beginning (newest first)
       toast.success("Visit scheduled successfully");
       syncReminderForVisit(newVisit, "Scheduled", newVisit.visitDate, newVisit.visitTime);
       onActivityAdd({
@@ -859,6 +865,15 @@ export function Visits({
                   <SelectItem value="Scheduled">Scheduled</SelectItem>
                   <SelectItem value="Completed">Completed</SelectItem>
                   <SelectItem value="Cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={sortOrder} onValueChange={(value: "asc" | "desc") => setSortOrder(value)}>
+                <SelectTrigger className="w-[150px]">
+                  <SelectValue placeholder="Sort order" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="desc">Newest First</SelectItem>
+                  <SelectItem value="asc">Oldest First</SelectItem>
                 </SelectContent>
               </Select>
               <div className="relative">

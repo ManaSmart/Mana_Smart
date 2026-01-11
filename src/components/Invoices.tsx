@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar, Copy, Edit } from "lucide-react";
+import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar, Copy, Edit, FileText } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
 import QRCode from "qrcode";
@@ -8,6 +8,7 @@ import { Input } from "./ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -25,9 +26,11 @@ import type { Customers } from "../../supabase/models/customers";
 import type { Invoices as InvoicesRow } from "../../supabase/models/invoices";
 import type { Payments as PaymentRow } from "../../supabase/models/payments";
 import { getPrintLogo } from "../lib/getPrintLogo";
+import { getCompanyInfo, getCompanyFullName } from "../lib/companyInfo";
 import { uploadFile, getFilesByOwner, getFileUrl } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { supabase } from "../lib/supabaseClient";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 interface InvoiceItem {
   id: number;
@@ -120,13 +123,127 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const dispatch = useAppDispatch();
   const dbCustomers = useAppSelector(selectors.customers.selectAll) as Customers[];
   const customersLoading = useAppSelector(selectors.customers.selectLoading);
-  const dbInvoices = useAppSelector(selectors.invoices.selectAll) as InvoicesRow[];
-  const invoicesLoading = useAppSelector(selectors.invoices.selectLoading);
   const dbInventory = useAppSelector(selectors.inventory.selectAll) as any[];
   const dbPayments = useAppSelector(selectors.payments.selectAll) as PaymentRow[];
   const paymentsLoading = useAppSelector(selectors.payments.selectLoading);
 
   // Automatic invoicing settings
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc"); // Default to descending (newest first)
+
+  // Pagination state
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const ITEMS_PER_PAGE = 100;
+
+  // TanStack Query for invoices with automatic caching
+  const {
+    data: dbInvoices = [],
+    isLoading: invoicesLoading,
+    error: invoicesError,
+    refetch: refetchInvoices
+  } = useQuery({
+    queryKey: ['invoices', sortOrder],
+    queryFn: async () => {
+      const result = await dispatch(thunks.invoices.fetchAll({
+        limit: ITEMS_PER_PAGE,
+        orderBy: sortOrder === 'desc' ? 'created_at.desc' : 'created_at.asc'
+      })).unwrap();
+      
+      return result as InvoicesRow[];
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 5 * 60 * 1000, // 5 minutes (use gcTime instead of cacheTime)
+  });
+
+  const queryClient = useQueryClient();
+
+  // Optimistic mutation for creating invoices
+  const createInvoiceMutation = useMutation({
+    mutationFn: async (invoiceData: any) => {
+      const result = await dispatch(thunks.invoices.createOne(invoiceData)).unwrap();
+      return result;
+    },
+    onMutate: async (newInvoice) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['invoices'] });
+      
+      // Snapshot the previous value
+      const previousInvoices = queryClient.getQueryData(['invoices', sortOrder]);
+      
+      // Optimistically update to the new value
+      const optimisticInvoice = {
+        invoice_id: `temp-${Date.now()}`,
+        customer_id: newInvoice.customer_id,
+        invoice_number: newInvoice.invoice_number,
+        invoice_date: newInvoice.invoice_date,
+        due_date: newInvoice.due_date,
+        total_amount: newInvoice.total_amount,
+        paid_amount: newInvoice.paid_amount || 0,
+        remaining_amount: newInvoice.total_amount - (newInvoice.paid_amount || 0),
+        status: newInvoice.status || 'draft',
+        tax_rate: newInvoice.tax_rate,
+        tax_enabled: newInvoice.tax_enabled,
+        discount_type: newInvoice.discount_type,
+        discount_amount: newInvoice.discount_amount,
+        notes: newInvoice.notes || null,
+        terms_and_conditions: newInvoice.terms_and_conditions || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        // Add any other required fields
+      } as unknown as InvoicesRow;
+      
+      queryClient.setQueryData(['invoices', sortOrder], (old: InvoicesRow[] = []) => {
+        return sortOrder === 'desc' 
+          ? [optimisticInvoice, ...old]
+          : [...old, optimisticInvoice];
+      });
+      
+      return { previousInvoices };
+    },
+    onError: (_err, _newInvoice, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousInvoices) {
+        queryClient.setQueryData(['invoices', sortOrder], context.previousInvoices);
+      }
+      toast.error('Failed to create invoice');
+    },
+    onSettled: () => {
+      // Always refetch after error or success to ensure server state
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+  });
+
+  // Optimistic mutation for updating invoices
+  const updateInvoiceMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const result = await dispatch(thunks.invoices.updateOne({ id, values: data })).unwrap();
+      return result;
+    },
+    onMutate: async ({ id, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['invoices'] });
+      const previousInvoices = queryClient.getQueryData(['invoices', sortOrder]);
+      
+      queryClient.setQueryData(['invoices', sortOrder], (old: InvoicesRow[] = []) => {
+        return old.map(invoice => 
+          invoice.invoice_id === id 
+            ? { ...invoice, ...data, updated_at: new Date().toISOString() }
+            : invoice
+        );
+      });
+      
+      return { previousInvoices };
+    },
+    onError: (_err, _variables, context) => {
+      if (context?.previousInvoices) {
+        queryClient.setQueryData(['invoices', sortOrder], context.previousInvoices);
+      }
+      toast.error('Failed to update invoice');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['invoices'] });
+    },
+  });
+
   const [autoInvoiceEnabled, setAutoInvoiceEnabled] = useState(() => {
     const stored = localStorage.getItem(AUTO_INVOICE_ENABLED_KEY);
     return stored === 'true';
@@ -136,6 +253,36 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     return (stored === '7_days_before' ? '7_days_before' : 'visit_date') as 'visit_date' | '7_days_before';
   });
 
+  // Update query when sort order changes
+  useEffect(() => {
+    // Reset pagination state when sort order changes
+    setHasMore(true);
+    setIsLoadingMore(false);
+  }, [sortOrder]);
+
+  // Load more invoices function
+  const loadMoreInvoices = useCallback(async () => {
+    if (isLoadingMore || !hasMore) return;
+    
+    setIsLoadingMore(true);
+    try {
+      const result = await dispatch(thunks.invoices.fetchAll({
+        limit: ITEMS_PER_PAGE,
+        offset: dbInvoices.length,
+        orderBy: sortOrder === 'desc' ? 'created_at.desc' : 'created_at.asc'
+      })).unwrap();
+      
+      if (result.length < ITEMS_PER_PAGE) {
+        setHasMore(false);
+      }
+    } catch (error) {
+      console.error('Error loading more invoices:', error);
+      toast.error('Failed to load more invoices');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [dbInvoices.length, hasMore, isLoadingMore, sortOrder, dispatch]);
+
   const invoiceNumberMap = useMemo(() => {
     const parse = (value?: string | null) => {
       if (!value) return 0;
@@ -143,11 +290,11 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return Number.isNaN(time) ? 0 : time;
     };
 
-    // Sort by created_at first (stable, never changes) then by invoice_id for consistent ordering
-    const sorted = [...dbInvoices].sort((a, b) => {
+    // Sort by created_at ascending for consistent invoice numbering (independent of user sort order)
+    const sorted = [...(dbInvoices || [])].sort((a, b) => {
       const timeA = parse(a.created_at);
       const timeB = parse(b.created_at);
-      if (timeA !== timeB) return timeA - timeB;
+      if (timeA !== timeB) return timeA - timeB; // Always ascending for numbering
       // If created_at is the same, sort by invoice_id for stable ordering
       return a.invoice_id.localeCompare(b.invoice_id);
     });
@@ -174,74 +321,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     return map;
   }, [dbInvoices]);
 
-  // Optimized initial data fetching - load all data in parallel for maximum performance
-  useEffect(() => {
-    let isMounted = true;
-    
-    const fetchAllData = async () => {
-      try {
-        // Fetch all data simultaneously to reduce total load time
-        const fetchPromises = [
-          dispatch(thunks.customers.fetchAll(undefined)).unwrap(),
-          dispatch(thunks.invoices.fetchAll(undefined)).unwrap(),
-          dispatch(thunks.inventory.fetchAll(undefined)).unwrap(),
-          dispatch(thunks.payments.fetchAll(undefined)).unwrap(),
-          dispatch(thunks.contracts.fetchAll(undefined)).unwrap()
-        ];
-        
-        await Promise.all(fetchPromises);
-        
-        if (isMounted) {
-          console.log('All data loaded successfully');
-        }
-      } catch (error) {
-        if (isMounted) {
-          console.error('Failed to load initial data:', error);
-          toast.error('Some data failed to load. Please refresh the page.');
-        }
-      }
-    };
-
-    fetchAllData();
-    
-    return () => {
-      isMounted = false;
-    };
-  }, [dispatch]);
-
-  // Convert inventory from database to InventoryItem format
-  const inventory: InventoryItem[] = useMemo(() => {
-    return dbInventory.map((p, idx) => ({
-      id: idx + 1,
-      sku: p.product_code?.slice(0,8) ?? `SKU-${idx+1}`,
-      name: p.en_prod_name ?? p.ar_prod_name ?? '',
-      nameAr: p.ar_prod_name ?? '',
-      category: p.category ?? '',
-      productType: 'simple' as const,
-      description: p.prod_en_description ?? '',
-      descriptionAr: p.prod_ar_description ?? '',
-      image: p.prod_img ?? undefined,
-      unitPrice: Number(p.prod_selling_price ?? 0),
-      costPrice: Number(p.prod_cost_price ?? 0),
-      stock: Number(p.current_stock ?? 0),
-      minStock: Number(p.minimum_stock_alert ?? 0),
-      maxStock: Number(p.minimum_stock_alert ?? 0) * 10,
-      unit: p.measuring_unit ?? '',
-      status: (p.prod_status ?? 'in-stock') as any,
-      supplier: p.prod_supplier ?? undefined,
-      location: undefined,
-      barcode: undefined,
-      taxable: true,
-      weight: undefined,
-      dimensions: undefined,
-      expiryDate: undefined,
-      createdDate: new Date().toISOString().split('T')[0],
-      lastUpdated: new Date().toISOString().split('T')[0],
-      notes: undefined,
-    }));
-  }, [dbInventory]);
-
-  // Convert dbInvoices to Invoice format
+  // Convert allInvoices to Invoice format
   const invoices: Invoice[] = useMemo(() => {
     const paymentsByInvoice = dbPayments.reduce<Map<string, PaymentRow[]>>((acc, payment) => {
       if (!payment.invoice_id) return acc;
@@ -257,11 +337,12 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return Number.isNaN(time) ? 0 : time;
     };
 
-    // Sort by created_at first (stable, never changes) then by invoice_id for consistent ordering
-    const sortedInvoices = [...dbInvoices].sort((a, b) => {
+    // Sort by created_at first (based on sortOrder) then by invoice_id for consistent ordering
+    const sortedInvoices = [...(dbInvoices || [])].sort((a, b) => {
       const timeA = parse(a.created_at);
       const timeB = parse(b.created_at);
-      if (timeA !== timeB) return timeA - timeB;
+      const sortMultiplier = sortOrder === "desc" ? -1 : 1; // -1 for desc, 1 for asc
+      if (timeA !== timeB) return (timeA - timeB) * sortMultiplier;
       // If created_at is the same, sort by invoice_id for stable ordering
       return a.invoice_id.localeCompare(b.invoice_id);
     });
@@ -462,7 +543,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         paymentHistory,
       };
     });
-  }, [dbInvoices, dbCustomers, dbPayments]);
+  }, [dbInvoices, dbCustomers, dbPayments, sortOrder]);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -478,6 +559,23 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   const [isEditingInvoice, setIsEditingInvoice] = useState(false);
   const [editingInvoiceDate, setEditingInvoiceDate] = useState("");
   const isDataLoading = invoicesLoading || customersLoading || paymentsLoading;
+
+  // Load secondary data (payments) when needed
+  const loadSecondaryData = useCallback(async () => {
+    try {
+      await dispatch(thunks.payments.fetchAll(undefined)).unwrap();
+    } catch (error) {
+      console.error('Error loading payments data:', error);
+      toast.error(`Failed to load payments data: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [dispatch]);
+
+  // Load secondary data when payment dialog opens
+  useEffect(() => {
+    if (isPaymentDialogOpen && dbPayments.length === 0) {
+      void loadSecondaryData();
+    }
+  }, [isPaymentDialogOpen, dbPayments.length, loadSecondaryData]);
 
   // Customer management
   const customers: Customer[] = useMemo(() => {
@@ -907,7 +1005,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
   };
 
   const loadItemFromInventory = (id: number, inventoryId: string) => {
-    const inventoryItem = inventory.find(item => item.id === parseInt(inventoryId));
+    const inventoryItem = dbInventory.find(item => item.id === parseInt(inventoryId));
     if (!inventoryItem) return;
 
     setItems(items.map(item => {
@@ -926,6 +1024,13 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return item;
     }));
     toast.success("Product loaded from inventory");
+  };
+
+  const loadMoreInventory = (searchTerm: string) => {
+    // This function can be used to filter inventory based on search term
+    // For now, it's a placeholder since the inventory is already loaded from Redux store
+    // You could implement filtering logic here if needed
+    console.log('Searching inventory for:', searchTerm);
   };
 
   // Apply global discount to all items
@@ -1204,16 +1309,15 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       }
 
       // Update the invoice date in the database
-      await dispatch(
-        thunks.invoices.updateOne({
-          id: dbInvoice.invoice_id,
-          values: {
-            invoice_date: editingInvoiceDate,
-            due_date: editingInvoiceDate, // Also update due date to match
-          } as any,
-        })
-      ).unwrap();
+      await updateInvoiceMutation.mutateAsync({
+        id: dbInvoice.invoice_id,
+        data: {
+          invoice_date: editingInvoiceDate,
+          due_date: editingInvoiceDate, // Also update due date to match
+        },
+      });
 
+      // No need to refetch - optimistic mutation handles UI updates automatically
       toast.success("Invoice date updated successfully!");
       setIsEditDialogOpen(false);
       setSelectedInvoice(null);
@@ -1424,7 +1528,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
         discount_amount: discountMode === "global" && parseFloat(globalDiscountAmount) > 0 ? parseFloat(globalDiscountAmount) : null,
       };
       
-      const created = await dispatch(thunks.invoices.createOne(insertPayload)).unwrap();
+      const created = await createInvoiceMutation.mutateAsync(insertPayload);
       const createdId = (created as any)?.invoice_id as string | undefined;
       if (createdId && tempBrandingOwnerId) {
         await supabase
@@ -1433,7 +1537,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
           .eq('owner_type', 'invoice')
           .eq('owner_id', tempBrandingOwnerId);
       }
-      // No need to fetchAll since createOne should optimistically update the Redux store
+      // No need to refetch - optimistic mutation handles UI updates automatically
 
       resetForm();
       setIsCreateDialogOpen(false);
@@ -1475,6 +1579,10 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       return;
     }
 
+    // Get company info for dynamic company name
+    const companyInfo = await getCompanyInfo();
+    const companyName = getCompanyFullName(companyInfo);
+
     const resolveOwnerFileUrl = async (
       ownerId: string | undefined,
       category: string,
@@ -1508,6 +1616,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
     if (invoice.stampFilename === '__NO_STAMP__') {
       invoice = { ...invoice, stamp: '' };
     } else if (!invoice.stamp) {
+      // First try to get invoice-specific stamp
       const stampUrl = await resolveOwnerFileUrl(
         invoice.dbInvoiceId,
         FILE_CATEGORIES.BRANDING_STAMP,
@@ -1515,6 +1624,33 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
       );
       if (stampUrl) {
         invoice = { ...invoice, stamp: stampUrl };
+      } else {
+        // Fall back to default stamp from Settings
+        try {
+          const { data: brandingData } = await supabase
+            .from("company_branding")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (brandingData?.branding_id) {
+            const brandingFiles = await getFilesByOwner(brandingData.branding_id, 'branding');
+            const stampFile = brandingFiles.find((f) => f.category === FILE_CATEGORIES.BRANDING_STAMP);
+            if (stampFile) {
+              const defaultStampUrl = await getFileUrl(
+                stampFile.bucket as any,
+                stampFile.path,
+                stampFile.is_public
+              );
+              if (defaultStampUrl) {
+                invoice = { ...invoice, stamp: defaultStampUrl };
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('Failed to load default stamp from Settings:', error);
+        }
       }
     }
 
@@ -1541,7 +1677,7 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
     // Generate HTML with logo and QR code - always use invoice date for printing
     const displayDate = invoice.date;
-    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate, includeImages);
+    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate, includeImages, companyName);
     
     // Write HTML to print window
     printWindow.document.open();
@@ -1601,7 +1737,8 @@ const generateInvoiceHTML = (
   logoUrl?: string | null,
   qrCode?: string,
   displayDate?: string,
-  includeImages: boolean = true
+  includeImages: boolean = true,
+  companyName?: string
 ) => {
     // Use provided logo or fall back to invoice logo
     const companyLogo = logoUrl || invoice.companyLogo;
@@ -1674,8 +1811,10 @@ const generateInvoiceHTML = (
             margin-bottom: 5px;
           }
           .top-logo {
-            max-width: 150px;
+            max-width: 180px;
+            max-height: 60px;
             height: auto;
+            object-fit: contain;
           }
   
           /* Title Section */
@@ -1870,12 +2009,20 @@ const generateInvoiceHTML = (
             line-height: 1.5;
           }
           .stamp-container {
-            width: 100px;
+            width: 120px;
+            height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
           }
           .stamp-img {
-            width: 100px;
-            height: auto;
-            opacity: 0.9;
+            width: 120px;
+            height: 120px;
+            object-fit: contain;
+            opacity: 0.85;
+            border-radius: 4px;
+          }
           }
   
           /* Sub-text inside th/td for Arabic */
@@ -1937,7 +2084,7 @@ const generateInvoiceHTML = (
           
           <div class="header-strip">
             <div class="company-details-top">
-              <div class="company-name-top">Mana Smart Trading Company | شركة مانا الذكية للتجارة</div>
+              <div class="company-name-top">${companyName || 'Mana Smart Trading Company | شركة مانا الذكية للتجارة'}</div>
               <div>Tax Number / الرقم الضريبي: ${invoice.taxNumber || '311510923100003'}</div>
               <div>Commercial Reg / السجل التجاري: ${invoice.commercialRegister || '2051245473'}</div>
               <div>Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417</div>
@@ -2053,7 +2200,7 @@ const generateInvoiceHTML = (
           </div>
   
           <div class="footer">
-            <div class="company-footer-info">Mana Smart Trading Company - شركة مانا الذكية للتجارة</div>
+            <div class="company-footer-info">${companyName || 'Mana Smart Trading Company - شركة مانا الذكية للتجارة'}</div>
             <div class="company-footer-details">
               Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417<br>
               Tax Number: ${invoice.taxNumber || '311510923100003'} | CR: ${invoice.commercialRegister || '2051245473'}
@@ -2064,7 +2211,7 @@ const generateInvoiceHTML = (
             <div class="bank-section">
               <div>
                 <div class="bank-title">💳 Bank Details / معلومات البنك</div>
-                <div class="bank-title" style="color: #333;">Mana Smart Trading Company</div>
+                <div class="bank-title" style="color: #333;">${companyName || 'Mana Smart Trading Company'}</div>
                 <div class="bank-text">شركة مانا الذكية للتجارة</div>
                 <div class="bank-text">مصرف الراجحي | Al Rajhi Bank</div>
                 <div class="bank-text">Account Number: 301000010006080269328</div>
@@ -2072,7 +2219,7 @@ const generateInvoiceHTML = (
               </div>
               <div class="stamp-container">
                  ${invoice.stamp ? `<img src="${invoice.stamp}" class="stamp-img" alt="Stamp">` : 
-                   `<div style="width:100px; height:100px; border:2px dashed #ccc; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ccc; transform: rotate(-15deg);">Stamp</div>`}
+                   `<div style="width:120px; height:120px; border:2px dashed #ccc; border-radius:4px; display:flex; align-items:center; justify-content:center; color:#ccc; transform: rotate(-15deg); font-size:12px; text-align:center;">No Stamp</div>`}
               </div>
             </div>
           </div>
@@ -2100,6 +2247,102 @@ const generateInvoiceHTML = (
     draft: invoices.filter(inv => inv.status === "draft").length,
     totalRevenue: invoices.reduce((sum, inv) => sum + inv.paidAmount, 0),
     pendingAmount: invoices.reduce((sum, inv) => sum + inv.remainingAmount, 0),
+  };
+
+  const exportToPDF = () => {
+    try {
+      if (invoices.length === 0) {
+        toast.error("No data to export.");
+        return;
+      }
+
+      // Create HTML content for PDF
+      let htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Invoices Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; text-align: center; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            .total-row { font-weight: bold; background-color: #f9f9f9; }
+            .header-info { margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>Invoices Report</h1>
+          <div class="header-info">
+            <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+            <p><strong>Total Invoices:</strong> ${invoices.length}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Invoice Number</th>
+                <th>Date</th>
+                <th>Customer Name</th>
+                <th>Mobile</th>
+                <th>Location</th>
+                <th>Total Amount (SAR)</th>
+                <th>Paid Amount (SAR)</th>
+                <th>Remaining Amount (SAR)</th>
+                <th>Status</th>
+                <th>Type</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      let grandTotal = 0;
+      invoices.forEach((invoice) => {
+        grandTotal += invoice.grandTotal;
+        htmlContent += `
+          <tr>
+            <td>${invoice.invoiceNumber}</td>
+            <td>${invoice.date}</td>
+            <td>${invoice.customerName}</td>
+            <td>${invoice.mobile}</td>
+            <td>${invoice.location}</td>
+            <td>${invoice.grandTotal.toFixed(2)}</td>
+            <td>${invoice.paidAmount.toFixed(2)}</td>
+            <td>${invoice.remainingAmount.toFixed(2)}</td>
+            <td>${invoice.status}</td>
+            <td>${invoice.invoiceType === "monthly_visit" ? "Monthly Visit" : "Normal"}</td>
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="6"><strong>Grand Total</strong></td>
+                <td><strong>${grandTotal.toFixed(2)}</strong></td>
+                <td colspan="3"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </body>
+        </html>
+      `;
+
+      // Create a new window and print
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.print();
+        toast.success("PDF export ready for printing");
+      } else {
+        toast.error("Failed to open print window");
+      }
+    } catch (error) {
+      console.error('PDF export error:', error);
+      toast.error("Failed to export PDF");
+    }
   };
 
   const exportToExcel = () => {
@@ -2137,10 +2380,24 @@ const generateInvoiceHTML = (
           <p className="text-muted-foreground mt-1">Create and manage customer invoices</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={exportToExcel} variant="outline" className="gap-2">
-            <Download className="h-4 w-4" />
-            Export Excel
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="gap-2">
+                <Download className="h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={exportToExcel}>
+                <Download className="h-4 w-4 mr-2" />
+                Export as Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={exportToPDF}>
+                <FileText className="h-4 w-4 mr-2" />
+                Export as PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
             <Button className="gap-2 bg-purple-600 hover:bg-purple-700 text-white" disabled={customersLoading}>
@@ -2724,12 +2981,23 @@ const generateInvoiceHTML = (
                           {!item.isManual && (
                             <div className="space-y-1 w-full">
                               <Label className="text-xs">Load from Inventory *</Label>
+                              <div className="relative">
+                                <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
+                                <Input
+                                  placeholder="Search products..."
+                                  className="pl-7 h-8 text-sm"
+                                  onChange={(e) => {
+                                    const searchTerm = e.target.value;
+                                    loadMoreInventory(searchTerm);
+                                  }}
+                                />
+                              </div>
                               <Select onValueChange={(value) => loadItemFromInventory(item.id, value)}>
                                 <SelectTrigger className="h-8 text-sm w-full">
                                   <SelectValue placeholder="Select product..." />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  {inventory.map(inv => (
+                                  {dbInventory.map(inv => (
                                     <SelectItem key={inv.id} value={inv.id.toString()}>
                                       {inv.name} - SAR {inv.unitPrice.toFixed(2)}
                                     </SelectItem>
@@ -2891,12 +3159,12 @@ const generateInvoiceHTML = (
                         type="button"
                         variant="outline"
                         onClick={addInventoryItem}
-                        disabled={inventory.length === 0}
+                        disabled={dbInventory.length === 0}
                         className="w-full h-8 text-xs"
-                        title={inventory.length === 0 ? "No items currently in inventory" : ""}
+                        title={dbInventory.length === 0 ? "No items currently in inventory" : ""}
                       >
                         <Plus className="h-3 w-3 mr-1" />
-                        {inventory.length === 0 ? "No items currently in inventory" : "Add from Inventory"}
+                        {dbInventory.length === 0 ? "No items currently in inventory" : "Add from Inventory"}
                       </Button>
                     </div>
                   </CardContent>
@@ -3266,32 +3534,62 @@ const generateInvoiceHTML = (
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>All Invoices</CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Search invoices..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8 w-[250px]"
+                  className="pl-8 w-full sm:w-[250px]"
                 />
               </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[160px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="paid">✅ Paid</SelectItem>
-                  <SelectItem value="partial">💰 Partial</SelectItem>
-                  <SelectItem value="draft">📝 Draft</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex flex-col gap-2">
+                  <Label>Status</Label>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-[220px]">
+                      <SelectValue placeholder="All statuses" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      <SelectItem value="paid">Paid</SelectItem>
+                      <SelectItem value="partial">Partial</SelectItem>
+                      <SelectItem value="draft">Draft</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label>Sort Order</Label>
+                  <Select value={sortOrder} onValueChange={(value: "asc" | "desc") => setSortOrder(value)}>
+                    <SelectTrigger className="w-[220px]">
+                      <SelectValue placeholder="Sort order" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="desc">Newest First</SelectItem>
+                      <SelectItem value="asc">Oldest First</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {isDataLoading ? (
+          {invoicesError ? (
+            <div className="text-center py-12">
+              <div className="text-red-600 text-sm">
+                Failed to load invoices. Please try again.
+              </div>
+              <Button 
+                variant="outline" 
+                onClick={() => refetchInvoices()} 
+                className="mt-4"
+              >
+                Try Again
+              </Button>
+            </div>
+          ) : isDataLoading ? (
             <div className="space-y-3">
               <div className="rounded-md border">
                 <Table>
@@ -3523,7 +3821,9 @@ const generateInvoiceHTML = (
                           onClick={async () => {
                             // Load logo for download
                             const logoForDownload = invoice.companyLogo || (await getPrintLogo()) || undefined;
-                            const blob = new Blob([generateInvoiceHTML(invoice, logoForDownload, undefined, undefined, true)], { type: 'text/html' });
+                            const companyInfoForDownload = await getCompanyInfo();
+                            const companyNameForDownload = getCompanyFullName(companyInfoForDownload);
+                            const blob = new Blob([generateInvoiceHTML(invoice, logoForDownload, undefined, undefined, true, companyNameForDownload)], { type: 'text/html' });
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
@@ -3540,6 +3840,37 @@ const generateInvoiceHTML = (
                 ))}
               </TableBody>
             </Table>
+          )}
+          
+          {/* Load More Invoices Button */}
+          {hasMore && dbInvoices.length > 0 && (
+            <div className="flex justify-center mt-4">
+              <Button 
+                variant="outline" 
+                onClick={() => void loadMoreInvoices()}
+                disabled={isLoadingMore || invoicesLoading}
+                className="gap-2"
+              >
+                {isLoadingMore ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    Load More Invoices
+                    <span className="text-muted-foreground">({dbInvoices.length} loaded)</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+          
+          {/* End of data message */}
+          {!hasMore && dbInvoices.length > 0 && (
+            <div className="text-center text-muted-foreground mt-4 text-sm">
+              Showing all {dbInvoices.length} invoices
+            </div>
           )}
         </CardContent>
       </Card>
@@ -4182,6 +4513,8 @@ const generateInvoiceHTML = (
                           } as any,
                         })
                       ).unwrap();
+                      
+                      refetchInvoices(); // Refetch after payment update
                     } catch (error: any) {
                       const message =
                         error?.message || error?.error?.message || "Failed to update invoice";

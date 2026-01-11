@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { thunks, selectors } from "../redux-toolkit/slices";
-import { uploadFile, getFileUrl, getFilesByOwner } from "../lib/storage";
+import { uploadFile, getFileUrl, getFilesByOwner, deleteFilesByRecord } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 const CATEGORY_ALLOW_LIST = [
   "General",
@@ -405,6 +405,10 @@ export function Inventory() {
             ownerType: 'inventory',
             description: `Product image for ${formName}`,
             userId: currentUserId || undefined,
+            metadata: {
+              product_code: productCode, // Store product code in metadata for precise deletion
+              product_name: formName,
+            },
           });
 
           if (uploadResult.success && uploadResult.fileMetadata) {
@@ -512,6 +516,10 @@ export function Inventory() {
               ownerType: 'inventory',
               description: `Product image for ${formName}`,
               userId: currentUserId || undefined,
+              metadata: {
+                product_code: productCode, // Store product code in metadata for precise deletion
+                product_name: formName,
+              },
             });
 
             if (uploadResult.success && uploadResult.fileMetadata) {
@@ -553,15 +561,30 @@ export function Inventory() {
     resetForm();
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = async (id: number) => {
     const target = dbInventory[id - 1];
     const product_code = target?.product_code as string | undefined;
     if (!product_code) return;
-    if (confirm('Are you sure you want to delete this product?')) {
-      dispatch(thunks.inventory.deleteOne(product_code))
-        .unwrap()
-        .then(() => toast.success('Product deleted successfully!'))
-        .catch((e: any) => toast.error(e.message || 'Failed to delete product'));
+    
+    if (confirm('Are you sure you want to delete this product? This will also delete associated images.')) {
+      try {
+        // Delete associated files from storage (both S3 and Supabase) - only for this specific product
+        const { deleted, errors } = await deleteFilesByRecord(product_code, 'inventory', FILE_CATEGORIES.INVENTORY_IMAGE);
+        
+        if (errors.length > 0) {
+          console.warn('Some files could not be deleted:', errors);
+        }
+        
+        if (deleted > 0) {
+          console.log(`Deleted ${deleted} associated files for product ${product_code}`);
+        }
+        
+        // Then delete the inventory item
+        await dispatch(thunks.inventory.deleteOne(product_code)).unwrap();
+        toast.success('Product and associated images deleted successfully!');
+      } catch (e: any) {
+        toast.error(e.message || 'Failed to delete product');
+      }
     }
   };
 

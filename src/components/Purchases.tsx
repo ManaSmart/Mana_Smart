@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Search, Download, FileText, DollarSign, Package, Filter, Tag, Trash2, ShoppingCart } from "lucide-react";
+import { Plus, Search, Download, FileText, DollarSign, Package, Filter, Tag, Trash2, ShoppingCart, FileDown } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
 import { Button } from "./ui/button";
@@ -8,6 +8,12 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { Checkbox } from "./ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Textarea } from "./ui/textarea";
@@ -375,10 +381,112 @@ export function Purchases() {
     });
   }, [purchases, searchQuery, filterCategory, filterPaymentStatus]);
 
+  const exportToPDF = () => {
+    try {
+      console.log('Starting PDF export with filteredPurchases count:', filteredPurchases.length);
+      
+      if (filteredPurchases.length === 0) {
+        toast.error("No data to export. Try adjusting your filters.");
+        return;
+      }
+
+      // Create HTML content for PDF
+      let htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Purchases Report</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; text-align: center; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            .total-row { font-weight: bold; background-color: #f9f9f9; }
+            .header-info { margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>Purchases Report</h1>
+          <div class="header-info">
+            <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
+            <p><strong>Total Records:</strong> ${filteredPurchases.length}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Purchase Number</th>
+                <th>Date</th>
+                <th>Supplier</th>
+                <th>Category</th>
+                <th>Items Count</th>
+                <th>Total Amount (SAR)</th>
+                <th>Payment Status</th>
+                <th>Delivery Status</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      let grandTotal = 0;
+      filteredPurchases.forEach((purchase) => {
+        grandTotal += purchase.totalAmount;
+        htmlContent += `
+          <tr>
+            <td>${purchase.purchaseNumber}</td>
+            <td>${purchase.date}</td>
+            <td>${purchase.supplier}</td>
+            <td>${purchase.category}</td>
+            <td>${purchase.items.length}</td>
+            <td>${purchase.totalAmount.toFixed(2)}</td>
+            <td>${purchase.paymentStatus}</td>
+            <td>${purchase.deliveryStatus}</td>
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="5"><strong>Grand Total</strong></td>
+                <td><strong>${grandTotal.toFixed(2)}</strong></td>
+                <td colspan="2"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </body>
+        </html>
+      `;
+
+      // Create a new window and print
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.print();
+        toast.success("PDF export ready for printing");
+      } else {
+        toast.error("Failed to open print window");
+      }
+    } catch (error) {
+      console.error('PDF export error:', error);
+      toast.error("Failed to export PDF");
+    }
+  };
+
   const exportToExcel = () => {
     try {
+      console.log('Starting export with filteredPurchases count:', filteredPurchases.length);
+      
+      if (filteredPurchases.length === 0) {
+        toast.error("No data to export. Try adjusting your filters.");
+        return;
+      }
+
       const exportData: any[] = [];
-      filteredPurchases.forEach((purchase) => {
+      filteredPurchases.forEach((purchase, index) => {
+        console.log(`Processing purchase ${index + 1}:`, purchase.purchaseNumber);
         // Add main purchase row
         exportData.push({
           "Purchase Number": purchase.purchaseNumber,
@@ -401,6 +509,8 @@ export function Purchases() {
         });
       });
 
+      console.log('Export data prepared:', exportData.length, 'rows');
+
       const ws = XLSX.utils.json_to_sheet(exportData);
       ws["!cols"] = [
         { wch: 18 }, { wch: 12 }, { wch: 25 }, { wch: 15 }, { wch: 10 },
@@ -411,11 +521,13 @@ export function Purchases() {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Purchases");
       const fileName = `purchases_${new Date().toISOString().split("T")[0]}.xlsx`;
+      
+      console.log('Writing file:', fileName);
       XLSX.writeFile(wb, fileName);
       toast.success("Excel file exported successfully");
     } catch (error) {
+      console.error('Export error:', error);
       toast.error("Failed to export Excel file");
-      console.error(error);
     }
   };
 
@@ -669,6 +781,147 @@ export function Purchases() {
     .filter(p => (p.paymentStatus === "unpaid" || p.paymentStatus === "partial"))
     .reduce((sum, p) => sum + p.remainingAmount, 0);
 
+  const exportSinglePurchaseToPDF = (purchase: Purchase) => {
+    try {
+      // Create HTML content for single purchase PDF
+      let htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Purchase Order - ${purchase.purchaseNumber}</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 20px; }
+            h1 { color: #333; text-align: center; }
+            .header-info { margin-bottom: 30px; }
+            .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+            .info-item { margin-bottom: 10px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; font-weight: bold; }
+            .total-row { font-weight: bold; background-color: #f9f9f9; }
+            .items-table { margin-top: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>Purchase Order</h1>
+          <div class="header-info">
+            <div class="info-grid">
+              <div class="info-item"><strong>Purchase Number:</strong> ${purchase.purchaseNumber}</div>
+              <div class="info-item"><strong>Date:</strong> ${purchase.date}</div>
+              <div class="info-item"><strong>Supplier:</strong> ${purchase.supplier}</div>
+              <div class="info-item"><strong>Category:</strong> ${purchase.category}</div>
+              <div class="info-item"><strong>Payment Status:</strong> ${purchase.paymentStatus}</div>
+              <div class="info-item"><strong>Delivery Status:</strong> ${purchase.deliveryStatus}</div>
+            </div>
+          </div>
+          
+          <h2>Items</h2>
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th>Item Name</th>
+                <th>Quantity</th>
+                <th>Unit Price (SAR)</th>
+                <th>Total (SAR)</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      let itemsTotal = 0;
+      purchase.items.forEach((item) => {
+        itemsTotal += item.total;
+        htmlContent += `
+          <tr>
+            <td>${item.itemName}</td>
+            <td>${item.quantity}</td>
+            <td>${item.unitPrice.toFixed(2)}</td>
+            <td>${item.total.toFixed(2)}</td>
+          </tr>
+        `;
+      });
+
+      htmlContent += `
+            </tbody>
+            <tfoot>
+              <tr class="total-row">
+                <td colspan="3"><strong>Subtotal</strong></td>
+                <td><strong>${purchase.subtotal.toFixed(2)}</strong></td>
+              </tr>
+              <tr class="total-row">
+                <td colspan="3"><strong>Tax Amount</strong></td>
+                <td><strong>${purchase.taxAmount.toFixed(2)}</strong></td>
+              </tr>
+              <tr class="total-row">
+                <td colspan="3"><strong>Total Amount</strong></td>
+                <td><strong>${purchase.totalAmount.toFixed(2)}</strong></td>
+              </tr>
+              <tr class="total-row">
+                <td colspan="3"><strong>Paid Amount</strong></td>
+                <td><strong>${purchase.paidAmount.toFixed(2)}</strong></td>
+              </tr>
+              <tr class="total-row">
+                <td colspan="3"><strong>Remaining Amount</strong></td>
+                <td><strong>${purchase.remainingAmount.toFixed(2)}</strong></td>
+              </tr>
+            </tfoot>
+          </table>
+          
+          ${purchase.notes ? `<div style="margin-top: 30px;"><strong>Notes:</strong> ${purchase.notes}</div>` : ''}
+        </body>
+        </html>
+      `;
+
+      // Create a new window and print
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        printWindow.print();
+        toast.success(`Purchase ${purchase.purchaseNumber} PDF ready for printing`);
+      } else {
+        toast.error("Failed to open print window");
+      }
+    } catch (error) {
+      console.error('Single PDF export error:', error);
+      toast.error("Failed to export PDF");
+    }
+  };
+
+  const exportSinglePurchaseToExcel = (purchase: Purchase) => {
+    try {
+      const exportData = [{
+        "Purchase Number": purchase.purchaseNumber,
+        "Date": purchase.date,
+        "Supplier": purchase.supplier,
+        "Category": purchase.category,
+        "Items Count": purchase.items.length,
+        "Items Details": purchase.items.map(i => `${i.itemName} (Qty: ${i.quantity}, Price: ${i.unitPrice})`).join("; "),
+        "Subtotal (SAR)": purchase.subtotal,
+        "Tax Amount (SAR)": purchase.taxAmount,
+        "Total Amount (SAR)": purchase.totalAmount,
+        "Paid Amount (SAR)": purchase.paidAmount,
+        "Remaining Amount (SAR)": purchase.remainingAmount,
+        "Payment Status": purchase.paymentStatus,
+        "Delivery Status": purchase.deliveryStatus,
+        "Payment Method": purchase.paymentMethod || "",
+        "Delivery Date": purchase.deliveryDate || "",
+        "Invoice Number": purchase.invoiceNumber || "",
+        "Notes": purchase.notes || "",
+      }];
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Purchase");
+      const fileName = `purchase_${purchase.purchaseNumber}_${new Date().toISOString().split("T")[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+      toast.success(`Purchase ${purchase.purchaseNumber} exported successfully`);
+    } catch (error) {
+      console.error('Single export error:', error);
+      toast.error("Failed to export purchase");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -677,10 +930,24 @@ export function Purchases() {
           <p className="text-muted-foreground mt-1">Track and manage all purchase orders and inventory</p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={exportToExcel} variant="outline" className="gap-2">
-            <Download className="h-4 w-4" />
-            Export Excel
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="gap-2">
+                <Download className="h-4 w-4" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem onClick={exportToExcel}>
+                <FileDown className="h-4 w-4 mr-2" />
+                Export as Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={exportToPDF}>
+                <FileText className="h-4 w-4 mr-2" />
+                Export as PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Dialog open={isAddCategoryDialogOpen} onOpenChange={setIsAddCategoryDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" className="gap-2">
@@ -1177,9 +1444,23 @@ export function Purchases() {
                           <FileText className="h-4 w-4 mr-1" />
                           View
                         </Button>
-                        <Button variant="ghost" size="sm">
-                          <Download className="h-4 w-4" />
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent>
+                            <DropdownMenuItem onClick={() => exportSinglePurchaseToExcel(purchase)}>
+                              <FileDown className="h-4 w-4 mr-2" />
+                              Export as Excel
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => exportSinglePurchaseToPDF(purchase)}>
+                              <FileText className="h-4 w-4 mr-2" />
+                              Export as PDF
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>

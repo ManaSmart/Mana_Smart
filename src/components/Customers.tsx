@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Plus, Search, MoreVertical, Edit, Trash2, Phone, Mail, MapPin, Building2, Filter, Eye, FileText, Send, MessageSquare, User } from "lucide-react";
+import { Plus, Search, MoreVertical, Edit, Trash2, Phone, Mail, MapPin, Building2, Filter, Eye, FileText, Send, MessageSquare, User, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -29,9 +29,11 @@ import { Separator } from "./ui/separator";
 import { useAppDispatch, useAppSelector } from "../redux-toolkit/hooks";
 import { thunks, selectors } from "../redux-toolkit/slices";
 import type { Delegates } from "../../supabase/models/delegates";
-import { supabase } from "../lib/supabaseClient";
+import type { Contracts as DbContract } from "../../supabase/models/contracts";
+import { getPrintLogo } from "../lib/getPrintLogo";
 import type { MessageTemplateRow, MessageTemplateType, MessageTemplateCategory } from "../../supabase/models/message_templates";
 import { mockMessageTemplates, type MessageTemplateSeed } from "../data/mockMessageTemplates";
+import { supabase } from "../lib/supabaseClient";
 
 interface Customer {
   id: number;
@@ -59,6 +61,45 @@ interface MessageTemplate {
   content: string;
   type: MessageTemplateType;
   subject?: string | null;
+}
+
+interface Contract {
+  id: number;
+  recordId?: string;
+  contractNumber: string;
+  contractDate: string;
+  clientName: string;
+  clientCr: string;
+  clientCity: string;
+  clientRepresentative: string;
+  clientDesignation: string;
+  serviceAddress: string;
+  postalCode: string;
+  monthlyAmount: number;
+  semiAnnualAmount: number;
+  annualAmount: number;
+  devicesCount: string;
+  deviceTypes: string;
+  emergencyVisitFee: number;
+  paymentPlan: "monthly" | "semi-annual" | "annual";
+  status: "draft" | "active" | "expired" | "cancelled" | "suspended" | "signed" | "attached";
+  createdDate: string;
+  monthlyVisitStartDate?: string;
+  clientPhone?: string;
+  clientEmail?: string;
+  sentDate?: string;
+  signedDate?: string;
+  attachedDate?: string;
+  attachedFileName?: string;
+  attachedFileData?: string;
+  attachedFileId?: string;
+  attachedFileUrl?: string;
+  suspendedDate?: string;
+  suspensionReason?: string;
+  cancelledDate?: string;
+  cancellationReason?: string;
+  reactivatedDate?: string;
+  notes?: string;
 }
 
 
@@ -90,6 +131,7 @@ export function Customers() {
   const dispatch = useAppDispatch();
   const dbCustomers = useAppSelector(selectors.customers.selectAll) as any[];
   const dbDelegates = useAppSelector(selectors.delegates.selectAll) as Delegates[];
+  const dbContracts = useAppSelector(selectors.contracts.selectAll) as DbContract[];
   const loading = useAppSelector(selectors.customers.selectLoading);
   const loadError = useAppSelector(selectors.customers.selectError);
   const [searchQuery, setSearchQuery] = useState("");
@@ -140,6 +182,9 @@ export function Customers() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [messageTemplates, setMessageTemplates] = useState<MessageTemplate[]>(fallbackTemplates);
   const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [isContractDialogOpen, setIsContractDialogOpen] = useState(false);
+  const [selectedContractCustomer, setSelectedContractCustomer] = useState<Customer | null>(null);
+  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
 
   const fetchTemplates = useCallback(async () => {
     setTemplatesLoading(true);
@@ -171,6 +216,7 @@ export function Customers() {
   useEffect(() => {
     dispatch(thunks.customers.fetchAll(undefined));
     dispatch(thunks.delegates.fetchAll(undefined));
+    dispatch(thunks.contracts.fetchAll(undefined));
   }, [dispatch]);
 
   useEffect(() => {
@@ -287,15 +333,394 @@ export function Customers() {
     setIsEditDialogOpen(true);
   };
 
+  const handleViewContract = (customer: Customer) => {
+    // Check if customer has a contract
+    const dbContract = dbContracts.find(contract => contract.customer_id === customer.dbId);
+    
+    if (!dbContract) {
+      toast.error(`No contract found for ${customer.name}`, {
+        description: "This customer does not have any contract yet. Please create a contract first.",
+        duration: 5000
+      });
+      return;
+    }
+    
+    // Parse additional data from notes field
+    let additionalData: any = {};
+    try {
+      if (dbContract.notes) {
+        additionalData = JSON.parse(dbContract.notes);
+      }
+    } catch (e) {
+      additionalData = { notes: dbContract.notes };
+    }
+
+    // Map database contract to Contract interface
+    const contract: Contract = {
+      id: 1, // Temporary ID
+      recordId: dbContract.contract_id,
+      contractNumber: dbContract.contract_number,
+      contractDate: dbContract.contract_start_date,
+      monthlyVisitStartDate: additionalData.monthlyVisitStartDate || dbContract.contract_start_date,
+      clientName: additionalData.clientName || customer.name,
+      clientCr: additionalData.clientCr || customer.commercialRegister || "",
+      clientCity: additionalData.clientCity || customer.location.split(',')[0] || "",
+      clientRepresentative: additionalData.clientRepresentative || customer.representative || "",
+      clientDesignation: additionalData.clientDesignation || "",
+      serviceAddress: dbContract.location || additionalData.serviceAddress || customer.location,
+      postalCode: additionalData.postalCode || "",
+      monthlyAmount: additionalData.monthlyAmount || 0,
+      semiAnnualAmount: additionalData.semiAnnualAmount || 0,
+      annualAmount: additionalData.annualAmount || 0,
+      devicesCount: additionalData.devicesCount || "",
+      deviceTypes: additionalData.deviceTypes || "",
+      emergencyVisitFee: additionalData.emergencyVisitFee || 500,
+      paymentPlan: additionalData.paymentPlan || "monthly",
+      status: (dbContract.contract_status || "draft") as Contract["status"],
+      createdDate: dbContract.created_at ? dbContract.created_at.split('T')[0] : new Date().toISOString().split('T')[0],
+      clientPhone: additionalData.clientPhone || customer.mobile,
+      clientEmail: additionalData.clientEmail || customer.email,
+      sentDate: additionalData.sentDate,
+      signedDate: additionalData.signedDate,
+      attachedDate: additionalData.attachedDate,
+      attachedFileName: additionalData.attachedFileName,
+      attachedFileData: additionalData.attachedFileData,
+      attachedFileId: additionalData.attachedFileId,
+      attachedFileUrl: additionalData.attachedFileUrl,
+      suspendedDate: additionalData.suspendedDate,
+      suspensionReason: additionalData.suspensionReason,
+      cancelledDate: additionalData.cancelledDate,
+      cancellationReason: additionalData.cancellationReason,
+      reactivatedDate: additionalData.reactivatedDate,
+      notes: typeof additionalData.notes === 'string' ? additionalData.notes : dbContract.notes || "",
+    };
+    
+    setSelectedContractCustomer(customer);
+    setSelectedContract(contract);
+    setIsContractDialogOpen(true);
+  };
+
+  const handlePrintContract = async (contract: Contract) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+
+    // Load logo from Settings if not provided
+    const logoToUse = (await getPrintLogo()) || undefined;
+    const html = generateContractHTML(contract, logoToUse);
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.print();
+  };
+
+  const replaceVariables = (text: string, contract: Contract): string => {
+    return text
+      .replace(/{{contract_date}}/g, new Date(contract.contractDate).toLocaleDateString('ar-SA'))
+      .replace(/{{client_name}}/g, contract.clientName)
+      .replace(/{{client_cr}}/g, contract.clientCr)
+      .replace(/{{client_city}}/g, contract.clientCity)
+      .replace(/{{client_representative}}/g, contract.clientRepresentative)
+      .replace(/{{client_designation}}/g, contract.clientDesignation)
+      .replace(/{{service_address}}/g, contract.serviceAddress)
+      .replace(/{{postal_code}}/g, contract.postalCode)
+      .replace(/{{monthly_amount}}/g, contract.monthlyAmount.toLocaleString())
+      .replace(/{{semi_annual_amount}}/g, contract.semiAnnualAmount.toLocaleString())
+      .replace(/{{annual_amount}}/g, contract.annualAmount.toLocaleString())
+      .replace(/{{devices_count}}/g, contract.devicesCount)
+      .replace(/{{device_types}}/g, contract.deviceTypes)
+      .replace(/{{emergency_visit_fee}}/g, contract.emergencyVisitFee.toLocaleString());
+  };
+
+  const generateContractHTML = (contract: Contract, logoToUse?: string) => {
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Service Agreement - اتفاقية خدمة التعطير</title>
+        <style>
+          @page { size: A4; margin: 15mm; }
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #000;
+            line-height: 1.8;
+            font-size: 11pt;
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #3b82f6;
+          }
+          .logo {
+            max-width: 120px;
+            max-height: 80px;
+            margin: 0 auto 15px;
+            display: block;
+          }
+          .main-title {
+            font-size: 20pt;
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 8px;
+          }
+          .location {
+            font-size: 11pt;
+            color: #6b7280;
+            margin: 10px 0;
+          }
+          .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin: 20px 0;
+            align-items: start;
+          }
+          .arabic-section {
+            text-align: right;
+            direction: rtl;
+            padding-right: 15px;
+            border-right: 3px solid #3b82f6;
+          }
+          .english-section {
+            text-align: left;
+            direction: ltr;
+            padding-left: 15px;
+            border-left: 3px solid #3b82f6;
+          }
+          .clause-title {
+            font-weight: bold;
+            color: #3b82f6;
+            font-size: 12pt;
+            margin: 15px 0 10px;
+          }
+          .clause-content {
+            color: #374151;
+            margin-bottom: 15px;
+          }
+          .party-info {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border: 1px solid #e5e7eb;
+          }
+          .party-label {
+            font-weight: bold;
+            color: #1f2937;
+            margin-bottom: 5px;
+          }
+          .signatures {
+            margin-top: 50px;
+            page-break-inside: avoid;
+          }
+          .signature-box {
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 2px solid #e5e7eb;
+            min-height: 150px;
+          }
+          .signature-line {
+            border-top: 2px solid #000;
+            margin: 60px 20px 10px;
+          }
+          .signature-label {
+            font-weight: 600;
+            color: #4b5563;
+            text-align: center;
+          }
+          ul {
+            margin: 10px 0;
+            padding-right: 25px;
+          }
+          ul li {
+            margin: 5px 0;
+          }
+          .english-section ul {
+            padding-left: 25px;
+            padding-right: 0;
+          }
+          @media print {
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          }
+        </style>
+      </head>
+      <body>
+        <!-- Header -->
+        <div class="header">
+          ${logoToUse ? `<img src="${logoToUse}" alt="Logo" class="logo">` : ''}
+          <div class="main-title">اتفاقية تقديم خدمة التعطير (الأعمال)</div>
+          <div class="main-title">Aromatic Service Agreement (Business)</div>
+          <div class="location">
+            الموقع: الخبر، المملكة العربية السعودية، ${replaceVariables('{{postal_code}}', contract)}
+            <br>
+            Khobar, Saudi Arabia, ${replaceVariables('{{postal_code}}', contract)}
+          </div>
+          <div class="location">
+            تم إبرام هذه الاتفاقية بتاريخ ${replaceVariables('{{contract_date}}', contract)}
+            <br>
+            This Agreement is made as of ${replaceVariables('{{contract_date}}', contract)}
+          </div>
+        </div>
+
+        <!-- Parties Info -->
+        <div class="two-column">
+          <div class="arabic-section">
+            <div class="party-info">
+              <div class="party-label">الطرف الأول:</div>
+              <div>شركة مانا الذكية للتجارة</div>
+              <div>سجل تجاري رقم (2051245473)</div>
+              <div>المقر الرئيسي: الخبر</div>
+              <div>ويشار إليها لاحقًا بـ "المزود"</div>
+            </div>
+            <div class="party-info">
+              <div class="party-label">الطرف الثاني:</div>
+              <div>${replaceVariables('{{client_name}}', contract)}</div>
+              <div>سجل تجاري رقم (${replaceVariables('{{client_cr}}', contract)})</div>
+              <div>المقر الرئيسي: ${replaceVariables('{{client_city}}', contract)}</div>
+              <div>ويشار إليه لاحقًا بـ "العميل"</div>
+            </div>
+          </div>
+          <div class="english-section">
+            <div class="party-info">
+              <div class="party-label">First Party:</div>
+              <div>Mana Smart Trading Company</div>
+              <div>Commercial Registration No. (2051245473)</div>
+              <div>Headquartered in Khobar</div>
+              <div>Hereinafter referred to as the "Provider"</div>
+            </div>
+            <div class="party-info">
+              <div class="party-label">Second Party:</div>
+              <div>${replaceVariables('{{client_name}}', contract)}</div>
+              <div>Commercial Registration No. (${replaceVariables('{{client_cr}}', contract)})</div>
+              <div>Headquartered in ${replaceVariables('{{client_city}}', contract)}</div>
+              <div>Hereinafter referred to as the "Client"</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clause 1 -->
+        <div class="two-column">
+          <div class="arabic-section">
+            <div class="clause-title">البند الأول: نطاق الاتفاقية</div>
+            <div class="clause-content">
+              يتعهد المزود بتقديم خدمات التعطير باستخدام الأجهزة والزيوت العطرية المخصصة، وتشمل التركيب، والتعبئة، والصيانة، والمتابعة، وفقًا لما هو مبيّن في هذه الاتفاقية وملحق الخدمة.
+            </div>
+          </div>
+          <div class="english-section">
+            <div class="clause-title">Clause 1: Scope of Agreement</div>
+            <div class="clause-content">
+              The Provider undertakes to provide scenting services using designated devices and aromatic oils, including installation, refilling, maintenance, and follow-up, as outlined in this agreement and service annex.
+            </div>
+          </div>
+        </div>
+
+        <!-- Clause 2 -->
+        <div class="two-column">
+          <div class="arabic-section">
+            <div class="clause-title">البند الثاني: مدة العقد</div>
+            <div class="clause-content">
+              مدة العقد سنة ميلادية واحدة تبدأ من تاريخ التوقيع، وتتجدد تلقائيًا ما لم يُخطر أحد الطرفين الآخر بعدم الرغبة بالتجديد قبل (30) يومًا من تاريخ الانتهاء.
+            </div>
+          </div>
+          <div class="english-section">
+            <div class="clause-title">Clause 2: Contract Duration</div>
+            <div class="clause-content">
+              This contract is valid for one calendar year starting from date of signing and is automatically renewed unless either party notifies of its intention not to renew at least thirty (30) days prior to expiration.
+            </div>
+          </div>
+        </div>
+
+        <!-- Service Details -->
+        <div class="two-column">
+          <div class="arabic-section">
+            <div class="clause-title">البند الثالث: تفاصيل الخدمة</div>
+            <div class="clause-content">
+              <strong>العنوان:</strong> ${replaceVariables('{{service_address}}', contract)}<br>
+              <strong>عدد الأجهزة:</strong> ${replaceVariables('{{devices_count}}', contract)}<br>
+              <strong>أنواع الأجهزة:</strong> ${replaceVariables('{{device_types}}', contract)}<br>
+              <strong>الزيارة الطارئة:</strong> ${replaceVariables('{{emergency_visit_fee}}', contract)} ريال
+            </div>
+          </div>
+          <div class="english-section">
+            <div class="clause-title">Clause 3: Service Details</div>
+            <div class="clause-content">
+              <strong>Address:</strong> ${replaceVariables('{{service_address}}', contract)}<br>
+              <strong>Devices Count:</strong> ${replaceVariables('{{devices_count}}', contract)}<br>
+              <strong>Device Types:</strong> ${replaceVariables('{{device_types}}', contract)}<br>
+              <strong>Emergency Visit:</strong> ${replaceVariables('{{emergency_visit_fee}}', contract)} SAR
+            </div>
+          </div>
+        </div>
+
+        <!-- Payment -->
+        <div class="two-column">
+          <div class="arabic-section">
+            <div class="clause-title">البند الرابع: التكاليف والمدفوعات</div>
+            <div class="clause-content">
+              <strong>القيمة الشهرية:</strong> ${replaceVariables('{{monthly_amount}}', contract)} ريال<br>
+              <strong>القيمة نصف السنوية:</strong> ${replaceVariables('{{semi_annual_amount}}', contract)} ريال<br>
+              <strong>القيمة السنوية:</strong> ${replaceVariables('{{annual_amount}}', contract)} ريال
+            </div>
+          </div>
+          <div class="english-section">
+            <div class="clause-title">Clause 4: Costs and Payments</div>
+            <div class="clause-content">
+              <strong>Monthly Amount:</strong> ${replaceVariables('{{monthly_amount}}', contract)} SAR<br>
+              <strong>Semi-Annual Amount:</strong> ${replaceVariables('{{semi_annual_amount}}', contract)} SAR<br>
+              <strong>Annual Amount:</strong> ${replaceVariables('{{annual_amount}}', contract)} SAR
+            </div>
+          </div>
+        </div>
+
+        <!-- Signatures -->
+        <div class="signatures">
+          <div class="two-column">
+            <div class="arabic-section">
+              <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">المزود</div>
+              </div>
+            </div>
+            <div class="english-section">
+              <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">Provider</div>
+              </div>
+            </div>
+          </div>
+          <div class="two-column">
+            <div class="arabic-section">
+              <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">العميل: ${replaceVariables('{{client_name}}', contract)}</div>
+              </div>
+            </div>
+            <div class="english-section">
+              <div class="signature-box">
+                <div class="signature-line"></div>
+                <div class="signature-label">Client: ${replaceVariables('{{client_name}}', contract)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  };
+
   const handleSaveEdit = () => {
-    if (!editingCustomer?.dbId) return;
+    if (!editingCustomer || !editingCustomer.dbId) return;
+    
     const values: any = {
       customer_name: editingCustomer.name,
       company: editingCustomer.company,
       contact_num: editingCustomer.mobile,
       customer_email: editingCustomer.email,
       customer_address: editingCustomer.location,
-      contract_type: (editingCustomer.contractType || '').toLowerCase(),
+      contract_type: editingCustomer.contractType?.toLowerCase() || null,
       monthly_amount: editingCustomer.monthlyAmount,
       status: editingCustomer.status,
       delegate_id: editingCustomer.delegateDbId || null,
@@ -664,7 +1089,7 @@ export function Customers() {
                             <Mail className="h-4 w-4 mr-2" />
                             Email
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => toast.info("View contract")}>
+                          <DropdownMenuItem onClick={() => handleViewContract(customer)}>
                             <FileText className="h-4 w-4 mr-2" />
                             View Contract
                           </DropdownMenuItem>
@@ -941,6 +1366,175 @@ export function Customers() {
                 handleEditCustomer(selectedCustomer);
                 setSelectedCustomer(null);
               }}>Edit Customer</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Contract Details Dialog */}
+      {selectedContract && (
+        <Dialog open={isContractDialogOpen} onOpenChange={setIsContractDialogOpen}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Contract Details</DialogTitle>
+              <DialogDescription>View contract information for {selectedContractCustomer?.company}</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-6 py-4">
+              {/* Contract Information */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Contract Information</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground">Contract Number</Label>
+                    <p className="font-medium">{selectedContract.contractNumber}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Contract Date</Label>
+                    <p className="font-medium">{new Date(selectedContract.contractDate).toLocaleDateString('en-GB')}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Payment Plan</Label>
+                    <p className="font-medium capitalize">{selectedContract.paymentPlan.replace('-', ' ')}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Status</Label>
+                    <Badge variant={
+                      selectedContract.status === "active" ? "default" : 
+                      selectedContract.status === "draft" ? "secondary" : 
+                      selectedContract.status === "signed" ? "outline" : 
+                      "destructive"
+                    }>
+                      {selectedContract.status.charAt(0).toUpperCase() + selectedContract.status.slice(1)}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Client Information */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Client Information</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground">Client Name</Label>
+                    <p className="font-medium">{selectedContract.clientName}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Commercial Register</Label>
+                    <p className="font-medium">{selectedContract.clientCr || "N/A"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">City</Label>
+                    <p className="font-medium">{selectedContract.clientCity || "N/A"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Representative</Label>
+                    <p className="font-medium">{selectedContract.clientRepresentative || "N/A"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Email</Label>
+                    <p className="font-medium">{selectedContract.clientEmail || "N/A"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Phone</Label>
+                    <p className="font-medium">{selectedContract.clientPhone || "N/A"}</p>
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Service Details */}
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold">Service Details</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground">Service Address</Label>
+                    <p className="font-medium">{selectedContract.serviceAddress}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Postal Code</Label>
+                    <p className="font-medium">{selectedContract.postalCode || "N/A"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Monthly Amount</Label>
+                    <p className="font-medium">{selectedContract.monthlyAmount.toFixed(2)} SAR</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Emergency Visit Fee</Label>
+                    <p className="font-medium">{selectedContract.emergencyVisitFee.toFixed(2)} SAR</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Devices Count</Label>
+                    <p className="font-medium">{selectedContract.devicesCount || "N/A"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Device Types</Label>
+                    <p className="font-medium">{selectedContract.deviceTypes || "N/A"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Important Dates */}
+              {(selectedContract.sentDate || selectedContract.signedDate || selectedContract.attachedDate) && (
+                <>
+                  <Separator />
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold">Important Dates</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      {selectedContract.sentDate && (
+                        <div>
+                          <Label className="text-muted-foreground">Sent Date</Label>
+                          <p className="font-medium">{new Date(selectedContract.sentDate).toLocaleDateString('en-GB')}</p>
+                        </div>
+                      )}
+                      {selectedContract.signedDate && (
+                        <div>
+                          <Label className="text-muted-foreground">Signed Date</Label>
+                          <p className="font-medium">{new Date(selectedContract.signedDate).toLocaleDateString('en-GB')}</p>
+                        </div>
+                      )}
+                      {selectedContract.attachedDate && (
+                        <div>
+                          <Label className="text-muted-foreground">Attached Date</Label>
+                          <p className="font-medium">{new Date(selectedContract.attachedDate).toLocaleDateString('en-GB')}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Notes */}
+              {selectedContract.notes && (
+                <>
+                  <Separator />
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold">Notes</h3>
+                    <p className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
+                      {selectedContract.notes}
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button variant="outline" onClick={() => {
+                setIsContractDialogOpen(false);
+                setSelectedContract(null);
+                setSelectedContractCustomer(null);
+              }}>
+                Close
+              </Button>
+              <Button onClick={() => {
+                if (selectedContract) {
+                  handlePrintContract(selectedContract);
+                }
+              }} className="gap-2">
+                <Printer className="h-4 w-4" />
+                Print Contract
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
