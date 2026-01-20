@@ -3535,14 +3535,18 @@ const generateInvoiceHTML = (
           <div className="flex items-center justify-between">
             <CardTitle>All Invoices</CardTitle>
             <div className="flex flex-col sm:flex-row gap-3">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search invoices..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8 w-full sm:w-[250px]"
-                />
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="search">Search</Label>
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="search"
+                    placeholder="Search invoices..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-8 w-full sm:w-[250px]"
+                  />
+                </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-3">
                 <div className="flex flex-col gap-2">
