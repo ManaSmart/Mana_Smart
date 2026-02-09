@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { uploadFile, getFileUrl, getFilesByOwner } from "../lib/storage";
-import { getCompanyInfo, getCompanyFullName } from "../lib/companyInfo";
+import { getCompanyInfo, getCompanyName } from "../lib/companyInfo";
 import { Separator } from "./ui/separator";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
@@ -1059,7 +1059,13 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
 
     // Get company info for dynamic company name
     const companyInfo = await getCompanyInfo();
-    const companyName = getCompanyFullName(companyInfo);
+    const companyName = companyInfo ? getCompanyName(companyInfo) : ""; // English name only
+    const companyNameAr = companyInfo?.company_name_ar || "";
+    // Get additional company fields from localStorage (for tax number, commercial reg, etc.)
+    const companyTaxNumber = (companyInfo as any)?.company_tax_number ?? localStorage.getItem('companyTaxNumber') ?? "";
+    const companyCommercialRegister = (companyInfo as any)?.company_commercial_register ?? localStorage.getItem('companyCommercialReg') ?? "";
+    const companyAddress = companyInfo?.company_address ?? localStorage.getItem('companyAddress') ?? "";
+    const companyCityPostal = (companyInfo as any)?.company_city_postal ?? localStorage.getItem('companyCityPostal') ?? "";
 
     const resolveOwnerFileUrl = async (
       ownerId: string | undefined,
@@ -1162,7 +1168,20 @@ export function Quotations({ onConvertToInvoice }: QuotationsProps) {
     const displayDate = printDateOption === "today" ? new Date().toISOString().split('T')[0] : 
                         printDateOption === "custom" ? customPrintDate : 
                         quotation.date;
-    const quotationHTML = generateQuotationHTML(quotation, logoToUse, stampToUse, qrCode, displayDate, includeImages, companyName);
+    const quotationHTML = generateQuotationHTML(
+      quotation,
+      logoToUse,
+      stampToUse,
+      qrCode,
+      displayDate,
+      includeImages,
+      companyName,
+      companyNameAr,
+      companyTaxNumber,
+      companyCommercialRegister,
+      companyAddress,
+      companyCityPostal
+    );
     
     // Write HTML to print window
     printWindow.document.open();
@@ -1227,10 +1246,16 @@ const generateQuotationHTML = (
   qrCode?: string,
   displayDate?: string,
   includeImages: boolean = true,
-  companyName?: string
+  companyName?: string,
+  companyNameAr?: string,
+  companyTaxNumber?: string,
+  companyCommercialRegister?: string,
+  companyAddress?: string,
+  companyCityPostal?: string
 ) => {
     const companyLogo = logoUrl || quotation.companyLogo;
     const stampToRender = stampUrl || quotation.stamp;
+    const companyAddressLine = [companyAddress, companyCityPostal].filter(Boolean).join(' | ');
     
     return `
       <!DOCTYPE html>
@@ -1369,9 +1394,9 @@ const generateQuotationHTML = (
         <div class="document-container${includeImages ? '' : ' hide-item-images'}">
           <header class="main-header">
             <div class="company-brand-info">
-              <h1>${companyName || 'Mana Smart Trading Company'}</h1>
-              <p>VAT: 311234567800003 | C.R.: 1010567890</p>
-              <p>Riyadh, Saudi Arabia</p>
+              <h1>${companyName || 'Mana Smart Trading Company'}${companyNameAr ? `<br/><span style="font-size: 14px;">${companyNameAr}</span>` : `<br/><span style="font-size: 14px;">شركة مانا الذكية للتجارة</span>`}</h1>
+              <p>VAT: ${companyTaxNumber || '311510923100003'} | C.R.: ${companyCommercialRegister || '2051245473'}</p>
+              <p>${companyAddressLine || 'Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417'}</p>
             </div>
             <div class="header-logo">
               ${companyLogo ? `<img src="${companyLogo}" alt="Logo">` : ''}
@@ -1475,7 +1500,7 @@ const generateQuotationHTML = (
           <footer class="footer-area">
             <div class="bank-details">
               <div class="bank-title">Bank Account Details / معلومات البنك</div>
-              <div>${companyName || 'Mana Smart Trading Company'}</div>
+              <div>${companyName || ''}</div>
               <div>Al Rajhi Bank | A.N.: 301000010006080269328</div>
               <div>IBAN: SA2680000301608010269328</div>
             </div>

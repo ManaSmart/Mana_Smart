@@ -309,6 +309,9 @@ export function Settings({
   const [companyEmail, setCompanyEmail] = useState("info@scentmanagement.com");
   const [companyPhone, setCompanyPhone] = useState("+966 50 123 4567");
   const [companyAddress, setCompanyAddress] = useState("Riyadh, Saudi Arabia");
+  const [companyTaxNumber, setCompanyTaxNumber] = useState("");
+  const [companyCommercialReg, setCompanyCommercialReg] = useState("");
+  const [companyCityPostal, setCompanyCityPostal] = useState("");
 
   // System settings
   const [emailNotifications, setEmailNotifications] = useState(true);
@@ -350,6 +353,10 @@ export function Settings({
           setCompanyEmail(data.company_email ?? "");
           setCompanyPhone(data.company_phone ?? "");
           setCompanyAddress(data.company_address ?? "");
+          // Load new company fields from localStorage (database may not have them yet)
+          setCompanyTaxNumber(localStorage.getItem('companyTaxNumber') ?? "");
+          setCompanyCommercialReg(localStorage.getItem('companyCommercialReg') ?? "");
+          setCompanyCityPostal(localStorage.getItem('companyCityPostal') ?? "");
 
           setSystemName(data.system_sidebar_name ?? "");
           setSystemSubtitle(data.system_sidebar_subtitle ?? "");
@@ -838,6 +845,10 @@ export function Settings({
       }
       setSystemNameAr(localSystemNameAr);
       setSystemNameEn(localSystemNameEn);
+      // Save new company fields to localStorage (database may not have these fields yet)
+      localStorage.setItem('companyTaxNumber', companyTaxNumber);
+      localStorage.setItem('companyCommercialReg', companyCommercialReg);
+      localStorage.setItem('companyCityPostal', companyCityPostal);
       toast.success(successMessage);
     } catch (error: any) {
       toast.error(error?.message ?? "Failed to save branding settings");
@@ -1766,6 +1777,33 @@ export function Settings({
                       className="pl-10"
                     />
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="companyTaxNumber">Tax Number (الرقم الضريبي)</Label>
+                  <Input
+                    id="companyTaxNumber"
+                    value={companyTaxNumber}
+                    onChange={(e) => setCompanyTaxNumber(e.target.value)}
+                    placeholder="311510923100003"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="companyCommercialReg">Commercial Registration (السجل التجاري)</Label>
+                  <Input
+                    id="companyCommercialReg"
+                    value={companyCommercialReg}
+                    onChange={(e) => setCompanyCommercialReg(e.target.value)}
+                    placeholder="2051245473"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="companyCityPostal">City / Postal Code</Label>
+                  <Input
+                    id="companyCityPostal"
+                    value={companyCityPostal}
+                    onChange={(e) => setCompanyCityPostal(e.target.value)}
+                    placeholder="Al-Khobar, Al-Jisr District 37417"
+                  />
                 </div>
               </div>
               <div className="flex justify-end pt-4">

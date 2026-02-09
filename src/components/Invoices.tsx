@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+﻿import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { Plus, Search, Printer, Download, Eye, X, Trash2, Upload, DollarSign, CreditCard, Wallet, Settings, Calendar, Copy, Edit, FileText } from "lucide-react";
 import { toast } from "sonner";
 import * as XLSX from "@e965/xlsx";
@@ -26,7 +26,7 @@ import type { Customers } from "../../supabase/models/customers";
 import type { Invoices as InvoicesRow } from "../../supabase/models/invoices";
 import type { Payments as PaymentRow } from "../../supabase/models/payments";
 import { getPrintLogo } from "../lib/getPrintLogo";
-import { getCompanyInfo, getCompanyFullName } from "../lib/companyInfo";
+import { getCompanyInfo, getCompanyName } from "../lib/companyInfo";
 import { uploadFile, getFilesByOwner, getFileUrl } from "../lib/storage";
 import { FILE_CATEGORIES } from "../../supabase/models/file_metadata";
 import { supabase } from "../lib/supabaseClient";
@@ -1581,7 +1581,13 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
     // Get company info for dynamic company name
     const companyInfo = await getCompanyInfo();
-    const companyName = getCompanyFullName(companyInfo);
+    const companyName = getCompanyName(companyInfo); // English name only
+    const companyNameAr = companyInfo?.company_name_ar || '';
+    // Get additional company fields from localStorage (for tax number, commercial reg, etc.)
+    const companyTaxNumber = localStorage.getItem('companyTaxNumber') || '';
+    const companyCommercialReg = localStorage.getItem('companyCommercialReg') || '';
+    const companyAddress = localStorage.getItem('companyAddress') || '';
+    const companyCityPostal = localStorage.getItem('companyCityPostal') || '';
 
     const resolveOwnerFileUrl = async (
       ownerId: string | undefined,
@@ -1677,7 +1683,19 @@ export function Invoices({ pendingQuotationData, onQuotationDataConsumed }: Invo
 
     // Generate HTML with logo and QR code - always use invoice date for printing
     const displayDate = invoice.date;
-    const invoiceHTML = generateInvoiceHTML(invoice, logoToUse, qrCode, displayDate, includeImages, companyName);
+    const invoiceHTML = generateInvoiceHTML(
+      invoice,
+      logoToUse,
+      qrCode,
+      displayDate,
+      includeImages,
+      companyName,
+      companyNameAr,
+      companyTaxNumber,
+      companyCommercialReg,
+      companyAddress,
+      companyCityPostal
+    );
     
     // Write HTML to print window
     printWindow.document.open();
@@ -1738,7 +1756,12 @@ const generateInvoiceHTML = (
   qrCode?: string,
   displayDate?: string,
   includeImages: boolean = true,
-  companyName?: string
+  companyName?: string,
+  companyNameAr?: string,
+  companyTaxNumber?: string,
+  companyCommercialReg?: string,
+  companyAddress?: string,
+  companyCityPostal?: string
 ) => {
     // Use provided logo or fall back to invoice logo
     const companyLogo = logoUrl || invoice.companyLogo;
@@ -2084,10 +2107,10 @@ const generateInvoiceHTML = (
           
           <div class="header-strip">
             <div class="company-details-top">
-              <div class="company-name-top">${companyName || 'Mana Smart Trading Company | شركة مانا الذكية للتجارة'}</div>
-              <div>Tax Number / الرقم الضريبي: ${invoice.taxNumber || '311510923100003'}</div>
-              <div>Commercial Reg / السجل التجاري: ${invoice.commercialRegister || '2051245473'}</div>
-              <div>Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417</div>
+              <div class="company-name-top">${companyName || 'Mana Smart Trading Company'} ${companyNameAr ? `| ${companyNameAr}` : '| شركة مانا الذكية للتجارة'}</div>
+              <div>Tax Number / الرقم الضريبي: ${companyTaxNumber || invoice.taxNumber || '311510923100003'}</div>
+              <div>Commercial Reg / السجل التجاري: ${companyCommercialReg || invoice.commercialRegister || '2051245473'}</div>
+              <div>${[companyAddress, companyCityPostal].filter(Boolean).join(' | ') || 'Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417'}</div>
             </div>
             <div class="logo-wrapper">
                ${companyLogo ? `<img src="${companyLogo}" class="top-logo" alt="Logo">` : '<h1 style="color:white; font-weight:300; letter-spacing: 2px;">MĀNA</h1>'}
@@ -2200,10 +2223,10 @@ const generateInvoiceHTML = (
           </div>
   
           <div class="footer">
-            <div class="company-footer-info">${companyName || 'Mana Smart Trading Company - شركة مانا الذكية للتجارة'}</div>
+            <div class="company-footer-info">${companyName || 'Mana Smart Trading Company'}${companyNameAr ? ` - ${companyNameAr}` : ' - شركة مانا الذكية للتجارة'}</div>
             <div class="company-footer-details">
-              Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417<br>
-              Tax Number: ${invoice.taxNumber || '311510923100003'} | CR: ${invoice.commercialRegister || '2051245473'}
+              ${[companyAddress, companyCityPostal].filter(Boolean).join(' | ') || 'Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417'}
+              ${companyTaxNumber || companyCommercialReg ? `<br>Tax Number: ${companyTaxNumber || '311510923100003'} | CR: ${companyCommercialReg || '2051245473'}` : ''}
             </div>
             
             <div class="thank-you">Thank you for your business! | !شكرا لتعاملكم معنا</div>
@@ -3826,8 +3849,25 @@ const generateInvoiceHTML = (
                             // Load logo for download
                             const logoForDownload = invoice.companyLogo || (await getPrintLogo()) || undefined;
                             const companyInfoForDownload = await getCompanyInfo();
-                            const companyNameForDownload = getCompanyFullName(companyInfoForDownload);
-                            const blob = new Blob([generateInvoiceHTML(invoice, logoForDownload, undefined, undefined, true, companyNameForDownload)], { type: 'text/html' });
+                            const companyNameForDownload = getCompanyName(companyInfoForDownload); // English name only
+                            const companyNameArForDownload = companyInfoForDownload?.company_name_ar || '';
+                            const companyTaxNumberForDownload = localStorage.getItem('companyTaxNumber') || '';
+                            const companyCommercialRegForDownload = localStorage.getItem('companyCommercialReg') || '';
+                            const companyAddressForDownload = localStorage.getItem('companyAddress') || '';
+                            const companyCityPostalForDownload = localStorage.getItem('companyCityPostal') || '';
+                            const blob = new Blob([generateInvoiceHTML(
+                              invoice,
+                              logoForDownload,
+                              undefined,
+                              undefined,
+                              true,
+                              companyNameForDownload,
+                              companyNameArForDownload,
+                              companyTaxNumberForDownload,
+                              companyCommercialRegForDownload,
+                              companyAddressForDownload,
+                              companyCityPostalForDownload
+                            )], { type: 'text/html' });
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
