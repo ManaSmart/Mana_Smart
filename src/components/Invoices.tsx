@@ -1827,6 +1827,14 @@ const generateInvoiceHTML = (
           .company-details-top {
             font-size: 11px;
             line-height: 1.6;
+            color: white;
+            /* Prevent iPhone from auto-detecting phone numbers */
+            -webkit-text-size-adjust: 100%;
+          }
+          .company-details-top a,
+          .company-details-top a[href^="tel:"] {
+            color: white !important;
+            text-decoration: none !important;
           }
           .company-name-top {
             font-weight: bold;
@@ -1916,9 +1924,7 @@ const generateInvoiceHTML = (
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 20px;
-          }
-          .hide-item-images .item-image-col {
-            display: none !important;
+            table-layout: fixed;
           }
           .items-table th {
             background-color: #5d6d7e; /* Matches header strip */
@@ -1927,9 +1933,12 @@ const generateInvoiceHTML = (
             text-align: left;
             font-size: 11px;
             font-weight: normal;
+            word-wrap: break-word;
+            overflow: hidden;
           }
-          .items-table th.center { text-align: center; }
-          .items-table th.right { text-align: right; }
+          .items-table th.item-image-col { width: 50px; text-align: center; }
+          .items-table th:not(.item-image-col):not(:last-child) { text-align: center; }
+          .items-table th:last-child { text-align: right; }
           
           .items-table td {
             padding: 10px 5px;
@@ -1937,7 +1946,12 @@ const generateInvoiceHTML = (
             vertical-align: middle;
             font-size: 11px;
             color: #333;
+            word-wrap: break-word;
+            overflow: hidden;
           }
+          .items-table td.item-image-col { width: 50px; text-align: center; }
+          .items-table td:not(.item-image-col):not(:last-child) { text-align: center; }
+          .items-table td:last-child { text-align: right; font-weight: bold; }
           .item-image {
             width: 30px; 
             height: 30px; 
@@ -2020,6 +2034,7 @@ const generateInvoiceHTML = (
             padding: 15px;
             border-radius: 8px;
             text-align: left;
+            margin-top: 30px;
           }
           .bank-title {
             font-weight: bold;
@@ -2221,21 +2236,13 @@ const generateInvoiceHTML = (
               </div>
             </div>
           </div>
-  
-          <div class="footer">
-            <div class="company-footer-info">${companyName || 'Mana Smart Trading Company'}${companyNameAr ? ` - ${companyNameAr}` : ' - شركة مانا الذكية للتجارة'}</div>
-            <div class="company-footer-details">
-              ${[companyAddress, companyCityPostal].filter(Boolean).join(' | ') || 'Al-Khobar, Al-Jisr District 37417 | الخبر، حي الجسر 37417'}
-              ${companyTaxNumber || companyCommercialReg ? `<br>Tax Number: ${companyTaxNumber || '311510923100003'} | CR: ${companyCommercialReg || '2051245473'}` : ''}
-            </div>
-            
-            <div class="thank-you">Thank you for your business! | !شكرا لتعاملكم معنا</div>
+
   
             <div class="bank-section">
               <div>
                 <div class="bank-title">💳 Bank Details / معلومات البنك</div>
-                <div class="bank-title" style="color: #333;">${companyName || 'Mana Smart Trading Company'}</div>
-                <div class="bank-text">شركة مانا الذكية للتجارة</div>
+                <div class="bank-title" style="color: #333;">${companyName || 'Mana Smart Trading Company'}${companyNameAr ? ` - ${companyNameAr}` : ' - شركة مانا الذكية للتجارة'}</div>
+                <div class="bank-text">${companyNameAr ? ` - ${companyNameAr}` : ' - شركة مانا الذكية للتجارة'}</div>
                 <div class="bank-text">مصرف الراجحي | Al Rajhi Bank</div>
                 <div class="bank-text">Account Number: 301000010006080269328</div>
                 <div class="bank-text">IBAN: SA2680000301608010269328</div>
