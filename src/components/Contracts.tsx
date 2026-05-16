@@ -438,7 +438,10 @@ export function Contracts({ systemLogo }: ContractsProps) {
     };
 
     // Prepare database contract
-    const contractNumber = `CNT-2025-${String(dbContracts.length + 1).padStart(3, "0")}`;
+    // Generate unique contract number using Date.now() and random component to avoid conflicts
+    const randomNum = Math.floor(Math.random() * 10000);
+    const contractNumber = `CNT-${Date.now()}-${randomNum}`;
+    
     const dbContractPayload: Partial<DbContract> = {
       contract_number: contractNumber,
       contract_status: "draft",

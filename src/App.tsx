@@ -880,7 +880,7 @@ export default function App() {
           .from('system_users')
           .select('employee_id')
           .eq('user_id', currentUserId)
-          .single();
+          .maybeSingle();
 
         if (systemUserError) {
           // Log errors for debugging but don't show to user
@@ -896,7 +896,7 @@ export default function App() {
             .from('employees')
             .select('profile_image')
             .eq('employee_id', systemUser.employee_id)
-            .single();
+            .maybeSingle();
 
           if (employeeError) {
             console.debug('Employee query error:', employeeError.message);
